@@ -1,0 +1,69 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Framework and build output
+.next/
+out/
+dist/
+build/
+.vite/
+
+# Coverage and logs
+coverage/
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data
+*.pid
+*.seed
+*.pid.lock
+uploads/
+backend/data/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+credentials.json
+service-account*.json
+secrets.json
+
+# Temporary files
+.tmp/
+tmp/
+temp/
+.cache/
+*.tmp
+*.temp
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.db
+*.db-*
+
+# Backups
+*.bak
+*.backup
+*.old

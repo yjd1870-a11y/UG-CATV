@@ -1,0 +1,6 @@
+{
+  "name": "유지텔레컴 현장업무 관리 시스템",
+  "description": "CATV/HFC 현장 작업자를 위한 CELL 조회, 업무이관, 일일업무, 자재사용 모바일 현장관리 웹앱",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
