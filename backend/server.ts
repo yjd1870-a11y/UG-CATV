@@ -8,11 +8,9 @@ import { env, projectRoot } from './env';
 import { resumeStraightMapRenders } from './straight-map-pipeline';
 
 await initializeDatabase();
-if (process.platform === 'win32') {
-  resumeStraightMapRenders();
-} else {
-  console.warn('[STRAIGHT_MAP_RENDER_DISABLED] New XLSX rendering requires the Windows processing node.');
-}
+// Windows uses desktop Excel; Linux uses the portable SVG renderer. In both
+// environments unfinished map versions must resume after a restart.
+resumeStraightMapRenders();
 
 const app = createApiApp();
 const apiOnly = process.argv.includes('--api-only');
