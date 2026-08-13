@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { projectRoot } from './env';
+import { deleteR2Prefix, putR2Object, signedR2DownloadUrl, usesR2Storage } from './object-storage';
 
 export const straightMapStorageRoot = path.join(projectRoot, 'backend', 'data', 'straight-maps');
 
@@ -56,6 +57,9 @@ export const cloneStraightMapVersion = (mapId: string, sourceVersion: number, ta
 
 export const removeStraightMapVersion = (mapId: string, version: number) => {
   fs.rmSync(straightMapVersionRoot(mapId, version), { recursive: true, force: true });
+  if (usesR2Storage) void deleteR2Prefix(`line-diagrams/${mapId}/${version}/`).catch((error) => {
+    console.warn('[R2_STRAIGHT_MAP_VERSION_DELETE_FAILED]', mapId, version, error);
+  });
 };
 
 export const removeStraightMap = (mapId: string) => {
@@ -64,6 +68,9 @@ export const removeStraightMap = (mapId: string) => {
   const target = path.resolve(root, mapId);
   if (!target.startsWith(root + path.sep)) throw new Error('유효하지 않은 직선도 저장 경로입니다.');
   fs.rmSync(target, { recursive: true, force: true });
+  if (usesR2Storage) void deleteR2Prefix(`line-diagrams/${mapId}/`).catch((error) => {
+    console.warn('[R2_STRAIGHT_MAP_DELETE_FAILED]', mapId, error);
+  });
 };
 
 export const removeStraightMapSource = (sourcePath: string) => {
@@ -79,4 +86,34 @@ export const resolveStraightMapTile = (mapId: string, version: number, level: nu
   const target = path.resolve(root, 'tiles', String(level), tileName);
   if (!target.startsWith(root + path.sep)) throw new Error('유효하지 않은 직선도 타일 경로입니다.');
   return target;
+};
+
+const filesBelow = (directory: string): string[] => fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+  const target = path.join(directory, entry.name);
+  return entry.isDirectory() ? filesBelow(target) : [target];
+});
+
+export const publishStraightMapArtifacts = async (mapId: string, version: number, originalFilePath: string) => {
+  if (!usesR2Storage) return;
+  const root = straightMapVersionRoot(mapId, version);
+  for (const filePath of filesBelow(root)) {
+    const relative = path.relative(root, filePath).split(path.sep).join('/');
+    const contentType = relative.endsWith('.webp') ? 'image/webp'
+      : relative.endsWith('.png') ? 'image/png'
+        : relative.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          : 'application/octet-stream';
+    await putR2Object(`line-diagrams/${mapId}/${version}/${relative}`, fs.readFileSync(filePath), contentType);
+  }
+  if (fs.existsSync(originalFilePath)) {
+    await putR2Object(
+      `line-diagrams/${mapId}/${version}/original/source.xlsx`,
+      fs.readFileSync(originalFilePath),
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+  }
+};
+
+export const straightMapTileDownloadUrl = (mapId: string, version: number, level: number, tileName: string) => {
+  resolveStraightMapTile(mapId, version, level, tileName);
+  return signedR2DownloadUrl(`line-diagrams/${mapId}/${version}/tiles/${level}/${tileName}`);
 };

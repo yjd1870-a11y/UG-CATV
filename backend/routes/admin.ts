@@ -646,7 +646,7 @@ router.get('/db/assets', (req, res) => {
   }));
 });
 
-router.post('/db/assets', (req, res) => {
+router.post('/db/assets', asyncRoute(async (req, res) => {
   const dbType = asText(req.body?.dbType, 'DB 종류', 30);
   if (!allowedAssetTypes.has(dbType)) throw new ApiError(400, 'DB 자산 종류를 확인해주세요.', 'VALIDATION_ERROR');
   const stationName = asText(req.body?.stationName, '국사명', 100);
@@ -668,7 +668,7 @@ router.post('/db/assets', (req, res) => {
       const stationKey = normalizeStationName(stationName);
       const existing = db.prepare('SELECT id, object_key FROM catv_floor_plans WHERE station_key = ?').get(stationKey) as { id: string; object_key: string | null } | undefined;
       const planId = existing?.id || id;
-      const stored = saveFloorPlanDataUrl(planId, imageDataUrl);
+      const stored = await saveFloorPlanDataUrl(planId, imageDataUrl);
       replacedFloorPlanObject = existing?.object_key || null;
       savedFloorPlanObject = stored.objectKey;
       db.prepare(`
@@ -747,12 +747,14 @@ router.post('/db/assets', (req, res) => {
     `).run(randomUUID(), dbType, fileName, fileSize, records.length, authUser(req).id);
     db.exec('COMMIT');
     if (replacedFloorPlanObject && replacedFloorPlanObject !== savedFloorPlanObject) {
-      removeFloorPlanObject(replacedFloorPlanObject);
+      await removeFloorPlanObject(replacedFloorPlanObject);
     }
     let straightMap: ReturnType<typeof registerStraightMapUpload> | null = null;
     let straightMapError: string | null = null;
     if (dbType === 'b2c' && /\.xlsx$/i.test(fileName) && typeof req.body?.fileBase64 === 'string') {
-      try {
+      if (process.platform !== 'win32') {
+        straightMapError = '직선도 렌더링은 Excel이 설치된 Windows 처리 노드에서 실행해야 합니다.';
+      } else try {
         straightMap = registerStraightMapUpload({ mapName: stationName, fileName, fileBase64: req.body.fileBase64 });
       } catch (error) {
         straightMapError = env.isProduction
@@ -764,13 +766,13 @@ router.post('/db/assets', (req, res) => {
   } catch (error) {
     db.exec('ROLLBACK');
     if (savedFloorPlanObject && savedFloorPlanObject !== replacedFloorPlanObject) {
-      removeFloorPlanObject(savedFloorPlanObject);
+      await removeFloorPlanObject(savedFloorPlanObject).catch(() => undefined);
     }
     throw error;
   }
-});
+}));
 
-router.put('/db/assets/:id', (req, res) => {
+router.put('/db/assets/:id', asyncRoute(async (req, res) => {
   const asset = db.prepare(`
     SELECT * FROM admin_db_assets WHERE id = ? AND deleted_at IS NULL
   `).get(req.params.id) as Record<string, unknown> | undefined;
@@ -802,7 +804,7 @@ router.put('/db/assets/:id', (req, res) => {
     const previousObjectKey = String(plan.object_key || '');
     let objectKey = previousObjectKey;
     if (imageDataUrl) {
-      objectKey = saveFloorPlanDataUrl(planId, imageDataUrl).objectKey;
+      objectKey = (await saveFloorPlanDataUrl(planId, imageDataUrl)).objectKey;
     }
     db.prepare(`
       UPDATE catv_floor_plans
@@ -847,22 +849,22 @@ router.put('/db/assets/:id', (req, res) => {
       VALUES (?, 'floor_plan', ?, ?, 1, ?, 'success', '국사 평면도 수정')
     `).run(randomUUID(), fileName, fileSize, authUser(req).id);
     db.exec('COMMIT');
-    if (imageDataUrl && previousObjectKey && previousObjectKey !== objectKey) removeFloorPlanObject(previousObjectKey);
+    if (imageDataUrl && previousObjectKey && previousObjectKey !== objectKey) await removeFloorPlanObject(previousObjectKey);
     success(res, { id: req.params.id, updated: true });
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
-});
+}));
 
-router.delete('/db/assets/:id', (req, res) => {
+router.delete('/db/assets/:id', asyncRoute(async (req, res) => {
   const asset = db.prepare('SELECT db_type, station_name, file_name FROM admin_db_assets WHERE id = ? AND deleted_at IS NULL').get(req.params.id) as { db_type: string; station_name: string; file_name: string } | undefined;
   const result = db.prepare('UPDATE admin_db_assets SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL').run(req.params.id);
   if (result.changes === 0) throw new ApiError(404, '등록 DB를 찾을 수 없습니다.', 'NOT_FOUND');
   if (asset?.db_type === 'floor_plan') {
     const plan = db.prepare('SELECT id, object_key FROM catv_floor_plans WHERE station_key = ?').get(normalizeStationName(asset.station_name)) as { id: string; object_key: string | null } | undefined;
     if (plan) {
-      removeFloorPlanObject(plan.object_key);
+      await removeFloorPlanObject(plan.object_key);
       db.prepare('DELETE FROM catv_floor_plans WHERE id = ?').run(plan.id);
     }
   } else if (asset?.db_type === 'b2c') {
@@ -871,21 +873,21 @@ router.delete('/db/assets/:id', (req, res) => {
     deleteStraightMapsForStation(stationKey);
   }
   success(res, { id: req.params.id, deleted: true });
-});
+}));
 
-router.delete('/db/assets', (req, res) => {
+router.delete('/db/assets', asyncRoute(async (req, res) => {
   const dbType = typeof req.query.type === 'string' ? req.query.type : '';
   if (!allowedAssetTypes.has(dbType)) throw new ApiError(400, 'DB 자산 종류를 확인해주세요.', 'VALIDATION_ERROR');
   const result = db.prepare('UPDATE admin_db_assets SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE db_type = ? AND deleted_at IS NULL').run(dbType);
   if (dbType === 'floor_plan') {
     const plans = db.prepare('SELECT object_key FROM catv_floor_plans').all() as Array<{ object_key: string | null }>;
-    for (const plan of plans) removeFloorPlanObject(plan.object_key);
+    for (const plan of plans) await removeFloorPlanObject(plan.object_key);
     db.prepare('DELETE FROM catv_floor_plans').run();
   } else {
     db.prepare('DELETE FROM catv_b2c_lines').run();
     deleteAllStraightMaps();
   }
   success(res, { dbType, deletedCount: result.changes });
-});
+}));
 
 export default router;

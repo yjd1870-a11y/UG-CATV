@@ -6,9 +6,48 @@ import type {
   StraightMapMetadata,
   StraightMapSearchResult,
 } from '../../types';
-import { request } from '../../shared/api/client';
+import { ApiClientError, request } from '../../shared/api/client';
 
 type Page<T> = { items: T[]; pagination: { page: number; limit: number; total: number; totalPages: number } };
+
+const uploadPhoto = async (cellId: string, photo: Record<string, unknown>) => {
+  const dataUrl = typeof photo.url === 'string' ? photo.url : '';
+  const matched = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/i.exec(dataUrl);
+  if (!matched) {
+    return request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/photos`, {
+      method: 'POST', body: JSON.stringify(photo),
+    });
+  }
+  const binary = atob(matched[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const blob = new Blob([bytes], { type: matched[1].toLowerCase() });
+  let signed: { objectKey: string; uploadUrl: string; expiresAt: string };
+  try {
+    signed = await request(`/cells/${encodeURIComponent(cellId)}/photos/upload-url`, {
+      method: 'POST',
+      body: JSON.stringify({ mimeType: blob.type, size: blob.size }),
+    });
+  } catch (error) {
+    if (error instanceof ApiClientError && error.code === 'DIRECT_UPLOAD_UNAVAILABLE') {
+      return request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/photos`, {
+        method: 'POST', body: JSON.stringify(photo),
+      });
+    }
+    throw error;
+  }
+  const uploaded = await fetch(signed.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': blob.type },
+    body: blob,
+  });
+  if (!uploaded.ok) throw new ApiClientError('사진을 R2에 업로드하지 못했습니다.', uploaded.status, 'R2_UPLOAD_FAILED');
+  const { url: _url, ...metadata } = photo;
+  return request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/photos/complete`, {
+    method: 'POST',
+    body: JSON.stringify({ ...metadata, objectKey: signed.objectKey }),
+  });
+};
 
 export const cellsApi = {
   list: async () => (await request<Page<CellInfo>>('/cells?limit=100')).items,
@@ -18,9 +57,7 @@ export const cellsApi = {
   create: (input: Record<string, unknown>) => request<{ id: string }>('/cells', { method: 'POST', body: JSON.stringify(input) }),
   update: (id: string, input: Record<string, unknown>) => request<{ id: string }>(`/cells/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) }),
   remove: (id: string) => request<{ id: string; deleted: true }>(`/cells/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  addPhoto: (cellId: string, photo: Record<string, unknown>) => request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/photos`, {
-    method: 'POST', body: JSON.stringify(photo),
-  }),
+  addPhoto: uploadPhoto,
   addHistory: (cellId: string, history: Record<string, unknown>) => request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/history`, {
     method: 'POST', body: JSON.stringify(history),
   }),

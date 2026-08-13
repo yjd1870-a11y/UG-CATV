@@ -6,9 +6,19 @@ import { deleteCatvCell, upsertCatvCellRecord } from '../catv-store';
 import { ApiError, asText, asyncRoute, optionalText, success } from '../http';
 import { mapCellRow, mapDailyWorkRow, mapMaterialUsageRow } from '../mappers';
 import { authUser, requireAuth, requireRoles } from '../security/session';
-import { privatePhotoMime, removePrivatePhoto, resolvePrivatePhoto, savePrivatePhoto } from '../photo-storage';
+import {
+  createPhotoObjectKey,
+  privatePhotoDownloadUrl,
+  privatePhotoMime,
+  privatePhotoUploadUrl,
+  removePrivatePhoto,
+  resolvePrivatePhoto,
+  savePrivatePhoto,
+  validatePhotoUpload,
+} from '../photo-storage';
 import { writeAuditLog } from '../security/audit';
 import fs from 'node:fs';
+import { headR2Object, usesR2Storage } from '../object-storage';
 
 const router = Router();
 router.use(requireAuth);
@@ -236,14 +246,69 @@ router.delete('/:id', requireRoles('admin'), (req, res) => {
   success(res, { id: req.params.id, deleted: true });
 });
 
-router.post('/:id/photos', (req, res) => {
+router.post('/:id/photos/upload-url', asyncRoute(async (req, res) => {
+  if (!usesR2Storage) throw new ApiError(409, '현재 저장소는 직접 업로드 모드가 아닙니다.', 'DIRECT_UPLOAD_UNAVAILABLE');
+  const user = authUser(req);
+  const cell = db.prepare('SELECT id FROM cells WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  if (!cell) throw new ApiError(404, 'CELL 정보를 찾을 수 없습니다.', 'NOT_FOUND');
+  const mimeType = asText(req.body?.mimeType, '사진 MIME 형식', 100).toLowerCase();
+  const size = Number(req.body?.size);
+  validatePhotoUpload(mimeType, size);
+  const objectKey = createPhotoObjectKey(mimeType, user.id);
+  const signed = await privatePhotoUploadUrl(objectKey, mimeType, size);
+  success(res, { objectKey, ...signed });
+}));
+
+router.post('/:id/photos/complete', asyncRoute(async (req, res) => {
+  if (!usesR2Storage) throw new ApiError(409, '현재 저장소는 직접 업로드 모드가 아닙니다.', 'DIRECT_UPLOAD_UNAVAILABLE');
+  const user = authUser(req);
+  const cell = db.prepare('SELECT id FROM cells WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  if (!cell) throw new ApiError(404, 'CELL 정보를 찾을 수 없습니다.', 'NOT_FOUND');
+  const objectKey = asText(req.body?.objectKey, 'R2 객체 키', 512);
+  const safeUserId = user.id.replace(/[^a-z0-9_-]/gi, '').slice(0, 64);
+  if (!objectKey.startsWith('photos/') || !objectKey.includes(`/${safeUserId}/`)) {
+    throw new ApiError(400, '사진 객체 키가 현재 사용자에게 발급된 키가 아닙니다.', 'INVALID_PHOTO_PATH');
+  }
+  const object = await headR2Object(objectKey);
+  validatePhotoUpload(object.contentType, object.size);
+  const id = randomUUID();
+  const fileName = asText(req.body?.title || req.body?.fileName, '사진 제목', 160);
+  try {
+    db.prepare(`
+      INSERT INTO field_photos (
+        id, cell_id, work_id, file_name, file_url, file_type, uploaded_by, memo
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      req.params.id,
+      req.body?.workId || null,
+      fileName,
+      objectKey,
+      object.contentType,
+      user.id,
+      JSON.stringify({ category: req.body?.category || '구사설비', description: req.body?.description || '' })
+    );
+  } catch (error) {
+    await removePrivatePhoto(objectKey).catch(() => undefined);
+    throw error;
+  }
+  writeAuditLog(req, {
+    action: 'PHOTO_UPLOADED',
+    targetType: 'field_photo',
+    targetId: id,
+    metadata: { cellId: req.params.id, mimeType: object.contentType, size: object.size, storage: 'r2' },
+  });
+  success(res, { id }, 201);
+}));
+
+router.post('/:id/photos', asyncRoute(async (req, res) => {
   const user = authUser(req);
   const cell = db.prepare('SELECT id FROM cells WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!cell) throw new ApiError(404, 'CELL 정보를 찾을 수 없습니다.', 'NOT_FOUND');
   const id = randomUUID();
   const fileName = asText(req.body?.title || req.body?.fileName, '사진 제목', 160);
   const dataUrl = asText(req.body?.url || req.body?.fileUrl, '사진 데이터', 15 * 1024 * 1024);
-  const stored = savePrivatePhoto(dataUrl);
+  const stored = await savePrivatePhoto(dataUrl, user.id);
   try {
     db.prepare(`
       INSERT INTO field_photos (
@@ -260,7 +325,7 @@ router.post('/:id/photos', (req, res) => {
       JSON.stringify({ category: req.body?.category || '국사설비', description: req.body?.description || '' })
     );
   } catch (error) {
-    removePrivatePhoto(stored.objectKey);
+    await removePrivatePhoto(stored.objectKey).catch(() => undefined);
     throw error;
   }
   writeAuditLog(req, {
@@ -270,34 +335,38 @@ router.post('/:id/photos', (req, res) => {
     metadata: { cellId: req.params.id, mimeType: stored.mimeType, size: stored.size },
   });
   success(res, { id }, 201);
-});
+}));
 
-router.get('/:id/photos/:photoId/content', (req, res) => {
+router.get('/:id/photos/:photoId/content', asyncRoute(async (req, res) => {
   const photo = db.prepare(`
     SELECT file_url FROM field_photos
      WHERE id = ? AND cell_id = ? AND deleted_at IS NULL
   `).get(req.params.photoId, req.params.id) as { file_url: string } | undefined;
   if (!photo || !photo.file_url.startsWith('photos/')) throw new ApiError(404, '사진을 찾을 수 없습니다.', 'NOT_FOUND');
+  if (usesR2Storage) {
+    res.redirect(302, await privatePhotoDownloadUrl(photo.file_url));
+    return;
+  }
   const absolutePath = resolvePrivatePhoto(photo.file_url);
   if (!fs.existsSync(absolutePath)) throw new ApiError(404, '사진 파일을 찾을 수 없습니다.', 'NOT_FOUND');
   res.setHeader('Content-Type', privatePhotoMime(photo.file_url));
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.sendFile(absolutePath);
-});
+}));
 
-router.delete('/:id/photos/:photoId', requireRoles('admin'), (req, res) => {
+router.delete('/:id/photos/:photoId', requireRoles('admin'), asyncRoute(async (req, res) => {
   const photo = db.prepare(`
     SELECT file_url FROM field_photos
      WHERE id = ? AND cell_id = ? AND deleted_at IS NULL
   `).get(req.params.photoId, req.params.id) as { file_url: string } | undefined;
   if (!photo) throw new ApiError(404, '사진을 찾을 수 없습니다.', 'NOT_FOUND');
+  await removePrivatePhoto(photo.file_url);
   db.prepare('UPDATE field_photos SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND cell_id = ?')
     .run(req.params.photoId, req.params.id);
-  removePrivatePhoto(photo.file_url);
   writeAuditLog(req, { action: 'PHOTO_DELETED', targetType: 'field_photo', targetId: req.params.photoId, metadata: { cellId: req.params.id } });
   success(res, { id: req.params.photoId, deleted: true });
-});
+}));
 
 router.post('/:id/history', (req, res) => {
   const user = authUser(req);

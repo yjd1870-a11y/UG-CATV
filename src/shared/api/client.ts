@@ -12,7 +12,7 @@ export class ApiClientError extends Error {
   }
 }
 
-export const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 
 export const request = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
   const response = await fetch(`${API_BASE}${path}`, {

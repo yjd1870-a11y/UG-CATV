@@ -5,6 +5,7 @@ import { extractStraightMapSheets } from './straight-map-ooxml';
 import { renderStraightMap } from './straight-map-renderer';
 import {
   cloneStraightMapVersion,
+  publishStraightMapArtifacts,
   removeStraightMap,
   removeStraightMapSource,
   removeStraightMapVersion,
@@ -59,6 +60,7 @@ export const renderStraightMapVersion = async (versionId: string) => {
     } else {
       rendered = await renderStraightMap(version.mapId, version.version, version.originalFilePath, version.sheetName);
     }
+    await publishStraightMapArtifacts(version.mapId, version.version, version.originalFilePath);
     const stillCurrent = db.prepare("SELECT 1 FROM map_versions WHERE id = ? AND status = 'PROCESSING'").get(versionId);
     if (cancelledVersions.has(versionId) || !stillCurrent) {
       removeStraightMapVersion(version.mapId, version.version);

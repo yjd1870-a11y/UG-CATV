@@ -8,7 +8,11 @@ import { env, projectRoot } from './env';
 import { resumeStraightMapRenders } from './straight-map-pipeline';
 
 await initializeDatabase();
-resumeStraightMapRenders();
+if (process.platform === 'win32') {
+  resumeStraightMapRenders();
+} else {
+  console.warn('[STRAIGHT_MAP_RENDER_DISABLED] New XLSX rendering requires the Windows processing node.');
+}
 
 const app = createApiApp();
 const apiOnly = process.argv.includes('--api-only');

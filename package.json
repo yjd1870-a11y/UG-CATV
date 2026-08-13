@@ -1,8 +1,11 @@
 {
-  "name": "react-example",
+  "name": "catv-work-management",
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.5 <25"
+  },
   "scripts": {
     "dev": "tsx watch backend/server.ts",
     "dev:frontend": "vite --port=3000 --host=0.0.0.0",
@@ -25,6 +28,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1109.0",
+    "@aws-sdk/s3-request-presigner": "^3.1109.0",
     "@e965/xlsx": "^0.20.3",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",

@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: catv-api
+    runtime: node
+    plan: starter
+    region: singapore
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    disk:
+      name: catv-database
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_PATH
+        value: /var/data/catv.sqlite
+      - key: PRIVATE_STORAGE_PATH
+        value: /var/data/cache
+      - key: STORAGE_DRIVER
+        value: r2
+      - key: TRUST_PROXY
+        value: "true"
+      - key: ENFORCE_HTTPS
+        value: "true"
+      - key: SESSION_COOKIE_SAME_SITE
+        value: none
+      - key: SESSION_SECRET
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: ADMIN_MUTATION_ALLOWED_ORIGINS
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false

@@ -25,6 +25,10 @@ const booleanValue = (name: string, fallback: boolean) => {
 };
 
 const nodeEnv = process.env.NODE_ENV || 'development';
+const storageDriver = (process.env.STORAGE_DRIVER || 'local').toLowerCase();
+if (!['local', 'r2'].includes(storageDriver)) {
+  throw new Error('STORAGE_DRIVER must be local or r2.');
+}
 const cookieSameSite = (process.env.SESSION_COOKIE_SAME_SITE || 'strict').toLowerCase();
 if (!['strict', 'lax', 'none'].includes(cookieSameSite)) {
   throw new Error('SESSION_COOKIE_SAME_SITE must be strict, lax, or none.');
@@ -50,6 +54,13 @@ export const env = {
   privateStoragePath: path.isAbsolute(privateStorageValue)
     ? privateStorageValue
     : path.resolve(projectRoot, privateStorageValue),
+  storageDriver: storageDriver as 'local' | 'r2',
+  r2AccountId: process.env.R2_ACCOUNT_ID || '',
+  r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+  r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+  r2BucketName: process.env.R2_BUCKET_NAME || '',
+  r2Endpoint: (process.env.R2_ENDPOINT || '').replace(/\/$/, ''),
+  r2SignedUrlTtlSeconds: numberValue('R2_SIGNED_URL_TTL_SECONDS', 300, 60, 3600),
   sessionSecret: process.env.SESSION_SECRET || 'development-only-change-me',
   sessionTtlHours: numberValue('SESSION_TTL_HOURS', 12, 1, 168),
   cookieName: process.env.SESSION_COOKIE_NAME || 'catv_session',
@@ -72,6 +83,21 @@ if (env.isProduction && Buffer.byteLength(env.sessionSecret, 'utf8') < 32) {
 }
 if (env.isProduction && env.corsAllowedOrigins.size === 0) {
   throw new Error('CORS_ALLOWED_ORIGINS must list the production frontend origin(s).');
+}
+if (env.storageDriver === 'r2') {
+  const missing = [
+    ['R2_ACCESS_KEY_ID', env.r2AccessKeyId],
+    ['R2_SECRET_ACCESS_KEY', env.r2SecretAccessKey],
+    ['R2_BUCKET_NAME', env.r2BucketName],
+  ].filter(([, value]) => !value).map(([name]) => name);
+  if (!env.r2Endpoint && !env.r2AccountId) missing.push('R2_ENDPOINT or R2_ACCOUNT_ID');
+  if (missing.length) throw new Error(`R2 storage is enabled but configuration is missing: ${missing.join(', ')}`);
+}
+if (env.isProduction && process.env.RENDER && !path.isAbsolute(databaseValue)) {
+  throw new Error('Render production requires DATABASE_PATH to point to a mounted persistent disk.');
+}
+if (env.isProduction && process.env.RENDER && env.storageDriver !== 'r2') {
+  throw new Error('Render production requires STORAGE_DRIVER=r2.');
 }
 if (env.cookieSameSite === 'none' && !env.isProduction) {
   console.warn('[SECURITY_CONFIG] SameSite=None cookies require HTTPS and are intended for cross-site production deployments.');

@@ -952,7 +952,7 @@ const rackCoordinatesOnly = (input: Record<string, unknown>) => Object.fromEntri
   })
 );
 
-const migrateLegacyAdminAssets = () => {
+const migrateLegacyAdminAssets = async () => {
   const assets = db.prepare(`
     SELECT id, db_type, station_name, file_name, data_json, coordinates_json
       FROM admin_db_assets WHERE deleted_at IS NULL
@@ -1000,7 +1000,7 @@ const migrateLegacyAdminAssets = () => {
       if (!imageDataUrl) continue;
       try {
         const planId = textValue(asset.id) || randomUUID();
-        const stored = saveFloorPlanDataUrl(planId, imageDataUrl);
+        const stored = await saveFloorPlanDataUrl(planId, imageDataUrl);
         db.prepare(`INSERT INTO catv_floor_plans (id, station_name, station_key, file_name, object_key) VALUES (?, ?, ?, ?, ?)`)
           .run(planId, stationName, normalizeStationName(stationName), fileName, stored.objectKey);
         const insertCoordinate = db.prepare(`
@@ -1046,6 +1046,6 @@ export const initializeDatabase = async () => {
   createSchema();
   await seedDatabase();
   syncCatvCellsFromLegacy();
-  migrateLegacyAdminAssets();
+  await migrateLegacyAdminAssets();
   removeLegacyFloorPlanNodeCoordinates();
 };

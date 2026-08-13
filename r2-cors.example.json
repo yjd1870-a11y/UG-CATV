@@ -1,0 +1,12 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://catv.example.com",
+      "https://YOUR_PROJECT.pages.dev"
+    ],
+    "AllowedMethods": ["GET", "HEAD", "PUT"],
+    "AllowedHeaders": ["Content-Type", "Cache-Control"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]

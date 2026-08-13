@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import { Router } from 'express';
 import { db } from '../db';
 import { normalizeLookupValue, normalizeStationName } from '../catv';
-import { imageMimeType, resolveFloorPlanObject } from '../floor-plan-storage';
-import { ApiError, success } from '../http';
+import { floorPlanDownloadUrl, imageMimeType, resolveFloorPlanObject } from '../floor-plan-storage';
+import { ApiError, asyncRoute, success } from '../http';
 import { requireAuth } from '../security/session';
+import { usesR2Storage } from '../object-storage';
 
 const router = Router();
 router.use(requireAuth);
@@ -71,10 +72,14 @@ router.get('/search', (req, res) => {
   });
 });
 
-router.get('/:id/image', (req, res) => {
+router.get('/:id/image', asyncRoute(async (req, res) => {
   const plan = db.prepare('SELECT * FROM catv_floor_plans WHERE id = ?').get(req.params.id) as FloorPlanRow | undefined;
   if (!plan) throw new ApiError(404, '평면도 이미지를 찾을 수 없습니다.', 'NOT_FOUND');
   if (plan.object_key) {
+    if (usesR2Storage) {
+      res.redirect(302, await floorPlanDownloadUrl(plan.object_key));
+      return;
+    }
     const absolutePath = resolveFloorPlanObject(plan.object_key);
     if (!fs.existsSync(absolutePath)) throw new ApiError(404, '평면도 이미지 파일을 찾을 수 없습니다.', 'NOT_FOUND');
     res.type(imageMimeType(plan.file_name));
@@ -88,6 +93,6 @@ router.get('/:id/image', (req, res) => {
     return;
   }
   throw new ApiError(404, '평면도 이미지가 등록되어 있지 않습니다.', 'NOT_FOUND');
-});
+}));
 
 export default router;
