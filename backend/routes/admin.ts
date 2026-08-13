@@ -752,9 +752,7 @@ router.post('/db/assets', asyncRoute(async (req, res) => {
     let straightMap: ReturnType<typeof registerStraightMapUpload> | null = null;
     let straightMapError: string | null = null;
     if (dbType === 'b2c' && /\.xlsx$/i.test(fileName) && typeof req.body?.fileBase64 === 'string') {
-      if (process.platform !== 'win32') {
-        straightMapError = '직선도 렌더링은 Excel이 설치된 Windows 처리 노드에서 실행해야 합니다.';
-      } else try {
+      try {
         straightMap = registerStraightMapUpload({ mapName: stationName, fileName, fileBase64: req.body.fileBase64 });
       } catch (error) {
         straightMapError = env.isProduction

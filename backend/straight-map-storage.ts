@@ -1,9 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectRoot } from './env';
+import { env } from './env';
 import { deleteR2Prefix, putR2Object, signedR2DownloadUrl, usesR2Storage } from './object-storage';
 
-export const straightMapStorageRoot = path.join(projectRoot, 'backend', 'data', 'straight-maps');
+// Render work files belong on the configured private storage root. In
+// production this is the persistent disk; completed artifacts are also copied
+// to R2 by publishStraightMapArtifacts.
+export const straightMapStorageRoot = path.join(env.privateStoragePath, 'straight-maps');
 
 export const straightMapVersionRoot = (mapId: string, version: number) => {
   if (!/^[a-z0-9-]+$/i.test(mapId) || !Number.isSafeInteger(version) || version < 1) throw new Error('유효하지 않은 직선도 저장 경로입니다.');

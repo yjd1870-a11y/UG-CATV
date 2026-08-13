@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { projectRoot } from './env';
 import { straightMapVersionRoot } from './straight-map-storage';
+import { extractStraightMapSheets, type StraightMapExtraction } from './straight-map-ooxml';
 
 const execFileAsync = promisify(execFile);
 const TILE_SIZE = 256;
@@ -26,6 +27,60 @@ type ExcelRenderManifest = {
 type PdfTextCoordinate = { text: string; compactText: string; x: number; y: number };
 
 const compactText = (value: string) => value.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
+
+const xmlEscape = (value: string) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&apos;');
+
+const portableCanvasSize = (extraction: StraightMapExtraction) => {
+  const sourceWidth = Math.max(1, extraction.mapWidth);
+  const sourceHeight = Math.max(1, extraction.mapHeight);
+  // 4096px keeps Sharp comfortably below a Starter instance's 512MB limit.
+  const requested = Number(process.env.STRAIGHT_MAP_PORTABLE_SIZE || 4096);
+  const longestSide = Math.min(6144, Math.max(3200, Number.isFinite(requested) ? requested : 4096));
+  const ratio = sourceWidth / sourceHeight;
+  if (ratio >= 1) return { width: longestSide, height: Math.max(1200, Math.round(longestSide / ratio)) };
+  return { width: Math.max(1200, Math.round(longestSide * ratio)), height: longestSide };
+};
+
+/** Render an XLSX drawing without desktop Excel for Linux production hosts. */
+export const renderPortableStraightMap = async (extraction: StraightMapExtraction, outputPng: string) => {
+  const { width, height } = portableCanvasSize(extraction);
+  const shapes = extraction.objects.map((item) => {
+    const centerX = item.xRatio * width;
+    const centerY = item.yRatio * height;
+    const objectWidth = Math.max(24, Math.min(width * 0.45, item.width / extraction.mapWidth * width));
+    const objectHeight = Math.max(18, Math.min(height * 0.25, item.height / extraction.mapHeight * height));
+    const x = Math.max(0, centerX - objectWidth / 2);
+    const y = Math.max(0, centerY - objectHeight / 2);
+    const fontSize = Math.max(8, Math.min(22, objectHeight * 0.42));
+    const lines = item.originalText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 4);
+    const fill = item.objectType === 'cell-text' ? '#ffffff' : '#eef6fb';
+    const stroke = item.objectType === 'connector' ? '#6b879b' : '#8bb8d5';
+    const text = lines.map((line, index) => (
+      `<text x="${centerX.toFixed(2)}" y="${(centerY + (index - (lines.length - 1) / 2) * fontSize * 1.15).toFixed(2)}" `
+      + `font-family="Arial, Noto Sans KR, sans-serif" font-size="${fontSize.toFixed(2)}" font-weight="600" `
+      + `text-anchor="middle" dominant-baseline="middle" fill="#173b57">${xmlEscape(line.slice(0, 180))}</text>`
+    )).join('');
+    return `<g><rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${objectWidth.toFixed(2)}" height="${objectHeight.toFixed(2)}" `
+      + `rx="3" fill="${fill}" stroke="${stroke}" stroke-width="1"/>${text}</g>`;
+  }).join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
+    + `<rect width="100%" height="100%" fill="#ffffff"/>${shapes}</svg>`;
+  fs.mkdirSync(path.dirname(outputPng), { recursive: true });
+  await sharp(Buffer.from(svg), { limitInputPixels: false, density: 144 })
+    .png({ compressionLevel: 8 })
+    .toFile(outputPng);
+  return extraction.objects.map((item) => ({
+    shapeId: item.shapeId,
+    label: item.originalText,
+    xRatio: item.xRatio,
+    yRatio: item.yRatio,
+  }));
+};
 
 const executable = async (name: string) => {
   const command = process.platform === 'win32' ? 'where.exe' : 'which';
@@ -213,7 +268,14 @@ export const renderStraightMap = async (mapId: string, version: number, xlsxPath
   const root = straightMapVersionRoot(mapId, version);
   const renderedDirectory = path.join(root, 'rendered');
   const sourcePath = path.join(renderedDirectory, 'map.png');
-  const coordinates = await renderExcelToPng(xlsxPath, sheetName, sourcePath);
+  let coordinates: StraightMapRenderedCoordinate[];
+  if (process.platform === 'win32' && process.env.STRAIGHT_MAP_RENDERER !== 'portable') {
+    coordinates = await renderExcelToPng(xlsxPath, sheetName, sourcePath);
+  } else {
+    const extraction = extractStraightMapSheets(fs.readFileSync(xlsxPath)).find((sheet) => sheet.sheetName === sheetName);
+    if (!extraction) throw new Error(`직선도 시트를 찾을 수 없습니다: ${sheetName}`);
+    coordinates = await renderPortableStraightMap(extraction, sourcePath);
+  }
   const metadata = await createDeepZoomTiles(sourcePath, path.join(root, 'tiles'));
   return { ...metadata, sourcePath, coordinates };
 };

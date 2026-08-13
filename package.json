@@ -17,6 +17,7 @@
     "test:security": "tsx backend/tests/run-isolated.ts backend/tests/security.integration.ts",
     "test:b2c-linebook": "tsx backend/tests/run-isolated.ts backend/tests/b2c-linebook.ts",
     "test:straight-map": "tsx backend/tests/run-isolated.ts backend/tests/straight-map-ooxml.ts",
+    "test:straight-map-portable": "tsx backend/tests/run-isolated.ts backend/tests/straight-map-portable-render.ts",
     "test:straight-map-lifecycle": "tsx backend/tests/run-isolated.ts backend/tests/straight-map-lifecycle.ts",
     "test:straight-map-reupload": "tsx backend/tests/run-isolated.ts backend/tests/straight-map-reupload.ts",
     "test:straight-map-single-page": "tsx backend/tests/run-isolated.ts backend/tests/straight-map-single-page.ts",
