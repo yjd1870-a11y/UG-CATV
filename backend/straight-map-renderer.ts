@@ -6,7 +6,11 @@ import sharp from 'sharp';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { projectRoot } from './env';
 import { straightMapVersionRoot } from './straight-map-storage';
-import { extractStraightMapSheets, type StraightMapExtraction } from './straight-map-ooxml';
+import {
+  extractStraightMapSheets,
+  type StraightMapDrawingPrimitive,
+  type StraightMapExtraction,
+} from './straight-map-ooxml';
 
 // Render runs this service on a memory-constrained Starter instance. Keep
 // libvips from caching several large map pyramids between queued sheets.
@@ -52,28 +56,120 @@ const portableCanvasSize = (extraction: StraightMapExtraction) => {
   return { width: Math.max(1200, Math.round(longestSide * ratio)), height: longestSide };
 };
 
+const connectorPath = (
+  primitive: StraightMapDrawingPrimitive,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) => {
+  const startX = primitive.flipH ? x + width : x;
+  const endX = primitive.flipH ? x : x + width;
+  const startY = primitive.flipV ? y + height : y;
+  const endY = primitive.flipV ? y : y + height;
+  const middleX = (startX + endX) / 2;
+  const middleY = (startY + endY) / 2;
+  if (primitive.geometry === 'bentConnector2') return `M ${startX} ${startY} L ${endX} ${startY} L ${endX} ${endY}`;
+  if (primitive.geometry === 'bentConnector3') return `M ${startX} ${startY} L ${middleX} ${startY} L ${middleX} ${endY} L ${endX} ${endY}`;
+  if (primitive.geometry === 'bentConnector4') {
+    return `M ${startX} ${startY} L ${startX} ${middleY} L ${middleX} ${middleY} L ${middleX} ${endY} L ${endX} ${endY}`;
+  }
+  return `M ${startX} ${startY} L ${endX} ${endY}`;
+};
+
+const portablePrimitiveSvg = (
+  primitive: StraightMapDrawingPrimitive,
+  extraction: StraightMapExtraction,
+  width: number,
+  height: number,
+) => {
+  const scaleX = width / Math.max(1, extraction.mapWidth);
+  const scaleY = height / Math.max(1, extraction.mapHeight);
+  const x = primitive.x * scaleX;
+  const y = primitive.y * scaleY;
+  const objectWidth = Math.max(0.75, primitive.width * scaleX);
+  const objectHeight = Math.max(0.75, primitive.height * scaleY);
+  const centerX = x + objectWidth / 2;
+  const centerY = y + objectHeight / 2;
+  const strokeWidth = Math.max(0.7, primitive.lineWidth * (scaleX + scaleY) / 2);
+  const stroke = primitive.lineColor || 'none';
+  const fill = primitive.fillColor || 'none';
+  const geometry = primitive.geometry;
+  const isConnector = primitive.kind === 'connector' || geometry === 'line' || /connector/i.test(geometry);
+  let drawing: string;
+  if (isConnector) {
+    drawing = `<path d="${connectorPath(primitive, x, y, objectWidth, objectHeight)}" fill="none" stroke="${stroke}" `
+      + `stroke-width="${strokeWidth.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  } else if (geometry === 'ellipse') {
+    drawing = `<ellipse cx="${centerX.toFixed(2)}" cy="${centerY.toFixed(2)}" rx="${(objectWidth / 2).toFixed(2)}" `
+      + `ry="${(objectHeight / 2).toFixed(2)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth.toFixed(2)}"/>`;
+  } else if (geometry === 'triangle') {
+    drawing = `<polygon points="${centerX.toFixed(2)},${y.toFixed(2)} ${(x + objectWidth).toFixed(2)},${(y + objectHeight).toFixed(2)} `
+      + `${x.toFixed(2)},${(y + objectHeight).toFixed(2)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth.toFixed(2)}"/>`;
+  } else {
+    const radius = geometry === 'roundRect' ? Math.max(1, Math.min(objectWidth, objectHeight) * 0.12) : 0;
+    drawing = `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${objectWidth.toFixed(2)}" height="${objectHeight.toFixed(2)}" `
+      + `rx="${radius.toFixed(2)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth.toFixed(2)}"/>`;
+  }
+
+  const lines = primitive.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 8);
+  let text = '';
+  if (lines.length) {
+    const requestedFontSize = primitive.fontSize * scaleY;
+    const fontSize = Math.max(3, Math.min(26, requestedFontSize, objectHeight * 0.72));
+    const lineHeight = fontSize * 1.08;
+    const textAnchor = primitive.textAlign === 'left' ? 'start' : primitive.textAlign === 'right' ? 'end' : 'middle';
+    const textX = primitive.textAlign === 'left' ? x + Math.max(2, fontSize * 0.25)
+      : primitive.textAlign === 'right' ? x + objectWidth - Math.max(2, fontSize * 0.25) : centerX;
+    text = lines.map((line, index) => (
+      `<text x="${textX.toFixed(2)}" y="${(centerY + (index - (lines.length - 1) / 2) * lineHeight).toFixed(2)}" `
+      + `font-family="Malgun Gothic, Noto Sans KR, Arial, sans-serif" font-size="${fontSize.toFixed(2)}" `
+      + `font-weight="${primitive.bold ? '700' : '400'}" text-anchor="${textAnchor}" dominant-baseline="middle" `
+      + `fill="${primitive.textColor}">${xmlEscape(line.slice(0, 240))}</text>`
+    )).join('');
+  }
+  const rotation = primitive.rotation
+    ? ` transform="rotate(${primitive.rotation.toFixed(3)} ${centerX.toFixed(2)} ${centerY.toFixed(2)})"`
+    : '';
+  return `<g${rotation}>${drawing}${text}</g>`;
+};
+
+const fallbackPortableObjects = (extraction: StraightMapExtraction, width: number, height: number) => extraction.objects.map((item) => {
+  const centerX = item.xRatio * width;
+  const centerY = item.yRatio * height;
+  const objectWidth = Math.max(24, Math.min(width * 0.45, item.width / extraction.mapWidth * width));
+  const objectHeight = Math.max(18, Math.min(height * 0.25, item.height / extraction.mapHeight * height));
+  const x = Math.max(0, centerX - objectWidth / 2);
+  const y = Math.max(0, centerY - objectHeight / 2);
+  const fontSize = Math.max(8, Math.min(22, objectHeight * 0.42));
+  const lines = item.originalText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 4);
+  const fill = item.objectType === 'cell-text' ? '#ffffff' : '#eef6fb';
+  const stroke = item.objectType === 'connector' ? '#6b879b' : '#8bb8d5';
+  const text = lines.map((line, index) => (
+    `<text x="${centerX.toFixed(2)}" y="${(centerY + (index - (lines.length - 1) / 2) * fontSize * 1.15).toFixed(2)}" `
+    + `font-family="Arial, Noto Sans KR, sans-serif" font-size="${fontSize.toFixed(2)}" font-weight="600" `
+    + `text-anchor="middle" dominant-baseline="middle" fill="#173b57">${xmlEscape(line.slice(0, 180))}</text>`
+  )).join('');
+  return `<g><rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${objectWidth.toFixed(2)}" height="${objectHeight.toFixed(2)}" `
+    + `rx="3" fill="${fill}" stroke="${stroke}" stroke-width="1"/>${text}</g>`;
+}).join('');
+
 /** Render an XLSX drawing without desktop Excel for Linux production hosts. */
 export const renderPortableStraightMap = async (extraction: StraightMapExtraction, outputPng: string) => {
   const { width, height } = portableCanvasSize(extraction);
-  const shapes = extraction.objects.map((item) => {
-    const centerX = item.xRatio * width;
-    const centerY = item.yRatio * height;
-    const objectWidth = Math.max(24, Math.min(width * 0.45, item.width / extraction.mapWidth * width));
-    const objectHeight = Math.max(18, Math.min(height * 0.25, item.height / extraction.mapHeight * height));
-    const x = Math.max(0, centerX - objectWidth / 2);
-    const y = Math.max(0, centerY - objectHeight / 2);
-    const fontSize = Math.max(8, Math.min(22, objectHeight * 0.42));
-    const lines = item.originalText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 4);
-    const fill = item.objectType === 'cell-text' ? '#ffffff' : '#eef6fb';
-    const stroke = item.objectType === 'connector' ? '#6b879b' : '#8bb8d5';
-    const text = lines.map((line, index) => (
-      `<text x="${centerX.toFixed(2)}" y="${(centerY + (index - (lines.length - 1) / 2) * fontSize * 1.15).toFixed(2)}" `
-      + `font-family="Arial, Noto Sans KR, sans-serif" font-size="${fontSize.toFixed(2)}" font-weight="600" `
-      + `text-anchor="middle" dominant-baseline="middle" fill="#173b57">${xmlEscape(line.slice(0, 180))}</text>`
-    )).join('');
-    return `<g><rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${objectWidth.toFixed(2)}" height="${objectHeight.toFixed(2)}" `
-      + `rx="3" fill="${fill}" stroke="${stroke}" stroke-width="1"/>${text}</g>`;
-  }).join('');
+  // Raster pictures and chart graphic frames require their related parts;
+  // do not paint placeholder rectangles that could cover the line diagram.
+  const primitives = (extraction.drawingPrimitives || []).filter((primitive) => (
+    primitive.kind === 'shape' || primitive.kind === 'connector'
+  ));
+  const sortedPrimitives = [...primitives].sort((left, right) => {
+    const leftConnector = left.kind === 'connector' || left.geometry === 'line' || /connector/i.test(left.geometry);
+    const rightConnector = right.kind === 'connector' || right.geometry === 'line' || /connector/i.test(right.geometry);
+    return Number(rightConnector) - Number(leftConnector) || left.zIndex - right.zIndex;
+  });
+  const shapes = sortedPrimitives.length
+    ? sortedPrimitives.map((primitive) => portablePrimitiveSvg(primitive, extraction, width, height)).join('')
+    : fallbackPortableObjects(extraction, width, height);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
     + `<rect width="100%" height="100%" fill="#ffffff"/>${shapes}</svg>`;
   fs.mkdirSync(path.dirname(outputPng), { recursive: true });

@@ -4,8 +4,8 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { strToU8, zipSync } from 'fflate';
 import { db, initializeDatabase } from '../db';
-import { deleteStraightMapsForStation, registerStraightMapUpload } from '../straight-map-pipeline';
-import { extractStraightMapSheets } from '../straight-map-ooxml';
+import { deleteStraightMapsForStation, registerStraightMapUpload, upgradeOutdatedStraightMapRenders } from '../straight-map-pipeline';
+import { extractStraightMapSheets, STRAIGHT_MAP_RENDERER_REVISION } from '../straight-map-ooxml';
 import { normalizeStraightMapCompactText } from '../straight-map-search';
 import { saveStraightMapSharedSource, straightMapVersionRoot } from '../straight-map-storage';
 
@@ -36,9 +36,10 @@ fs.writeFileSync(path.join(versionRoot, 'tiles', '7', '0_0.webp'), 'reused-tile'
 db.prepare(`
   INSERT INTO map_versions (
     id, map_id, map_name, map_key, station_key, version, original_file_path, source_hash,
-    sheet_name, map_width, map_height, rendered_width, rendered_height, tile_size, max_zoom, status
-  ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 100, 100, 256, 7, 'ACTIVE')
-`).run(versionId, mapId, sheetName, 'reusemap', stationKey, sourcePath, sourceHash, sheetName, extraction.mapWidth, extraction.mapHeight);
+    sheet_name, map_width, map_height, rendered_width, rendered_height, tile_size, max_zoom, status,
+    renderer_revision
+  ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 100, 100, 256, 7, 'ACTIVE', ?)
+`).run(versionId, mapId, sheetName, 'reusemap', stationKey, sourcePath, sourceHash, sheetName, extraction.mapWidth, extraction.mapHeight, STRAIGHT_MAP_RENDERER_REVISION);
 const insertObject = db.prepare(`
   INSERT INTO map_objects (
     id, map_id, version_id, shape_id, shape_name, object_type, original_text,
@@ -71,7 +72,23 @@ try {
   assert.equal(fs.readFileSync(path.join(straightMapVersionRoot(mapId, 2), 'tiles', '7', '0_0.webp'), 'utf8'), 'reused-tile');
   const coordinates = db.prepare('SELECT x_ratio AS xRatio, y_ratio AS yRatio FROM map_objects WHERE version_id = ?').all(latest?.id) as Array<{ xRatio: number; yRatio: number }>;
   assert.ok(coordinates.length > 0 && coordinates.every((point) => point.xRatio === 0.25 && point.yRatio === 0.35));
-  console.log('Straight-map reupload test passed: identical sheet -> new ACTIVE version with reused tiles and coordinates');
+  db.prepare("UPDATE map_versions SET renderer_revision = '' WHERE id = ?").run(latest?.id);
+  process.env.STRAIGHT_MAP_RENDERER = 'portable';
+  upgradeOutdatedStraightMapRenders();
+  const upgradeDeadline = Date.now() + 5_000;
+  let upgraded: { id: string; version: number; status: string; rendererRevision: string } | undefined;
+  while (Date.now() < upgradeDeadline) {
+    upgraded = db.prepare(`
+      SELECT id, version, status, renderer_revision AS rendererRevision
+        FROM map_versions WHERE map_id = ? ORDER BY version DESC LIMIT 1
+    `).get(mapId) as typeof upgraded;
+    if (upgraded?.status === 'ACTIVE') break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(upgraded?.version, 3);
+  assert.equal(upgraded?.status, 'ACTIVE');
+  assert.equal(upgraded?.rendererRevision, STRAIGHT_MAP_RENDERER_REVISION);
+  console.log('Straight-map reupload test passed: reused tiles and automatic renderer revision upgrade verified');
 } finally {
   deleteStraightMapsForStation(stationName);
 }

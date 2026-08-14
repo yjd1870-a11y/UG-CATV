@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import { db } from './db';
 import { normalizeStationName } from './catv';
-import { extractStraightMapSheets, listStraightMapSheetNames } from './straight-map-ooxml';
+import { extractStraightMapSheets, listStraightMapSheetNames, STRAIGHT_MAP_RENDERER_REVISION } from './straight-map-ooxml';
 import { renderStraightMap } from './straight-map-renderer';
 import {
   cloneStraightMapVersion,
@@ -84,9 +85,9 @@ export const renderStraightMapVersion = async (versionId: string) => {
       db.prepare(`
         UPDATE map_versions
            SET status = 'ACTIVE', rendered_width = ?, rendered_height = ?, tile_size = ?, max_zoom = ?,
-               activated_at = CURRENT_TIMESTAMP, error_message = NULL
+               renderer_revision = ?, activated_at = CURRENT_TIMESTAMP, error_message = NULL
          WHERE id = ? AND status = 'PROCESSING'
-      `).run(rendered.width, rendered.height, rendered.tileSize, rendered.maxZoom, versionId);
+      `).run(rendered.width, rendered.height, rendered.tileSize, rendered.maxZoom, STRAIGHT_MAP_RENDERER_REVISION, versionId);
       db.exec('COMMIT');
       invalidateStraightMapSearchCache();
     } catch (error) {
@@ -150,6 +151,36 @@ export const resumeStraightMapRenders = () => {
   for (const row of recoverable) reset.run(row.id);
   const rows = db.prepare("SELECT id FROM map_versions WHERE status = 'PROCESSING' ORDER BY created_at, sheet_name").all() as Array<{ id: string }>;
   for (const row of rows) queueStraightMapRender(row.id);
+};
+
+// Re-register old ACTIVE maps from their persisted source workbook. This
+// creates new PROCESSING versions while the existing ACTIVE versions continue
+// serving users; each map is switched only after its replacement is complete.
+export const upgradeOutdatedStraightMapRenders = () => {
+  const stations = db.prepare(`
+    SELECT station_key AS stationKey, original_file_path AS sourcePath
+      FROM map_versions
+     WHERE status = 'ACTIVE' AND renderer_revision <> ?
+     GROUP BY station_key
+     ORDER BY MAX(activated_at), station_key
+  `).all(STRAIGHT_MAP_RENDERER_REVISION) as Array<{ stationKey: string; sourcePath: string }>;
+  for (const station of stations) {
+    const processing = db.prepare(`
+      SELECT 1 FROM map_versions WHERE station_key = ? AND status = 'PROCESSING' LIMIT 1
+    `).get(station.stationKey);
+    if (processing) continue;
+    try {
+      const buffer = fs.readFileSync(station.sourcePath);
+      const result = registerStraightMapUpload({
+        mapName: station.stationKey,
+        fileName: 'automatic-renderer-upgrade.xlsx',
+        fileBase64: buffer.toString('base64'),
+      });
+      console.log('[STRAIGHT_MAP_RENDERER_UPGRADE_QUEUED]', station.stationKey, result.mapCount);
+    } catch (error) {
+      console.error('[STRAIGHT_MAP_RENDERER_UPGRADE_FAILED]', station.stationKey, error);
+    }
+  }
 };
 
 type StoredVersion = {
@@ -278,8 +309,8 @@ export const registerStraightMapUpload = (input: { mapName: string; fileName: st
     const insertVersion = db.prepare(`
       INSERT INTO map_versions (
         id, map_id, map_name, map_key, station_key, version, original_file_path, source_hash,
-        sheet_name, map_width, map_height, status, reuse_version_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSING', ?)
+        sheet_name, map_width, map_height, status, reuse_version_id, renderer_revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSING', ?, ?)
     `);
     const insertObject = db.prepare(`
       INSERT INTO map_objects (
@@ -301,13 +332,15 @@ export const registerStraightMapUpload = (input: { mapName: string; fileName: st
       `).get(stationKey, mapKey) as { mapId: string | null; version: number | null } | undefined;
       const active = db.prepare(`
         SELECT id, map_id AS mapId, version, map_width AS mapWidth, map_height AS mapHeight,
-               rendered_width AS renderedWidth, rendered_height AS renderedHeight, max_zoom AS maxZoom
+               rendered_width AS renderedWidth, rendered_height AS renderedHeight, max_zoom AS maxZoom,
+               renderer_revision AS rendererRevision
           FROM map_versions
          WHERE station_key = ? AND map_key = ? AND status = 'ACTIVE'
          ORDER BY version DESC LIMIT 1
       `).get(stationKey, mapKey) as {
         id: string; mapId: string; version: number; mapWidth: number; mapHeight: number;
         renderedWidth: number | null; renderedHeight: number | null; maxZoom: number | null;
+        rendererRevision: string;
       } | undefined;
       const mapId = prior?.mapId || randomUUID();
       const version = Number(prior?.version || 0) + 1;
@@ -321,13 +354,15 @@ export const registerStraightMapUpload = (input: { mapName: string; fileName: st
       const priorHashes = priorObjects.map((item) => item.shapeHash);
       const reusable = Boolean(
         active?.renderedWidth && active.renderedHeight && active.maxZoom
+        && active.rendererRevision === STRAIGHT_MAP_RENDERER_REVISION
         && active.mapWidth === extraction.mapWidth && active.mapHeight === extraction.mapHeight
         && sameObjectSet(currentHashes, priorHashes)
       );
       const changedCount = changedObjectCount(currentHashes, priorHashes);
       insertVersion.run(
         versionId, mapId, extraction.sheetName, mapKey, stationKey, version, originalFilePath,
-        sourceHash, extraction.sheetName, extraction.mapWidth, extraction.mapHeight, reusable ? active?.id : null
+        sourceHash, extraction.sheetName, extraction.mapWidth, extraction.mapHeight, reusable ? active?.id : null,
+        STRAIGHT_MAP_RENDERER_REVISION
       );
       const priorByIdentity = new Map(priorObjects.map((item) => [`${item.shapeId}\u001f${item.originalText}`, item]));
       const priorByHash = new Map<string, PriorMapObject[]>();

@@ -6,6 +6,10 @@ const EMU_PER_PIXEL = 9525;
 const DEFAULT_COLUMN_EMU = 64 * EMU_PER_PIXEL;
 const DEFAULT_ROW_EMU = 20 * EMU_PER_PIXEL;
 
+// Stored with every rendered map version. Bump this whenever the portable
+// renderer output changes in a way that requires existing tiles to be rebuilt.
+export const STRAIGHT_MAP_RENDERER_REVISION = 'drawingml-v2';
+
 type XmlNode = Record<string, any>;
 
 export type StraightMapObject = {
@@ -27,11 +31,34 @@ export type StraightMapObject = {
   shapeHash: string;
 };
 
+export type StraightMapDrawingPrimitive = {
+  shapeId: string;
+  kind: 'shape' | 'connector' | 'picture' | 'graphic';
+  geometry: string;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  flipH: boolean;
+  flipV: boolean;
+  fillColor: string | null;
+  lineColor: string | null;
+  lineWidth: number;
+  textColor: string;
+  fontSize: number;
+  bold: boolean;
+  textAlign: 'left' | 'center' | 'right';
+  zIndex: number;
+};
+
 export type StraightMapExtraction = {
   mapWidth: number;
   mapHeight: number;
   sheetName: string;
   objects: StraightMapObject[];
+  drawingPrimitives?: StraightMapDrawingPrimitive[];
 };
 
 export type StraightMapSheetSelection = {
@@ -160,6 +187,72 @@ const anchorBounds = (anchor: XmlNode, metrics: ReturnType<typeof sheetMetrics>)
 const shapeIdentity = (shape: XmlNode) => shape.nvSpPr?.cNvPr || shape.nvCxnSpPr?.cNvPr || shape.nvPicPr?.cNvPr || shape.nvGraphicFramePr?.cNvPr || {};
 const shapeTransform = (shape: XmlNode) => shape.spPr?.xfrm || shape.grpSpPr?.xfrm || shape.xfrm || {};
 
+const hasOwn = (value: XmlNode | undefined, key: string) => Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
+
+const normalizeHexColor = (value: unknown, fallback: string | null = null) => {
+  const hex = String(value || '').replace(/^#/, '').trim();
+  return /^[a-f\d]{6}$/i.test(hex) ? `#${hex.toUpperCase()}` : fallback;
+};
+
+const workbookThemeColors = (files: Record<string, Uint8Array>) => {
+  const scheme = xml(files, 'xl/theme/theme1.xml')?.theme?.themeElements?.clrScheme || {};
+  const colors = new Map<string, string>([
+    ['dk1', '#000000'], ['tx1', '#000000'], ['lt1', '#FFFFFF'], ['bg1', '#FFFFFF'],
+  ]);
+  for (const [name, value] of Object.entries(scheme)) {
+    if (name.startsWith('@_')) continue;
+    const colorNode = array<XmlNode>(value)[0] || {};
+    const color = normalizeHexColor(colorNode.srgbClr?.['@_val'])
+      || normalizeHexColor(colorNode.sysClr?.['@_lastClr']);
+    if (color) colors.set(name, color);
+  }
+  return colors;
+};
+
+const drawingColor = (value: XmlNode | undefined, themeColors: Map<string, string>, fallback: string | null = null) => {
+  if (!value) return fallback;
+  return normalizeHexColor(value.srgbClr?.['@_val'])
+    || normalizeHexColor(value.sysClr?.['@_lastClr'])
+    || themeColors.get(String(value.schemeClr?.['@_val'] || ''))
+    || fallback;
+};
+
+const firstTextProperties = (shape: XmlNode) => {
+  for (const paragraph of array<XmlNode>(shape.txBody?.p)) {
+    for (const run of array<XmlNode>(paragraph.r)) if (run.rPr) return run.rPr as XmlNode;
+    if (paragraph.pPr?.defRPr) return paragraph.pPr.defRPr as XmlNode;
+    if (paragraph.endParaRPr) return paragraph.endParaRPr as XmlNode;
+  }
+  return {} as XmlNode;
+};
+
+const primitiveStyle = (shape: XmlNode, objectType: StraightMapDrawingPrimitive['kind'], themeColors: Map<string, string>) => {
+  const properties = shape.spPr || {};
+  const line = properties.ln || {};
+  const style = shape.style || {};
+  const geometry = String(properties.prstGeom?.['@_prst'] || (objectType === 'connector' ? 'straightConnector1' : 'rect'));
+  const lineGeometry = objectType === 'connector' || geometry === 'line' || /connector/i.test(geometry);
+  const fillColor = lineGeometry || hasOwn(properties, 'noFill')
+    ? null
+    : drawingColor(properties.solidFill, themeColors, drawingColor(style.fillRef, themeColors, '#FFFFFF'));
+  const lineColor = hasOwn(line, 'noFill')
+    ? null
+    : drawingColor(line.solidFill, themeColors, drawingColor(style.lnRef, themeColors, '#000000'));
+  const textProperties = firstTextProperties(shape);
+  const paragraph = array<XmlNode>(shape.txBody?.p)[0] || {};
+  const alignment = String(paragraph.pPr?.['@_algn'] || 'ctr');
+  return {
+    geometry,
+    fillColor,
+    lineColor,
+    lineWidth: Math.max(1, numberValue(line['@_w'], 12_700)),
+    textColor: drawingColor(textProperties.solidFill, themeColors, drawingColor(style.fontRef, themeColors, '#000000')) || '#000000',
+    fontSize: Math.max(1, numberValue(textProperties['@_sz'], 1_000) / 100 * 96 / 72 * EMU_PER_PIXEL),
+    bold: String(textProperties['@_b'] || '') === '1' || String(textProperties['@_b'] || '').toLowerCase() === 'true',
+    textAlign: (alignment === 'l' ? 'left' : alignment === 'r' ? 'right' : 'center') as 'left' | 'center' | 'right',
+  };
+};
+
 const transformedBounds = (shape: XmlNode, parent: Bounds, groupTransform?: XmlNode): Bounds => {
   const transform = shapeTransform(shape);
   if (!transform.off || !transform.ext) return parent;
@@ -177,34 +270,60 @@ const transformedBounds = (shape: XmlNode, parent: Bounds, groupTransform?: XmlN
 };
 
 type RawObject = Omit<StraightMapObject, 'xRatio' | 'yRatio' | 'shapeHash'>;
+type RawDrawingPrimitive = Omit<StraightMapDrawingPrimitive, 'x' | 'y'> & { x: number; y: number };
 
-const collectShapes = (container: XmlNode, bounds: Bounds, output: RawObject[], groupId: string | null = null, groupTransform?: XmlNode) => {
-  const types = [['sp', 'shape'], ['cxnSp', 'connector'], ['pic', 'picture'], ['graphicFrame', 'graphic']] as const;
+const collectShapes = (
+  container: XmlNode,
+  bounds: Bounds,
+  output: RawObject[],
+  primitives: RawDrawingPrimitive[],
+  themeColors: Map<string, string>,
+  groupId: string | null = null,
+  groupTransform?: XmlNode,
+) => {
+  const types = [['sp', 'shape'], ['cxnSp', 'connector'], ['pic', 'picture'], ['graphicFrame', 'graphic']] as const satisfies ReadonlyArray<readonly [string, StraightMapDrawingPrimitive['kind']]>;
   for (const [key, objectType] of types) {
     for (const shape of array<XmlNode>(container[key])) {
       const identity = shapeIdentity(shape);
       const current = transformedBounds(shape, bounds, groupTransform);
       const originalText = array(shape.txBody?.p).map(nodeText).join('\n').trim();
-      if (!originalText) continue;
       const shapeId = String(identity['@_id'] || `${objectType}-${output.length + 1}`);
-      output.push({
+      const transform = shapeTransform(shape);
+      const style = primitiveStyle(shape, objectType, themeColors);
+      primitives.push({
         shapeId,
-        shapeName: String(identity['@_name'] || ''),
-        objectType,
-        originalText,
-        normalizedText: normalizeStraightMapText(originalText),
-        x: Math.round(current.x), y: Math.round(current.y), width: Math.round(current.width), height: Math.round(current.height),
-        centerX: Math.round(current.x + current.width / 2), centerY: Math.round(current.y + current.height / 2),
-        groupId,
-        rotation: numberValue(shapeTransform(shape)['@_rot']) / 60000,
+        kind: objectType,
+        ...style,
+        text: originalText,
+        x: Math.round(current.x),
+        y: Math.round(current.y),
+        width: Math.round(current.width),
+        height: Math.round(current.height),
+        rotation: numberValue(transform['@_rot']) / 60000,
+        flipH: String(transform['@_flipH'] || '') === '1' || String(transform['@_flipH'] || '').toLowerCase() === 'true',
+        flipV: String(transform['@_flipV'] || '') === '1' || String(transform['@_flipV'] || '').toLowerCase() === 'true',
+        zIndex: primitives.length,
       });
+      if (originalText) {
+        output.push({
+          shapeId,
+          shapeName: String(identity['@_name'] || ''),
+          objectType,
+          originalText,
+          normalizedText: normalizeStraightMapText(originalText),
+          x: Math.round(current.x), y: Math.round(current.y), width: Math.round(current.width), height: Math.round(current.height),
+          centerX: Math.round(current.x + current.width / 2), centerY: Math.round(current.y + current.height / 2),
+          groupId,
+          rotation: numberValue(transform['@_rot']) / 60000,
+        });
+      }
     }
   }
   for (const group of array<XmlNode>(container.grpSp)) {
     const identity = group.nvGrpSpPr?.cNvPr || {};
     const id = String(identity['@_id'] || `group-${output.length + 1}`);
     const current = transformedBounds(group, bounds, groupTransform);
-    collectShapes(group, current, output, id, shapeTransform(group));
+    collectShapes(group, current, output, primitives, themeColors, id, shapeTransform(group));
   }
 };
 
@@ -290,6 +409,8 @@ const extractSheet = (
   const drawingTarget = drawingRelationId ? sheetRels.get(String(drawingRelationId)) : undefined;
   const drawing = drawingTarget ? sparseXml(files, resolveZipPath(sheetDirectory, drawingTarget), drawingParser) : null;
   const raw: RawObject[] = [];
+  const rawPrimitives: RawDrawingPrimitive[] = [];
+  const themeColors = workbookThemeColors(files);
   const drawingExtents: Bounds[] = [];
   for (const anchorType of ['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor']) {
     for (const anchor of array<XmlNode>(drawing?.wsDr?.[anchorType])) {
@@ -299,7 +420,7 @@ const extractSheet = (
         : anchor;
       const bounds = anchorBounds(parsedAnchor, metrics);
       drawingExtents.push(bounds);
-      collectShapes(parsedAnchor, bounds, raw);
+      collectShapes(parsedAnchor, bounds, raw, rawPrimitives, themeColors);
     }
   }
 
@@ -316,8 +437,11 @@ const extractSheet = (
     raw.push({ shapeId: `cell-${cell['@_r']}`, shapeName: String(cell['@_r']), objectType: 'cell-text', originalText, normalizedText: normalizeStraightMapText(originalText), x, y, width, height, centerX: x + width / 2, centerY: y + height / 2, groupId: null, rotation: 0 });
   }
 
-  const cellExtents = raw.filter((item) => item.objectType === 'cell-text');
-  const contentBounds = [...drawingExtents, ...cellExtents];
+  // Group children can legally extend beyond their worksheet anchor (several
+  // customer sheets use a compact anchor with a much larger child coordinate
+  // space). Include the resolved children themselves so those drawings are not
+  // clipped outside the portable canvas or clamped to a zero search ratio.
+  const contentBounds = [...drawingExtents, ...rawPrimitives, ...raw];
   const mapLeft = contentBounds.length ? Math.min(...contentBounds.map((item) => item.x)) : 0;
   const mapTop = contentBounds.length ? Math.min(...contentBounds.map((item) => item.y)) : 0;
   const mapRight = Math.max(mapLeft + DEFAULT_COLUMN_EMU, ...contentBounds.map((item) => item.x + item.width));
@@ -330,7 +454,18 @@ const extractSheet = (
     yRatio: Math.min(1, Math.max(0, (item.centerY - mapTop) / mapHeight)),
     shapeHash: createHash('sha256').update([item.shapeId, item.originalText, item.x, item.y, item.width, item.height].join('|')).digest('hex'),
   }));
-  return { mapWidth: Math.round(mapWidth), mapHeight: Math.round(mapHeight), sheetName: String(sheetNode['@_name'] || 'Sheet1'), objects };
+  const drawingPrimitives = rawPrimitives.map((item) => ({
+    ...item,
+    x: Math.round(item.x - mapLeft),
+    y: Math.round(item.y - mapTop),
+  }));
+  return {
+    mapWidth: Math.round(mapWidth),
+    mapHeight: Math.round(mapHeight),
+    sheetName: String(sheetNode['@_name'] || 'Sheet1'),
+    objects,
+    drawingPrimitives,
+  };
 };
 
 export const extractStraightMapSheets = (
@@ -341,6 +476,7 @@ export const extractStraightMapSheets = (
     'xl/workbook.xml',
     'xl/_rels/workbook.xml.rels',
     'xl/sharedStrings.xml',
+    'xl/theme/theme1.xml',
   ]));
   const sheets = workbookSheetNodes(files);
   if (!sheets.length) throw new Error('직선도 워크시트를 찾을 수 없습니다.');

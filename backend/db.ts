@@ -417,6 +417,7 @@ CREATE TABLE IF NOT EXISTS map_versions (
   tile_size INTEGER NOT NULL DEFAULT 256,
   max_zoom INTEGER,
   status TEXT NOT NULL DEFAULT 'PROCESSING',
+  renderer_revision TEXT NOT NULL DEFAULT '',
   error_message TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   activated_at TEXT,
@@ -511,6 +512,7 @@ export const createSchema = () => {
   ensureColumn('catv_b2c_lines', 'row_number', 'INTEGER');
   ensureColumn('map_versions', 'station_key', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('map_versions', 'reuse_version_id', 'TEXT');
+  ensureColumn('map_versions', 'renderer_revision', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('map_objects', 'compact_text', "TEXT NOT NULL DEFAULT ''");
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_station_key ON catv_b2c_lines(station_key);
