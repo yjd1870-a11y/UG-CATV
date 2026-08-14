@@ -1,3 +1,5 @@
+import { resolveApiResourceUrl } from './url';
+
 type ApiEnvelope<T> =
   | { success: true; data: T }
   | { success: false; message: string; code?: string };
@@ -13,6 +15,8 @@ export class ApiClientError extends Error {
 }
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+
+export const apiResourceUrl = (resourceUrl: string) => resolveApiResourceUrl(API_BASE, resourceUrl);
 
 export const request = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
   const response = await fetch(`${API_BASE}${path}`, {

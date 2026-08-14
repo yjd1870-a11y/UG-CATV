@@ -33,6 +33,7 @@ import {
 } from '../../features/admin/api';
 import { cellsApi } from '../../features/cells/api';
 import { useApp } from '../../context/AppContext';
+import { apiResourceUrl } from '../../shared/api/client';
 import {
   isValidPassword,
   PASSWORD_MAX_LENGTH,
@@ -233,7 +234,7 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
       setPreviewUrl(url);
       return () => URL.revokeObjectURL(url);
     }
-    setPreviewUrl(editingAsset?.imageUrl || '');
+    setPreviewUrl(editingAsset?.imageUrl ? apiResourceUrl(editingAsset.imageUrl) : '');
   }, [editingAsset, file]);
 
   const resetEditor = () => {

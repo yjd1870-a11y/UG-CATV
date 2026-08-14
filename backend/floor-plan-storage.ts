@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { env } from './env';
-import { deleteR2Object, putR2Object, signedR2DownloadUrl, usesR2Storage } from './object-storage';
+import { deleteR2Object, putR2Object, readR2Object, usesR2Storage } from './object-storage';
 
 export const floorPlanStorageRoot = path.join(env.privateStoragePath, 'floor-plans');
 
@@ -60,7 +60,10 @@ export const removeFloorPlanObject = async (objectKey: string | null | undefined
   if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
 };
 
-export const floorPlanDownloadUrl = (objectKey: string) => signedR2DownloadUrl(objectKey);
+export const readFloorPlanObject = (objectKey: string) => {
+  resolveFloorPlanObject(objectKey);
+  return readR2Object(objectKey);
+};
 
 export const imageMimeType = (fileName: string) => {
   const extension = path.extname(fileName).toLowerCase();

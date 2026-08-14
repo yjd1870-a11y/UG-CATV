@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { env } from './env';
-import { deleteR2Prefix, putR2Object, signedR2DownloadUrl, usesR2Storage } from './object-storage';
+import { deleteR2Prefix, putR2Object, readR2Object, usesR2Storage } from './object-storage';
 
 // Render work files belong on the configured private storage root. In
 // production this is the persistent disk; completed artifacts are also copied
@@ -116,7 +116,7 @@ export const publishStraightMapArtifacts = async (mapId: string, version: number
   }
 };
 
-export const straightMapTileDownloadUrl = (mapId: string, version: number, level: number, tileName: string) => {
+export const readStraightMapTile = (mapId: string, version: number, level: number, tileName: string) => {
   resolveStraightMapTile(mapId, version, level, tileName);
-  return signedR2DownloadUrl(`line-diagrams/${mapId}/${version}/tiles/${level}/${tileName}`);
+  return readR2Object(`line-diagrams/${mapId}/${version}/tiles/${level}/${tileName}`);
 };

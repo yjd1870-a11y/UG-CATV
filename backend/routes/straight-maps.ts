@@ -5,7 +5,7 @@ import { normalizeStationName } from '../catv';
 import { ApiError, asyncRoute, success } from '../http';
 import { requireAuth } from '../security/session';
 import { straightMapContinuousTerms, type StraightMapMatchLength } from '../straight-map-search';
-import { resolveStraightMapTile, straightMapTileDownloadUrl } from '../straight-map-storage';
+import { readStraightMapTile, resolveStraightMapTile } from '../straight-map-storage';
 import { cachedStraightMapSearch } from '../straight-map-cache';
 import { usesR2Storage } from '../object-storage';
 
@@ -92,12 +92,16 @@ router.get('/:mapId/versions/:version/tiles/:level/:tile', asyncRoute(async (req
   `).get(req.params.mapId, version);
   if (!allowed) throw new ApiError(404, '직선도 타일을 찾을 수 없습니다.', 'TILE_NOT_FOUND');
   if (usesR2Storage) {
-    try {
-      res.redirect(302, await straightMapTileDownloadUrl(req.params.mapId, version, level, req.params.tile));
-      return;
-    } catch {
-      throw new ApiError(400, '직선도 저장 경로가 올바르지 않습니다.', 'INVALID_TILE_PATH');
-    }
+    try { resolveStraightMapTile(req.params.mapId, version, level, req.params.tile); }
+    catch { throw new ApiError(400, '직선도 저장 경로가 올바르지 않습니다.', 'INVALID_TILE_PATH'); }
+    const object = await readStraightMapTile(req.params.mapId, version, level, req.params.tile);
+    res.setHeader('Content-Type', object.contentType || 'image/webp');
+    res.setHeader('Content-Length', String(object.size));
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    if (object.etag) res.setHeader('ETag', object.etag);
+    res.send(object.body);
+    return;
   }
   let filePath: string;
   try { filePath = resolveStraightMapTile(req.params.mapId, version, level, req.params.tile); }

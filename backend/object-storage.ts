@@ -70,6 +70,18 @@ export const headR2Object = async (key: string) => {
   };
 };
 
+export const readR2Object = async (key: string) => {
+  const object = await client().send(new GetObjectCommand({ Bucket: env.r2BucketName, Key: key }));
+  if (!object.Body) throw new Error(`R2 object has no body: ${key}`);
+  const body = Buffer.from(await object.Body.transformToByteArray());
+  return {
+    body,
+    contentType: object.ContentType || 'application/octet-stream',
+    size: Number(object.ContentLength ?? body.length),
+    etag: object.ETag || null,
+  };
+};
+
 export const signedR2DownloadUrl = (key: string) => getSignedUrl(
   client(),
   new GetObjectCommand({ Bucket: env.r2BucketName, Key: key }),

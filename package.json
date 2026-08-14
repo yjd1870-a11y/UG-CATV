@@ -14,6 +14,7 @@
     "start": "tsx backend/server.ts",
     "db:init": "tsx backend/init-db.ts",
     "test:api": "tsx backend/tests/run-isolated.ts backend/tests/api.integration.ts",
+    "test:api-resource-url": "tsx backend/tests/api-resource-url.ts",
     "test:security": "tsx backend/tests/run-isolated.ts backend/tests/security.integration.ts",
     "test:database-restart": "tsx backend/tests/run-isolated.ts backend/tests/database-restart.ts",
     "test:b2c-linebook": "tsx backend/tests/run-isolated.ts backend/tests/b2c-linebook.ts",

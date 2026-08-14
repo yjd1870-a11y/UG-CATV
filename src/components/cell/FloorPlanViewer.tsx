@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Building2, Maximize2, Minimize2, RefreshCw, ZoomIn, ZoomOut } from 'lucide-react';
 import type { CellInfo, CatvFloorPlanResult } from '../../types';
 import { catvApi } from '../../features/cells/api';
-import { ApiClientError } from '../../shared/api/client';
+import { apiResourceUrl, ApiClientError } from '../../shared/api/client';
 
 interface FloorPlanViewerProps {
   cell?: CellInfo;
@@ -114,7 +114,7 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
           <img
             className="block h-full w-full rounded-lg bg-white object-contain shadow-2xl"
             draggable={false}
-            src={result.floorPlan.imageUrl}
+            src={apiResourceUrl(result.floorPlan.imageUrl)}
             alt={`${result.floorPlan.stationName} 국사 평면도`}
             onLoad={(event) => setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
           />

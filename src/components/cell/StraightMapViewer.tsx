@@ -3,7 +3,7 @@ import type OpenSeadragon from 'openseadragon';
 import { ArrowLeft, LocateFixed, Maximize2, Minimize2, RefreshCw, Search, ZoomIn, ZoomOut } from 'lucide-react';
 import type { StraightMapMetadata, StraightMapSearchResult } from '../../types';
 import { catvApi } from '../../features/cells/api';
-import { ApiClientError } from '../../shared/api/client';
+import { apiResourceUrl, ApiClientError } from '../../shared/api/client';
 
 type Props = {
   searchKeys: Array<string | undefined>;
@@ -96,7 +96,7 @@ export const StraightMapViewer: React.FC<Props> = ({ searchKeys, stationName = '
       tileSize: metadata.tileSize,
       minLevel: 0,
       maxLevel: metadata.maxZoom,
-      getTileUrl: (level: number, x: number, y: number) => metadata.tileUrl
+      getTileUrl: (level: number, x: number, y: number) => apiResourceUrl(metadata.tileUrl)
         .replace('{level}', String(level)).replace('{x}', String(x)).replace('{y}', String(y)),
     };
     let disposed = false;
