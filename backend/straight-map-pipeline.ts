@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { db } from './db';
 import { normalizeStationName } from './catv';
-import { extractStraightMapSheets } from './straight-map-ooxml';
+import { extractStraightMapSheets, listStraightMapSheetNames } from './straight-map-ooxml';
 import { renderStraightMap } from './straight-map-renderer';
 import {
   cloneStraightMapVersion,
@@ -258,13 +258,11 @@ export const registerStraightMapUpload = (input: { mapName: string; fileName: st
   const sourceHash = createHash('sha256').update(buffer).digest('hex');
   const stationKey = normalizeStationName(input.mapName);
   if (!stationKey) throw new Error('직선도 국사명을 확인해주세요.');
-  const extractions = extractStraightMapSheets(buffer)
-    .filter((sheet) => !sheet.sheetName.replace(/\s+/g, '').includes('선번장'));
-  if (!extractions.length) throw new Error('선번장 외 직선도 시트를 찾지 못했습니다.');
+  const sheetNames = listStraightMapSheetNames(buffer, { excludeSheetNamesContaining: ['선번장'] });
   const originalFilePath = saveStraightMapSharedSource(sourceHash, buffer);
   const registered: RegisteredMap[] = [];
   const versionsToRender: string[] = [];
-  const currentMapKeys = new Set(extractions.map((sheet) => normalizeStationName(sheet.sheetName)));
+  const currentMapKeys = new Set(sheetNames.map(normalizeStationName));
   const stationVersions = storedVersionsForStation(stationKey);
   const versionDetails = db.prepare(`
     SELECT id, map_id AS mapId, map_key AS mapKey, version, status, original_file_path AS sourcePath
@@ -295,7 +293,8 @@ export const registerStraightMapUpload = (input: { mapName: string; fileName: st
       UPDATE map_versions SET status = 'FAILED', error_message = '새 업로드로 대체됨'
        WHERE station_key = ? AND status = 'PROCESSING'
     `).run(stationKey);
-    for (const extraction of extractions) {
+    for (const sheetName of sheetNames) {
+      const extraction = extractStraightMapSheets(buffer, { sheetName })[0];
       const mapKey = normalizeStationName(extraction.sheetName);
       const prior = db.prepare(`
         SELECT map_id AS mapId, MAX(version) AS version FROM map_versions WHERE station_key = ? AND map_key = ?

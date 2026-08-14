@@ -8,6 +8,11 @@ import { projectRoot } from './env';
 import { straightMapVersionRoot } from './straight-map-storage';
 import { extractStraightMapSheets, type StraightMapExtraction } from './straight-map-ooxml';
 
+// Render runs this service on a memory-constrained Starter instance. Keep
+// libvips from caching several large map pyramids between queued sheets.
+sharp.cache({ memory: 32, files: 10, items: 20 });
+sharp.concurrency(1);
+
 const execFileAsync = promisify(execFile);
 const TILE_SIZE = 256;
 // Keep the map slightly sharper without making the already-large tile
@@ -38,9 +43,10 @@ const xmlEscape = (value: string) => value
 const portableCanvasSize = (extraction: StraightMapExtraction) => {
   const sourceWidth = Math.max(1, extraction.mapWidth);
   const sourceHeight = Math.max(1, extraction.mapHeight);
-  // 4096px keeps Sharp comfortably below a Starter instance's 512MB limit.
-  const requested = Number(process.env.STRAIGHT_MAP_PORTABLE_SIZE || 4096);
-  const longestSide = Math.min(6144, Math.max(3200, Number.isFinite(requested) ? requested : 4096));
+  // 3200px preserves readable Deep Zoom labels while staying below the
+  // Starter instance's memory limit for large customer workbooks.
+  const requested = Number(process.env.STRAIGHT_MAP_PORTABLE_SIZE || 3200);
+  const longestSide = Math.min(4096, Math.max(2400, Number.isFinite(requested) ? requested : 3200));
   const ratio = sourceWidth / sourceHeight;
   if (ratio >= 1) return { width: longestSide, height: Math.max(1200, Math.round(longestSide / ratio)) };
   return { width: Math.max(1200, Math.round(longestSide * ratio)), height: longestSide };
@@ -71,7 +77,9 @@ export const renderPortableStraightMap = async (extraction: StraightMapExtractio
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
     + `<rect width="100%" height="100%" fill="#ffffff"/>${shapes}</svg>`;
   fs.mkdirSync(path.dirname(outputPng), { recursive: true });
-  await sharp(Buffer.from(svg), { limitInputPixels: false, density: 144 })
+  // SVG width/height are already expressed in output pixels. 144 DPI doubled
+  // both axes (and quadrupled tile memory) on Render, so keep the 72 DPI pixel mapping.
+  await sharp(Buffer.from(svg), { limitInputPixels: false, density: 72 })
     .png({ compressionLevel: 8 })
     .toFile(outputPng);
   return extraction.objects.map((item) => ({
@@ -272,7 +280,7 @@ export const renderStraightMap = async (mapId: string, version: number, xlsxPath
   if (process.platform === 'win32' && process.env.STRAIGHT_MAP_RENDERER !== 'portable') {
     coordinates = await renderExcelToPng(xlsxPath, sheetName, sourcePath);
   } else {
-    const extraction = extractStraightMapSheets(fs.readFileSync(xlsxPath)).find((sheet) => sheet.sheetName === sheetName);
+    const extraction = extractStraightMapSheets(fs.readFileSync(xlsxPath), { sheetName })[0];
     if (!extraction) throw new Error(`직선도 시트를 찾을 수 없습니다: ${sheetName}`);
     coordinates = await renderPortableStraightMap(extraction, sourcePath);
   }

@@ -207,6 +207,24 @@ try {
   });
   assert.equal(floorAsset.response.status, 201);
   floorPlanAssetId = floorAsset.payload.data?.id || '';
+  const updatedFloorAsset = await call(`/admin/db/assets/${floorPlanAssetId}`, {
+    method: 'PUT',
+    cookie: adminLogin.cookie,
+    body: {
+      stationName: '오산국사',
+      records: [],
+      coordinates: { 'Rack 7': { type: 'rack', xRatio: 0.73, yRatio: 0.27 } },
+    },
+  });
+  assert.equal(updatedFloorAsset.response.status, 200);
+  const floorAssets = await call<Array<{ id: string; imageUrl: string | null }>>('/admin/db/assets?type=floor_plan', { cookie: adminLogin.cookie });
+  const updatedFloorPlan = floorAssets.payload.data?.find((asset) => asset.id === floorPlanAssetId);
+  assert.ok(updatedFloorPlan?.imageUrl);
+  const floorImage = await fetch(`${base}${updatedFloorPlan.imageUrl?.replace(/^\/api/, '')}`, {
+    headers: { Cookie: workerLogin.cookie || '' },
+  });
+  assert.equal(floorImage.status, 200);
+  assert.equal(floorImage.headers.get('content-type'), 'image/png');
   const floorPlan = await call<{ floorPlan: { stationName: string }; target: { label: string } | null }>(
     '/floor-plans/search?station=기남_오산국사&target=OSAN-NODE&type=node', { cookie: workerLogin.cookie }
   );
@@ -214,9 +232,9 @@ try {
   assert.equal(floorPlan.payload.data?.floorPlan.stationName, '오산국사');
   assert.equal(floorPlan.payload.data?.target, null);
   const rackPlan = await call<{ target: { label: string } | null }>(
-    '/floor-plans/search?station=오산국사&target=3&type=rack', { cookie: workerLogin.cookie }
+    '/floor-plans/search?station=오산국사&target=7&type=rack', { cookie: workerLogin.cookie }
   );
-  assert.equal(rackPlan.payload.data?.target?.label, 'Rack 3');
+  assert.equal(rackPlan.payload.data?.target?.label, 'Rack 7');
   const missingCoordinate = await call<{ target: null }>(
     '/floor-plans/search?station=오산국사&target=UNKNOWN&type=node', { cookie: workerLogin.cookie }
   );

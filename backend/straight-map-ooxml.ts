@@ -34,13 +34,24 @@ export type StraightMapExtraction = {
   objects: StraightMapObject[];
 };
 
-const parser = new XMLParser({
+export type StraightMapSheetSelection = {
+  sheetName?: string;
+  excludeSheetNamesContaining?: string[];
+};
+
+const parserOptions = {
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
   removeNSPrefix: true,
   parseTagValue: false,
   trimValues: false,
-  isArray: (name) => ['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor', 'sp', 'grpSp', 'cxnSp', 'pic', 'graphicFrame', 'c', 'row', 'col', 'si', 't'].includes(name),
+  isArray: (name: string) => ['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor', 'sp', 'grpSp', 'cxnSp', 'pic', 'graphicFrame', 'c', 'row', 'col', 'si', 't'].includes(name),
+};
+const parser = new XMLParser(parserOptions);
+const sheetParser = new XMLParser({ ...parserOptions, stopNodes: ['*.sheetData'] });
+const drawingParser = new XMLParser({
+  ...parserOptions,
+  stopNodes: ['*.twoCellAnchor', '*.oneCellAnchor', '*.absoluteAnchor'],
 });
 
 const array = <T>(value: T | T[] | undefined | null): T[] => value == null ? [] : Array.isArray(value) ? value : [value];
@@ -58,6 +69,11 @@ export const normalizeStraightMapText = (value: string) => value.trim().toLocale
 const xml = (files: Record<string, Uint8Array>, name: string) => {
   const file = files[name.replace(/^\//, '')];
   return file ? parser.parse(strFromU8(file)) as XmlNode : null;
+};
+
+const sparseXml = (files: Record<string, Uint8Array>, name: string, sparseParser: XMLParser) => {
+  const file = files[name.replace(/^\//, '')];
+  return file ? sparseParser.parse(strFromU8(file)) as XmlNode : null;
 };
 
 const relationshipTargets = (document: XmlNode | null) => new Map(
@@ -86,6 +102,7 @@ const columnWidthToEmu = (width: number) => Math.max(1, Math.floor(((256 * width
 
 const sheetMetrics = (sheet: XmlNode) => {
   const worksheet = sheet.worksheet || {};
+  const sheetDataXml = typeof worksheet.sheetData === 'string' ? worksheet.sheetData : '';
   const columnWidths = new Map<number, number>();
   for (const col of array<XmlNode>(worksheet.cols?.col)) {
     const min = numberValue(col['@_min'], 1) - 1;
@@ -94,8 +111,16 @@ const sheetMetrics = (sheet: XmlNode) => {
     for (let index = min; index <= max; index += 1) columnWidths.set(index, width);
   }
   const rowHeights = new Map<number, number>();
-  for (const row of array<XmlNode>(worksheet.sheetData?.row)) {
-    if (row['@_ht'] != null) rowHeights.set(numberValue(row['@_r'], 1) - 1, numberValue(row['@_ht']) / 72 * 96 * EMU_PER_PIXEL);
+  if (sheetDataXml) {
+    for (const match of sheetDataXml.matchAll(/<(?:[a-z0-9_]+:)?row\b([^>]*)>/gi)) {
+      const rowNumber = /\br\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
+      const height = /\bht\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
+      if (height != null) rowHeights.set(numberValue(rowNumber, 1) - 1, numberValue(height) / 72 * 96 * EMU_PER_PIXEL);
+    }
+  } else {
+    for (const row of array<XmlNode>(worksheet.sheetData?.row)) {
+      if (row['@_ht'] != null) rowHeights.set(numberValue(row['@_r'], 1) - 1, numberValue(row['@_ht']) / 72 * 96 * EMU_PER_PIXEL);
+    }
   }
   const columnOffset = (index: number) => {
     let total = 0;
@@ -111,7 +136,7 @@ const sheetMetrics = (sheet: XmlNode) => {
     x: columnOffset(numberValue(value?.col)) + numberValue(value?.colOff),
     y: rowOffset(numberValue(value?.row)) + numberValue(value?.rowOff),
   });
-  return { worksheet, columnWidths, rowHeights, columnOffset, rowOffset, marker };
+  return { worksheet, sheetDataXml, columnWidths, rowHeights, columnOffset, rowOffset, marker };
 };
 
 type Bounds = { x: number; y: number; width: number; height: number };
@@ -185,6 +210,69 @@ const collectShapes = (container: XmlNode, bounds: Bounds, output: RawObject[], 
 
 const sharedStrings = (files: Record<string, Uint8Array>) => array<XmlNode>(xml(files, 'xl/sharedStrings.xml')?.sst?.si).map(nodeText);
 
+function* sheetCells(metrics: ReturnType<typeof sheetMetrics>): Generator<XmlNode> {
+  if (!metrics.sheetDataXml) {
+    for (const row of array<XmlNode>(metrics.worksheet.sheetData?.row)) yield* array<XmlNode>(row.c);
+    return;
+  }
+  for (const match of metrics.sheetDataXml.matchAll(/<(?:[a-z0-9_]+:)?row\b[^>]*>[\s\S]*?<\/(?:[a-z0-9_]+:)?row>/gi)) {
+    const parsed = parser.parse(match[0]) as XmlNode;
+    const row = array<XmlNode>(parsed.row)[0];
+    yield* array<XmlNode>(row?.c);
+  }
+}
+
+const decodeXmlAttribute = (value: string) => value
+  .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+  .replace(/&#(\d+);/g, (_match, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
+  .replace(/&quot;/g, '"')
+  .replace(/&apos;/g, "'")
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&amp;/g, '&');
+
+const workbookSheetNodes = (files: Record<string, Uint8Array>) => {
+  const workbook = files['xl/workbook.xml'];
+  if (!workbook) throw new Error('유효한 XLSX workbook.xml을 찾을 수 없습니다.');
+  const source = strFromU8(workbook);
+  const sheets: XmlNode[] = [];
+  for (const match of source.matchAll(/<(?:[a-z0-9_]+:)?sheet\b([^>]*)\/?\s*>/gi)) {
+    const attributes = match[1];
+    const name = /\bname\s*=\s*(["'])(.*?)\1/i.exec(attributes)?.[2];
+    const relationshipId = /\b(?:r|[a-z0-9_]+):id\s*=\s*(["'])(.*?)\1/i.exec(attributes)?.[2];
+    if (name && relationshipId) sheets.push({ '@_name': decodeXmlAttribute(name), '@_id': decodeXmlAttribute(relationshipId) });
+  }
+  return sheets;
+};
+
+const compactSheetName = (value: string) => value.normalize('NFKC').replace(/\s+/g, '').toLocaleLowerCase('ko-KR');
+
+const selectSheetNodes = (sheets: XmlNode[], selection: StraightMapSheetSelection) => {
+  const requestedName = selection.sheetName ? compactSheetName(selection.sheetName) : '';
+  const excludedTerms = (selection.excludeSheetNamesContaining || []).map(compactSheetName).filter(Boolean);
+  return sheets.filter((sheet) => {
+    const name = compactSheetName(String(sheet['@_name'] || ''));
+    if (requestedName && name !== requestedName) return false;
+    return !excludedTerms.some((term) => name.includes(term));
+  });
+};
+
+const unzipOnly = (buffer: Buffer, names: Set<string>) => unzipSync(new Uint8Array(buffer), {
+  filter: (file) => names.has(file.name.replace(/^\//, '')),
+});
+
+export const listStraightMapSheetNames = (
+  buffer: Buffer,
+  selection: StraightMapSheetSelection = {},
+) => {
+  const files = unzipOnly(buffer, new Set(['xl/workbook.xml']));
+  const sheets = workbookSheetNodes(files);
+  if (!sheets.length) throw new Error('직선도 워크시트를 찾을 수 없습니다.');
+  const selected = selectSheetNodes(sheets, selection);
+  if (!selected.length) throw new Error('조건에 맞는 직선도 워크시트를 찾을 수 없습니다.');
+  return selected.map((sheet) => String(sheet['@_name'] || 'Sheet1'));
+};
+
 const extractSheet = (
   files: Record<string, Uint8Array>,
   workbookRels: Map<string, string>,
@@ -192,7 +280,7 @@ const extractSheet = (
   strings: string[]
 ): StraightMapExtraction => {
   const sheetPath = resolveZipPath('xl', workbookRels.get(String(sheetNode['@_id'] || '')) || 'worksheets/sheet1.xml');
-  const sheet = xml(files, sheetPath);
+  const sheet = sparseXml(files, sheetPath, sheetParser);
   if (!sheet) throw new Error('직선도 워크시트 XML을 읽을 수 없습니다.');
   const metrics = sheetMetrics(sheet);
   const sheetDirectory = sheetPath.slice(0, sheetPath.lastIndexOf('/'));
@@ -200,18 +288,22 @@ const extractSheet = (
   const sheetRels = relationshipTargets(xml(files, `${sheetDirectory}/_rels/${sheetFile}.rels`));
   const drawingRelationId = metrics.worksheet.drawing?.['@_id'];
   const drawingTarget = drawingRelationId ? sheetRels.get(String(drawingRelationId)) : undefined;
-  const drawing = drawingTarget ? xml(files, resolveZipPath(sheetDirectory, drawingTarget)) : null;
+  const drawing = drawingTarget ? sparseXml(files, resolveZipPath(sheetDirectory, drawingTarget), drawingParser) : null;
   const raw: RawObject[] = [];
   const drawingExtents: Bounds[] = [];
   for (const anchorType of ['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor']) {
     for (const anchor of array<XmlNode>(drawing?.wsDr?.[anchorType])) {
-      const bounds = anchorBounds(anchor, metrics);
+      const anchorSource = typeof anchor === 'string' ? anchor : typeof anchor?.['#text'] === 'string' ? anchor['#text'] : null;
+      const parsedAnchor = anchorSource
+        ? array<XmlNode>((parser.parse(`<${anchorType}>${anchorSource}</${anchorType}>`) as XmlNode)[anchorType])[0]
+        : anchor;
+      const bounds = anchorBounds(parsedAnchor, metrics);
       drawingExtents.push(bounds);
-      collectShapes(anchor, bounds, raw);
+      collectShapes(parsedAnchor, bounds, raw);
     }
   }
 
-  for (const cell of array<XmlNode>(metrics.worksheet.sheetData?.row).flatMap((row) => array<XmlNode>(row.c))) {
+  for (const cell of sheetCells(metrics)) {
     const reference = columnName(String(cell['@_r'] || ''));
     if (!reference) continue;
     const rawValue = nodeText(cell.v);
@@ -241,15 +333,45 @@ const extractSheet = (
   return { mapWidth: Math.round(mapWidth), mapHeight: Math.round(mapHeight), sheetName: String(sheetNode['@_name'] || 'Sheet1'), objects };
 };
 
-export const extractStraightMapSheets = (buffer: Buffer): StraightMapExtraction[] => {
-  const files = unzipSync(new Uint8Array(buffer));
-  const workbook = xml(files, 'xl/workbook.xml');
-  if (!workbook) throw new Error('유효한 XLSX workbook.xml을 찾을 수 없습니다.');
-  const sheets = array<XmlNode>(workbook.workbook?.sheets?.sheet);
+export const extractStraightMapSheets = (
+  buffer: Buffer,
+  selection: StraightMapSheetSelection = {},
+): StraightMapExtraction[] => {
+  const files = unzipOnly(buffer, new Set([
+    'xl/workbook.xml',
+    'xl/_rels/workbook.xml.rels',
+    'xl/sharedStrings.xml',
+  ]));
+  const sheets = workbookSheetNodes(files);
   if (!sheets.length) throw new Error('직선도 워크시트를 찾을 수 없습니다.');
   const workbookRels = relationshipTargets(xml(files, 'xl/_rels/workbook.xml.rels'));
+  const selectedSheets = selectSheetNodes(sheets, selection);
+  if (!selectedSheets.length) throw new Error('조건에 맞는 직선도 워크시트를 찾을 수 없습니다.');
+  const selectedPaths = selectedSheets.map((sheet) => resolveZipPath(
+    'xl',
+    workbookRels.get(String(sheet['@_id'] || '')) || 'worksheets/sheet1.xml',
+  ));
+  const sheetFiles = new Set<string>();
+  for (const sheetPath of selectedPaths) {
+    const sheetDirectory = sheetPath.slice(0, sheetPath.lastIndexOf('/'));
+    const sheetFile = sheetPath.slice(sheetPath.lastIndexOf('/') + 1);
+    sheetFiles.add(sheetPath);
+    sheetFiles.add(`${sheetDirectory}/_rels/${sheetFile}.rels`);
+  }
+  Object.assign(files, unzipOnly(buffer, sheetFiles));
+  const drawingFiles = new Set<string>();
+  for (const sheetPath of selectedPaths) {
+    const sheet = xml(files, sheetPath);
+    const sheetDirectory = sheetPath.slice(0, sheetPath.lastIndexOf('/'));
+    const sheetFile = sheetPath.slice(sheetPath.lastIndexOf('/') + 1);
+    const sheetRels = relationshipTargets(xml(files, `${sheetDirectory}/_rels/${sheetFile}.rels`));
+    const drawingRelationId = sheet?.worksheet?.drawing?.['@_id'];
+    const drawingTarget = drawingRelationId ? sheetRels.get(String(drawingRelationId)) : undefined;
+    if (drawingTarget) drawingFiles.add(resolveZipPath(sheetDirectory, drawingTarget));
+  }
+  if (drawingFiles.size) Object.assign(files, unzipOnly(buffer, drawingFiles));
   const strings = sharedStrings(files);
-  return sheets.map((sheet) => extractSheet(files, workbookRels, sheet, strings));
+  return selectedSheets.map((sheet) => extractSheet(files, workbookRels, sheet, strings));
 };
 
 export const extractStraightMapObjects = (buffer: Buffer): StraightMapExtraction => {

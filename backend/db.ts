@@ -570,7 +570,7 @@ export const createSchema = () => {
     VALUES (?, ?, ?)
     ON CONFLICT(region_name) DO NOTHING
   `);
-  departments.forEach((entry, index) => insertRegion.run(`region-${index + 1}`, entry.department, index + 1));
+  departments.forEach((entry, index) => insertRegion.run(randomUUID(), entry.department, index + 1));
   db.prepare(`
     UPDATE users
        SET region_id = (SELECT id FROM regions WHERE region_name = users.department)

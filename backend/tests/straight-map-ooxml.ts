@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { strToU8, zipSync } from 'fflate';
-import { extractStraightMapObjects, normalizeStraightMapText } from '../straight-map-ooxml';
+import { extractStraightMapObjects, extractStraightMapSheets, normalizeStraightMapText } from '../straight-map-ooxml';
 import { normalizeStraightMapCompactText, straightMapContinuousTerms } from '../straight-map-search';
 
 const files: Record<string, Uint8Array> = {
@@ -11,7 +11,10 @@ const files: Record<string, Uint8Array> = {
   'xl/drawings/drawing1.xml': strToU8(`<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="42" name="검색 도형"/></xdr:nvSpPr><xdr:spPr><a:xfrm rot="5400000"/></xdr:spPr><xdr:txBody><a:p><a:r><a:t> G330630 </a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>`),
 };
 
-const result = extractStraightMapObjects(Buffer.from(zipSync(files)));
+const workbookBuffer = Buffer.from(zipSync(files));
+const result = extractStraightMapObjects(workbookBuffer);
+assert.equal(extractStraightMapSheets(workbookBuffer, { sheetName: result.sheetName }).length, 1);
+assert.throws(() => extractStraightMapSheets(workbookBuffer, { excludeSheetNamesContaining: [result.sheetName] }));
 assert.equal(result.sheetName, '직선도');
 assert.equal(normalizeStraightMapText('  G330630   TEST '), 'g330630 test');
 assert.equal(normalizeStraightMapCompactText('  G330630   TEST '), 'g330630test');
