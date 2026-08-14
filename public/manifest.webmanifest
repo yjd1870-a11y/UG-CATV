@@ -14,19 +14,25 @@
   "categories": ["business", "productivity", "utilities"],
   "icons": [
     {
-      "src": "icons/pwa-192.png",
+      "src": "icons/ca-ip-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icons/pwa-512.png",
+      "src": "icons/ca-ip-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icons/pwa-maskable-512.png",
+      "src": "icons/ca-ip-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/ca-ip-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

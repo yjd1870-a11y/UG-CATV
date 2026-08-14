@@ -1,12 +1,13 @@
-const CACHE_NAME = 'catv-work-management-v1';
+const CACHE_NAME = 'catv-work-management-v2-ca-ip-icon';
 const APP_SHELL = [
   './',
   './manifest.webmanifest',
-  './icons/pwa-192.png',
-  './icons/pwa-512.png',
-  './icons/pwa-maskable-512.png',
-  './icons/apple-touch-icon.png',
-  './icons/favicon-48.png',
+  './icons/ca-ip-192.png',
+  './icons/ca-ip-512.png',
+  './icons/ca-ip-1024.png',
+  './icons/ca-ip-maskable-512.png',
+  './icons/ca-ip-apple-180.png',
+  './icons/ca-ip-favicon-48.png',
 ];
 
 self.addEventListener('install', (event) => {
