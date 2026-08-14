@@ -32,7 +32,7 @@ VITE_API_BASE_URL=https://ratis-transmission-webapp-yjd1870.onrender.com/api
 
 Cloudflare의 Git 연동이 `main` 커밋을 자동 빌드·배포합니다. GitHub Actions는 별도로 배포하지 않고 린트와 Pages 산출물만 검증합니다.
 
-`public/_redirects`는 SPA 경로 새로고침을 `index.html`로 연결하고, `public/_headers`는 보안 헤더와 정적 자산 캐시 정책을 적용합니다.
+최상위 `404.html`을 만들지 않아 Cloudflare Pages의 기본 SPA 폴백을 사용합니다. `public/_headers`는 보안 헤더와 정적 자산 캐시 정책을 적용합니다.
 
 ## Render API
 

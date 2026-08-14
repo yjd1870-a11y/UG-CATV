@@ -42,5 +42,4 @@ jobs:
         shell: bash
         run: |
           test -f dist/index.html
-          test -f dist/_redirects
           test -f dist/_headers
