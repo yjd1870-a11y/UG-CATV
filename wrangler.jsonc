@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "catv-work-management",
+  "name": "ugt-transmission-network",
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-08-13"
 }

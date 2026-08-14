@@ -2,7 +2,9 @@
   {
     "AllowedOrigins": [
       "https://catv.example.com",
-      "https://YOUR_PROJECT.pages.dev"
+      "https://ugt-transmission-network.pages.dev",
+      "https://ugt-transmission-network.com",
+      "https://www.ugt-transmission-network.com"
     ],
     "AllowedMethods": ["GET", "HEAD", "PUT"],
     "AllowedHeaders": ["Content-Type", "Cache-Control"],

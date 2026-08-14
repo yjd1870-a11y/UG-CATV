@@ -1,0 +1,46 @@
+name: Validate Cloudflare Pages frontend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build Cloudflare Pages artifact
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: https://ratis-transmission-webapp-yjd1870.onrender.com/api
+
+      - name: Verify Pages artifact
+        shell: bash
+        run: |
+          test -f dist/index.html
+          test -f dist/_redirects
+          test -f dist/_headers
