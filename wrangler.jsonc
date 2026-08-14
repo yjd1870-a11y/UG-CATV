@@ -2,5 +2,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ugt-transmission-network",
   "pages_build_output_dir": "./dist",
-  "compatibility_date": "2026-08-13"
+  "compatibility_date": "2026-08-14",
+  "vars": {
+    "VITE_API_BASE_URL": "https://ratis-transmission-webapp-yjd1870.onrender.com/api"
+  }
 }

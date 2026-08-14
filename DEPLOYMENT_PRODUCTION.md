@@ -24,7 +24,7 @@ Render Web Service (Express API)
 - 운영 브랜치: `main`
 - 빌드 명령: `npm run build`
 - 출력 디렉터리: `dist`
-- 빌드 환경 변수:
+- 빌드 환경 변수(`wrangler.jsonc`이 구성의 기준 파일):
 
 ```env
 VITE_API_BASE_URL=https://ratis-transmission-webapp-yjd1870.onrender.com/api
