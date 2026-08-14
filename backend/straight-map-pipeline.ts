@@ -21,6 +21,21 @@ const cancelledVersions = new Set<string>();
 const cancelledArtifacts = new Map<string, { mapId: string; version: number }>();
 let renderWorkerActive = false;
 
+const logStraightMapRendererStatus = (event: string) => {
+  const rows = db.prepare(`
+    SELECT station_key AS stationKey,
+           SUM(CASE WHEN status = 'ACTIVE' AND renderer_revision = ? THEN 1 ELSE 0 END) AS currentActive,
+           SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END) AS active,
+           SUM(CASE WHEN status = 'PROCESSING' THEN 1 ELSE 0 END) AS processing,
+           SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) AS failed
+      FROM map_versions
+     WHERE status IN ('ACTIVE', 'PROCESSING', 'FAILED')
+     GROUP BY station_key
+     ORDER BY station_key
+  `).all(STRAIGHT_MAP_RENDERER_REVISION);
+  console.log('[STRAIGHT_MAP_RENDERER_STATUS]', event, JSON.stringify(rows));
+};
+
 const sourceBuffer = (base64: string) => {
   if (!/^[a-z0-9+/=\r\n]+$/i.test(base64)) throw new Error('직선도 XLSX 데이터 형식이 올바르지 않습니다.');
   const buffer = Buffer.from(base64, 'base64');
@@ -90,6 +105,7 @@ export const renderStraightMapVersion = async (versionId: string) => {
       `).run(rendered.width, rendered.height, rendered.tileSize, rendered.maxZoom, STRAIGHT_MAP_RENDERER_REVISION, versionId);
       db.exec('COMMIT');
       invalidateStraightMapSearchCache();
+      logStraightMapRendererStatus('completed');
     } catch (error) {
       db.exec('ROLLBACK');
       throw error;
@@ -181,6 +197,7 @@ export const upgradeOutdatedStraightMapRenders = () => {
       console.error('[STRAIGHT_MAP_RENDERER_UPGRADE_FAILED]', station.stationKey, error);
     }
   }
+  logStraightMapRendererStatus('startup');
 };
 
 type StoredVersion = {

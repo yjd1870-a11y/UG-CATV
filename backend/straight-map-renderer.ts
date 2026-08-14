@@ -14,7 +14,7 @@ import {
 
 // Render runs this service on a memory-constrained Starter instance. Keep
 // libvips from caching several large map pyramids between queued sheets.
-sharp.cache({ memory: 32, files: 10, items: 20 });
+sharp.cache({ memory: 16, files: 4, items: 8 });
 sharp.concurrency(1);
 
 const execFileAsync = promisify(execFile);
@@ -47,9 +47,9 @@ const xmlEscape = (value: string) => value
 const portableCanvasSize = (extraction: StraightMapExtraction) => {
   const sourceWidth = Math.max(1, extraction.mapWidth);
   const sourceHeight = Math.max(1, extraction.mapHeight);
-  // 3200px preserves readable Deep Zoom labels while staying below the
-  // Starter instance's memory limit for large customer workbooks.
-  const requested = Number(process.env.STRAIGHT_MAP_PORTABLE_SIZE || 3200);
+  // 2400px keeps labels readable in Deep Zoom while leaving enough headroom
+  // for SVG rasterization and tile generation on Render Starter (512 MB).
+  const requested = Number(process.env.STRAIGHT_MAP_PORTABLE_SIZE || 2400);
   const longestSide = Math.min(4096, Math.max(2400, Number.isFinite(requested) ? requested : 3200));
   const ratio = sourceWidth / sourceHeight;
   if (ratio >= 1) return { width: longestSide, height: Math.max(1200, Math.round(longestSide / ratio)) };

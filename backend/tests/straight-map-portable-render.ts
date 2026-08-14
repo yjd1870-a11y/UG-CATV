@@ -26,7 +26,7 @@ try {
   assert.equal(coordinates.length, 1);
   assert.equal(coordinates[0].label, 'B2C-TEST-12345');
   assert.equal(coordinates[0].xRatio, 0.5);
-  assert.ok((metadata.width || 0) >= 3200);
+  assert.ok((metadata.width || 0) >= 2400);
   assert.ok((metadata.height || 0) >= 1200);
   console.log('Portable straight-map render test passed: SVG/PNG and normalized coordinates generated without Excel');
 } finally {
