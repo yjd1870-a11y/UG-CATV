@@ -43,3 +43,13 @@ services:
         sync: false
       - key: R2_BUCKET_NAME
         sync: false
+      - key: STRAIGHT_MAP_PIPELINE_V2_ENABLED
+        value: "true"
+      - key: STRAIGHT_MAP_RENDERER_DEVICE_TOKEN
+        sync: false
+      - key: STRAIGHT_MAP_TARGET_DPI
+        value: "1200"
+      - key: STRAIGHT_MAP_TILE_SIZE
+        value: "256"
+      - key: STRAIGHT_MAP_WEBP_QUALITY
+        value: "94"

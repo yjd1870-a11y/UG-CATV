@@ -44,7 +44,11 @@ try {
   $excel.Visible = $false
   $excel.DisplayAlerts = $false
   $excel.ScreenUpdating = $false
-  $workbook = $excel.Workbooks.Open($InputXlsx, 0, $true)
+  $excel.EnableEvents = $false
+  $excel.AskToUpdateLinks = $false
+  # msoAutomationSecurityForceDisable: uploaded workbooks must never run macros.
+  $excel.AutomationSecurity = 3
+  $workbook = $excel.Workbooks.Open($InputXlsx, 0, $true, 5, '', '', $true, 2, '', $false, $false, 0, $false, $true, 0)
   $sheet = $workbook.Worksheets.Item($SheetName)
   $maxRow = [Math]::Max(1, $sheet.UsedRange.Row + $sheet.UsedRange.Rows.Count - 1)
   $maxColumn = [Math]::Max(1, $sheet.UsedRange.Column + $sheet.UsedRange.Columns.Count - 1)
@@ -120,10 +124,15 @@ try {
     [void][Runtime.InteropServices.Marshal]::ReleaseComObject($location)
   }
   $manifest = [ordered]@{
+    schemaVersion = 2
+    sheetName = [string]$sheet.Name
+    printArea = [string]$page.PrintArea
     printScale = 0.1
     pageOrder = 2
     printWidth = [double]$printRange.Width
     printHeight = [double]$printRange.Height
+    cropLeftPoints = 0.0
+    cropTopPoints = 0.0
     verticalStarts = @($verticalStarts | Sort-Object -Unique)
     horizontalStarts = @($horizontalStarts | Sort-Object -Unique)
     coordinates = @($script:coordinateItems | ForEach-Object {

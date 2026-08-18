@@ -72,11 +72,14 @@ https://www.ugt-transmission-network.com
 
 - `photos/YYYY/MM/{userId}/{uuid}.webp`
 - `floorplans/{planId}/{uuid}.png`
-- `line-diagrams/{mapId}/{version}/...`
+- `line-diagrams/sources/{sourceSha256}.xlsx`
+- `line-diagrams/artifacts/{artifactSetId}/...`
 
 ## 직선도 처리 제약
 
-직선도 XLSX 렌더러는 Windows Excel COM과 PowerShell을 사용합니다. Linux 기반 Render에서는 신규 XLSX 렌더링을 수행하지 않고, Windows 처리 PC에서 원본·PNG·Deep Zoom 결과를 R2에 게시합니다. Render는 DB 권한 확인 후 R2 서명 URL만 제공합니다.
+직선도 XLSX 렌더러는 Windows Excel COM과 PowerShell을 사용합니다. Linux 기반 Render에서는 신규 XLSX 렌더링을 수행하지 않습니다. Windows 처리 PC가 PDF 마스터와 페이지 기반 Deep Zoom 타일을 R2 immutable prefix에 직접 게시하며 전체 워크시트 PNG는 만들지 않습니다. Render는 DB 상태·lease·검증·ACTIVE 포인터와 R2 서명 URL만 관리합니다.
+
+로컬 개발에서는 v2 경로가 기본 활성화되며 XLSX를 로컬 디스크로 스트리밍 저장합니다. 운영은 R2를 사용하고 `STRAIGHT_MAP_PIPELINE_V2_ENABLED=true`로 배포합니다. 배포 전에 DB/R2 백업과 파일럿 검증을 완료하고, Windows 렌더러가 작업을 가져가려면 `STRAIGHT_MAP_RENDERER_DEVICE_TOKEN`을 32바이트 이상의 별도 비밀값으로 설정합니다. 토큰이 비어 있으면 업로드 작업은 안전하게 대기하고 렌더러 API만 `RENDERER_NOT_CONFIGURED`로 차단됩니다.
 
 ## 배포 전 검증
 

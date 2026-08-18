@@ -426,6 +426,82 @@ CREATE TABLE IF NOT EXISTS map_versions (
 CREATE INDEX IF NOT EXISTS idx_map_versions_map_status ON map_versions(map_id, status, version DESC);
 CREATE INDEX IF NOT EXISTS idx_map_versions_key_status ON map_versions(map_key, status, version DESC);
 
+CREATE TABLE IF NOT EXISTS straight_maps (
+  map_id TEXT PRIMARY KEY,
+  map_name TEXT NOT NULL,
+  map_key TEXT NOT NULL,
+  station_key TEXT NOT NULL,
+  active_artifact_set_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(station_key, map_key)
+);
+
+CREATE TABLE IF NOT EXISTS straight_map_jobs (
+  id TEXT PRIMARY KEY,
+  source_key TEXT NOT NULL,
+  source_sha256 TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  station_name TEXT NOT NULL DEFAULT '',
+  station_key TEXT NOT NULL DEFAULT '',
+  requested_by TEXT,
+  status TEXT NOT NULL,
+  total_sheets INTEGER NOT NULL DEFAULT 0,
+  completed_sheets INTEGER NOT NULL DEFAULT 0,
+  progress REAL NOT NULL DEFAULT 0,
+  current_sheet TEXT,
+  current_step TEXT,
+  source_size INTEGER NOT NULL DEFAULT 0,
+  source_content_type TEXT NOT NULL DEFAULT '',
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  heartbeat_at TEXT,
+  attempt INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  renderer_profile_hash TEXT NOT NULL,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT,
+  completed_at TEXT,
+  cancelled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_straight_map_jobs_claim ON straight_map_jobs(status, lease_expires_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_straight_map_jobs_source ON straight_map_jobs(source_sha256, renderer_profile_hash);
+
+CREATE TABLE IF NOT EXISTS straight_map_artifact_sets (
+  id TEXT PRIMARY KEY,
+  cache_key TEXT NOT NULL UNIQUE,
+  source_sha256 TEXT NOT NULL,
+  sheet_name TEXT NOT NULL,
+  renderer_profile_hash TEXT NOT NULL,
+  r2_prefix TEXT NOT NULL UNIQUE,
+  manifest_key TEXT NOT NULL,
+  manifest_sha256 TEXT,
+  coordinate_hash TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  verified_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_straight_map_artifacts_verified ON straight_map_artifact_sets(cache_key, status);
+
+CREATE TABLE IF NOT EXISTS straight_map_job_sheets (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES straight_map_jobs(id) ON DELETE CASCADE,
+  sheet_name TEXT NOT NULL,
+  map_id TEXT,
+  status TEXT NOT NULL,
+  progress REAL NOT NULL DEFAULT 0,
+  cache_key TEXT NOT NULL,
+  artifact_set_id TEXT REFERENCES straight_map_artifact_sets(id) ON DELETE SET NULL,
+  error_code TEXT,
+  error_message TEXT,
+  started_at TEXT,
+  completed_at TEXT,
+  UNIQUE(job_id, sheet_name)
+);
+CREATE INDEX IF NOT EXISTS idx_straight_map_job_sheets_job ON straight_map_job_sheets(job_id, status);
+
 CREATE TABLE IF NOT EXISTS map_objects (
   id TEXT PRIMARY KEY,
   map_id TEXT NOT NULL,
@@ -513,11 +589,21 @@ export const createSchema = () => {
   ensureColumn('map_versions', 'station_key', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('map_versions', 'reuse_version_id', 'TEXT');
   ensureColumn('map_versions', 'renderer_revision', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('map_versions', 'artifact_set_id', 'TEXT');
+  ensureColumn('map_versions', 'source_object_key', 'TEXT');
+  ensureColumn('map_versions', 'renderer_engine', 'TEXT');
+  ensureColumn('map_versions', 'renderer_profile', 'TEXT');
+  ensureColumn('map_versions', 'cache_key', 'TEXT');
+  ensureColumn('map_versions', 'manifest_object_key', 'TEXT');
+  ensureColumn('map_versions', 'coordinate_hash', 'TEXT');
+  ensureColumn('map_versions', 'rendered_dpi', 'INTEGER');
+  ensureColumn('map_versions', 'archived_at', 'TEXT');
   ensureColumn('map_objects', 'compact_text', "TEXT NOT NULL DEFAULT ''");
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_station_key ON catv_b2c_lines(station_key);
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_normalized_search ON catv_b2c_lines(normalized_search);
     CREATE INDEX IF NOT EXISTS idx_map_versions_station_sheet ON map_versions(station_key, map_key, status, version DESC);
+    CREATE INDEX IF NOT EXISTS idx_map_versions_artifact ON map_versions(artifact_set_id, status);
     CREATE INDEX IF NOT EXISTS idx_map_objects_compact_text ON map_objects(compact_text);
     CREATE INDEX IF NOT EXISTS idx_daily_work_region ON daily_work(region_id);
     CREATE INDEX IF NOT EXISTS idx_daily_work_date_user ON daily_work(work_date, user_id);

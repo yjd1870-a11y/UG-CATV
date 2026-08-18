@@ -7,6 +7,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Readable } from 'node:stream';
 import { env } from './env';
 
 const endpoint = env.r2Endpoint || (env.r2AccountId
@@ -42,6 +43,26 @@ export const putR2Object = async (key: string, body: Buffer, contentType: string
   }));
 };
 
+export const putR2ObjectStream = async (
+  key: string,
+  body: Readable,
+  contentLength: number,
+  contentType: string,
+  metadata: Record<string, string> = {},
+) => {
+  await client().send(new PutObjectCommand({
+    Bucket: env.r2BucketName,
+    Key: key,
+    Body: body,
+    ContentLength: contentLength,
+    ContentType: contentType,
+    Metadata: metadata,
+    CacheControl: Object.keys(metadata).length
+      ? (key.includes('/artifacts/') ? 'private, max-age=31536000, immutable' : 'private, max-age=300')
+      : undefined,
+  }));
+};
+
 export const deleteR2Object = async (key: string) => {
   await client().send(new DeleteObjectCommand({ Bucket: env.r2BucketName, Key: key }));
 };
@@ -67,7 +88,48 @@ export const headR2Object = async (key: string) => {
     contentType: object.ContentType || 'application/octet-stream',
     size: Number(object.ContentLength || 0),
     etag: object.ETag || null,
+    metadata: object.Metadata || {},
+    lastModified: object.LastModified?.toISOString() || null,
   };
+};
+
+export type R2ObjectSummary = {
+  key: string;
+  size: number;
+  etag: string | null;
+  lastModified: string | null;
+};
+
+/** Iterates one R2 listing page at a time so object keys, never file bodies, are held in memory. */
+export const inspectR2Prefix = async (
+  prefix: string,
+  visitor: (object: R2ObjectSummary) => void | Promise<void>,
+) => {
+  let continuationToken: string | undefined;
+  let count = 0;
+  let totalSize = 0;
+  do {
+    const listed = await client().send(new ListObjectsV2Command({
+      Bucket: env.r2BucketName,
+      Prefix: prefix,
+      ContinuationToken: continuationToken,
+      MaxKeys: 1000,
+    }));
+    for (const object of listed.Contents || []) {
+      if (!object.Key) continue;
+      const entry = {
+        key: object.Key,
+        size: Number(object.Size || 0),
+        etag: object.ETag || null,
+        lastModified: object.LastModified?.toISOString() || null,
+      };
+      count += 1;
+      totalSize += entry.size;
+      await visitor(entry);
+    }
+    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return { count, totalSize };
 };
 
 export const readR2Object = async (key: string) => {
@@ -88,13 +150,22 @@ export const signedR2DownloadUrl = (key: string) => getSignedUrl(
   { expiresIn: env.r2SignedUrlTtlSeconds },
 );
 
-export const signedR2UploadUrl = (key: string, contentType: string, size: number) => getSignedUrl(
+export const signedR2UploadUrl = (
+  key: string,
+  contentType: string,
+  size: number,
+  metadata: Record<string, string> = {},
+) => getSignedUrl(
   client(),
   new PutObjectCommand({
     Bucket: env.r2BucketName,
     Key: key,
     ContentType: contentType,
     ContentLength: size,
+    Metadata: metadata,
+    CacheControl: Object.keys(metadata).length
+      ? (key.includes('/artifacts/') ? 'private, max-age=31536000, immutable' : 'private, max-age=300')
+      : undefined,
   }),
   { expiresIn: env.r2SignedUrlTtlSeconds },
 );

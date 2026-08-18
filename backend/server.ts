@@ -5,12 +5,8 @@ import { createServer as createViteServer } from 'vite';
 import { createApiApp } from './app';
 import { initializeDatabase } from './db';
 import { env, projectRoot } from './env';
-import { resumeStraightMapRenders, upgradeOutdatedStraightMapRenders } from './straight-map-pipeline';
 
 await initializeDatabase();
-// Windows uses desktop Excel; Linux uses the portable SVG renderer. In both
-// environments unfinished map versions must resume after a restart.
-resumeStraightMapRenders();
 
 const app = createApiApp();
 const apiOnly = process.argv.includes('--api-only');
@@ -35,7 +31,6 @@ const server = http.createServer(app);
 server.listen(requestedPort, '0.0.0.0', () => {
   console.log(`[CATV] ${apiOnly ? 'API' : 'Web + API'} server: http://localhost:${requestedPort}`);
   console.log(`[CATV] Database: ${env.databasePath}`);
-  setImmediate(upgradeOutdatedStraightMapRenders);
 });
 
 const shutdown = () => {

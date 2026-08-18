@@ -24,12 +24,14 @@ import { parseB2CLineBookMatrix } from '../../utils/b2c-workbook';
 import {
   adminApi,
   adminDbApi,
+  straightMapAdminApi,
   type AdminCellRecord,
   type AdminDbAsset,
   type AdminUser,
   type CellImportRecord,
   type DbUploadHistory,
   type DbUploadValidation,
+  type StraightMapJob,
 } from '../../features/admin/api';
 import { cellsApi } from '../../features/cells/api';
 import { useApp } from '../../context/AppContext';
@@ -267,7 +269,6 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
     setSaving(true);
     try {
       let records: Array<Record<string, unknown>> = [];
-      let fileBase64: string | undefined;
       if (file && type === 'b2c') records = await readB2CWorkbookRows(file);
       else if (file && /\.(xlsx|xls|csv)$/i.test(file.name)) records = await readWorkbookRows(file);
       else if (file) {
@@ -291,16 +292,7 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
           coordinates,
         });
       } else if (file) {
-        if (type === 'b2c' && /\.xlsx$/i.test(file.name)) {
-          const dataUrl = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result || ''));
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(file);
-          });
-          fileBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-        }
-        const result = await adminDbApi.saveAsset({
+        await adminDbApi.saveAsset({
           dbType: type,
           stationName: stationName.trim(),
           fileName: file.name,
@@ -308,12 +300,10 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
           mimeType: file.type,
           records,
           coordinates,
-          fileBase64,
         });
-        if (result.straightMapError) showToast(`검색 DB는 등록했지만 지도 변환 준비에 실패했습니다: ${result.straightMapError}`, 'warning');
-        else if (result.straightMap) {
-          const reused = result.straightMap.reusedMapCount || 0;
-          showToast(`직선도 ${result.straightMap.mapCount}개 시트·검색 좌표 ${result.straightMap.objectCount.toLocaleString('ko-KR')}건을 새 버전으로 등록했습니다.${reused ? ` 동일한 지도 ${reused}개는 기존 고해상도 타일을 재사용합니다.` : ' 변경된 지도를 순차 생성 중입니다.'}`, 'info');
+        if (type === 'b2c' && /\.xlsx$/i.test(file.name)) {
+          const job = await straightMapAdminApi.upload(file, stationName.trim());
+          showToast(`XLSX를 R2에 직접 업로드했습니다. 작업 ${job.jobId.slice(0, 8)}은 사무실 렌더러 실행을 기다립니다.`, 'info');
         }
       }
       const completedAction = editingAsset ? '수정' : '등록';
@@ -464,23 +454,26 @@ export const AdminUsersView: React.FC = () => {
   const [cellValidation, setCellValidation] = useState<DbUploadValidation | null>(null);
   const [cellUploadBusy, setCellUploadBusy] = useState(false);
   const [uploadResult, setUploadResult] = useState<DbUploadHistory | null>(null);
+  const [straightMapJobs, setStraightMapJobs] = useState<StraightMapJob[]>([]);
 
   const loadAdminData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [userRows, status, historyRows, floorRows, b2cRows] = await Promise.all([
+      const [userRows, status, historyRows, floorRows, b2cRows, jobRows] = await Promise.all([
         adminApi.users(),
         adminDbApi.status(),
         adminDbApi.history(),
         adminDbApi.assets('floor_plan'),
         adminDbApi.assets('b2c'),
+        straightMapAdminApi.jobs(),
       ]);
       setUsers(userRows);
       setDbCounts(status.counts);
       setHistory(historyRows);
       setFloorPlans(floorRows);
       setB2cAssets(b2cRows);
+      setStraightMapJobs(jobRows);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '관리자 DB를 불러오지 못했습니다.');
     } finally {
@@ -503,6 +496,11 @@ export const AdminUsersView: React.FC = () => {
   }, [showToast]);
 
   useEffect(() => { void loadAdminData(); }, [loadAdminData]);
+  useEffect(() => {
+    if (!straightMapJobs.some((job) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status))) return;
+    const timer = window.setInterval(() => void straightMapAdminApi.jobs().then(setStraightMapJobs), 15_000);
+    return () => window.clearInterval(timer);
+  }, [straightMapJobs]);
   useEffect(() => {
     const timer = window.setTimeout(() => void loadAdminCells(cellSearch, 1), 300);
     return () => window.clearTimeout(timer);
@@ -794,6 +792,25 @@ export const AdminUsersView: React.FC = () => {
 
       <AssetSection type="floor_plan" title="국사 평면도 DB" description="국사 평면도 이미지는 파일 저장소에, Rack 위치 비율 좌표는 DB에 관리합니다." accept=".png,.jpg,.jpeg,.webp" icon={<Building2 className="h-5 w-5" />} assets={floorPlans} onChanged={loadAdminData} />
       <AssetSection type="b2c" title="B2C 선번장 / 직선도 DB" description="선번장 D/H/L~P열을 조회 DB로 교체하고, 나머지 직선도 시트는 국사별 버전 지도·Deep Zoom 타일로 순차 생성합니다." accept=".xlsx,.xls,.csv" icon={<Cable className="h-5 w-5" />} assets={b2cAssets} onChanged={loadAdminData} />
+
+      <section className={panelClass}>
+        <div className="flex items-center gap-2.5"><Cable className="h-5 w-5 text-[#2878B5]" /><div><h2 className="font-extrabold text-[#173B57]">직선도 렌더링 작업</h2><p className="text-xs text-slate-500">새 버전을 검증하는 동안 기존 ACTIVE 직선도는 계속 제공됩니다.</p></div></div>
+        <div className="mt-4 space-y-2">
+          {straightMapJobs.length ? straightMapJobs.map((job) => (
+            <div key={job.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+              <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+                <div><strong className="text-[#173B57]">{job.stationName} · {job.filename}</strong><p className="mt-1 text-slate-500">{job.status === 'WAITING_FOR_OFFICE_RENDERER' ? '사무실 렌더러 실행 대기 중' : job.currentStep || job.status} · {job.completedSheets}/{job.totalSheets || '-'} 시트 · {Number(job.progress).toFixed(1)}%</p></div>
+                <div className="flex gap-2">
+                  {['FAILED', 'RETRY_WAIT', 'CANCELLED'].includes(job.status) && job.attempt < job.maxAttempts ? <button type="button" className={secondaryButtonClass} onClick={() => void straightMapAdminApi.retry(job.id).then(loadAdminData)}>재시도</button> : null}
+                  {!['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status) ? <button type="button" className={dangerButtonClass} onClick={() => void straightMapAdminApi.cancel(job.id).then(loadAdminData)}>취소</button> : null}
+                </div>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-[#2878B5]" style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-slate-500"><span>Heartbeat: {formatDate(job.heartbeatAt)}</span><span>시도: {job.attempt}/{job.maxAttempts}</span><span>캐시: {job.cacheHitSheets} 시트</span>{job.errorMessage ? <span className="font-bold text-red-600">{job.errorCode}: {job.errorMessage}</span> : null}</div>
+            </div>
+          )) : <p className="rounded-xl bg-slate-50 p-5 text-center text-xs text-slate-400">등록된 직선도 렌더링 작업이 없습니다.</p>}
+        </div>
+      </section>
 
       <section className={panelClass}>
         <div className="flex items-center gap-2.5"><History className="h-5 w-5 text-[#2878B5]" /><div><h2 className="font-extrabold text-[#173B57]">최근 DB 업로드</h2><p className="text-xs text-slate-500">최근 10건을 표시합니다.</p></div></div>

@@ -1,11 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { env } from './env';
-import { deleteR2Prefix, putR2Object, readR2Object, usesR2Storage } from './object-storage';
+import { deleteR2Prefix, signedR2DownloadUrl, usesR2Storage } from './object-storage';
 
-// Render work files belong on the configured private storage root. In
-// production this is the persistent disk; completed artifacts are also copied
-// to R2 by publishStraightMapArtifacts.
+// Legacy local artifacts remain readable during rollout. V2 artifacts are
+// uploaded directly by the Windows Agent to immutable R2 prefixes.
 export const straightMapStorageRoot = path.join(env.privateStoragePath, 'straight-maps');
 
 export const straightMapVersionRoot = (mapId: string, version: number) => {
@@ -14,48 +13,6 @@ export const straightMapVersionRoot = (mapId: string, version: number) => {
   const target = path.resolve(root, mapId, String(version));
   if (!target.startsWith(root + path.sep)) throw new Error('유효하지 않은 직선도 저장 경로입니다.');
   return target;
-};
-
-export const saveStraightMapSource = (mapId: string, version: number, source: Buffer) => {
-  const root = straightMapVersionRoot(mapId, version);
-  const directory = path.join(root, 'original');
-  fs.mkdirSync(directory, { recursive: true });
-  const filePath = path.join(directory, 'source.xlsx');
-  fs.writeFileSync(filePath, source);
-  return filePath;
-};
-
-export const saveStraightMapSharedSource = (sourceHash: string, source: Buffer) => {
-  if (!/^[a-f0-9]{64}$/i.test(sourceHash)) throw new Error('유효하지 않은 직선도 원본 해시입니다.');
-  const directory = path.resolve(straightMapStorageRoot, 'sources');
-  const root = path.resolve(straightMapStorageRoot);
-  if (!directory.startsWith(root + path.sep)) throw new Error('유효하지 않은 직선도 원본 경로입니다.');
-  fs.mkdirSync(directory, { recursive: true });
-  const filePath = path.join(directory, `${sourceHash}.xlsx`);
-  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, source);
-  return filePath;
-};
-
-const linkDirectory = (source: string, target: string) => {
-  fs.mkdirSync(target, { recursive: true });
-  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-    const sourceEntry = path.join(source, entry.name);
-    const targetEntry = path.join(target, entry.name);
-    if (entry.isDirectory()) {
-      linkDirectory(sourceEntry, targetEntry);
-      continue;
-    }
-    try { fs.linkSync(sourceEntry, targetEntry); }
-    catch { fs.copyFileSync(sourceEntry, targetEntry); }
-  }
-};
-
-export const cloneStraightMapVersion = (mapId: string, sourceVersion: number, targetVersion: number) => {
-  const source = straightMapVersionRoot(mapId, sourceVersion);
-  const target = straightMapVersionRoot(mapId, targetVersion);
-  if (!fs.existsSync(source)) throw new Error('재사용할 직선도 타일을 찾을 수 없습니다.');
-  fs.rmSync(target, { recursive: true, force: true });
-  linkDirectory(source, target);
 };
 
 export const removeStraightMapVersion = (mapId: string, version: number) => {
@@ -91,32 +48,28 @@ export const resolveStraightMapTile = (mapId: string, version: number, level: nu
   return target;
 };
 
-const filesBelow = (directory: string): string[] => fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-  const target = path.join(directory, entry.name);
-  return entry.isDirectory() ? filesBelow(target) : [target];
-});
+const signedTileCache = new Map<string, { url: string; expiresAt: number }>();
 
-export const publishStraightMapArtifacts = async (mapId: string, version: number, originalFilePath: string) => {
-  if (!usesR2Storage) return;
-  const root = straightMapVersionRoot(mapId, version);
-  for (const filePath of filesBelow(root)) {
-    const relative = path.relative(root, filePath).split(path.sep).join('/');
-    const contentType = relative.endsWith('.webp') ? 'image/webp'
-      : relative.endsWith('.png') ? 'image/png'
-        : relative.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-          : 'application/octet-stream';
-    await putR2Object(`line-diagrams/${mapId}/${version}/${relative}`, fs.readFileSync(filePath), contentType);
-  }
-  if (fs.existsSync(originalFilePath)) {
-    await putR2Object(
-      `line-diagrams/${mapId}/${version}/original/source.xlsx`,
-      fs.readFileSync(originalFilePath),
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-  }
-};
-
-export const readStraightMapTile = (mapId: string, version: number, level: number, tileName: string) => {
+export const signedStraightMapTileUrl = async (
+  mapId: string,
+  version: number,
+  level: number,
+  tileName: string,
+  artifactSetId?: string | null,
+) => {
   resolveStraightMapTile(mapId, version, level, tileName);
-  return readR2Object(`line-diagrams/${mapId}/${version}/tiles/${level}/${tileName}`);
+  const key = artifactSetId
+    ? `line-diagrams/artifacts/${artifactSetId}/tiles/${level}/${tileName}`
+    : `line-diagrams/${mapId}/${version}/tiles/${level}/${tileName}`;
+  const now = Date.now();
+  const cached = signedTileCache.get(key);
+  if (cached && cached.expiresAt > now + 15_000) return cached.url;
+  const url = await signedR2DownloadUrl(key);
+  signedTileCache.set(key, { url, expiresAt: now + Math.max(30, env.r2SignedUrlTtlSeconds - 15) * 1000 });
+  if (signedTileCache.size > 1000) {
+    for (const [cacheKey, value] of signedTileCache) {
+      if (value.expiresAt <= now || signedTileCache.size > 900) signedTileCache.delete(cacheKey);
+    }
+  }
+  return url;
 };

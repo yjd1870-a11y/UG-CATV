@@ -22,7 +22,7 @@ export const corsPolicy: RequestHandler = (req, res, next) => {
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With, X-Amz-Meta-Sha256');
   res.setHeader('Access-Control-Max-Age', '600');
   if (req.method === 'OPTIONS') {
     res.status(204).end();

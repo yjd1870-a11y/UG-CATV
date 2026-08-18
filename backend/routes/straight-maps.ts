@@ -5,7 +5,7 @@ import { normalizeStationName } from '../catv';
 import { ApiError, asyncRoute, success } from '../http';
 import { requireAuth } from '../security/session';
 import { straightMapContinuousTerms, type StraightMapMatchLength } from '../straight-map-search';
-import { readStraightMapTile, resolveStraightMapTile } from '../straight-map-storage';
+import { resolveStraightMapTile, signedStraightMapTileUrl } from '../straight-map-storage';
 import { cachedStraightMapSearch } from '../straight-map-cache';
 import { usesR2Storage } from '../object-storage';
 
@@ -88,19 +88,17 @@ router.get('/:mapId/versions/:version/tiles/:level/:tile', asyncRoute(async (req
   const version = Number(req.params.version);
   const level = Number(req.params.level);
   const allowed = db.prepare(`
-    SELECT 1 FROM map_versions WHERE map_id = ? AND version = ? AND status IN ('ACTIVE', 'ARCHIVED')
-  `).get(req.params.mapId, version);
+    SELECT artifact_set_id AS artifactSetId FROM map_versions
+     WHERE map_id = ? AND version = ? AND status IN ('ACTIVE', 'ARCHIVED')
+  `).get(req.params.mapId, version) as { artifactSetId: string | null } | undefined;
   if (!allowed) throw new ApiError(404, '직선도 타일을 찾을 수 없습니다.', 'TILE_NOT_FOUND');
   if (usesR2Storage) {
     try { resolveStraightMapTile(req.params.mapId, version, level, req.params.tile); }
     catch { throw new ApiError(400, '직선도 저장 경로가 올바르지 않습니다.', 'INVALID_TILE_PATH'); }
-    const object = await readStraightMapTile(req.params.mapId, version, level, req.params.tile);
-    res.setHeader('Content-Type', object.contentType || 'image/webp');
-    res.setHeader('Content-Length', String(object.size));
-    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    const url = await signedStraightMapTileUrl(req.params.mapId, version, level, req.params.tile, allowed.artifactSetId);
+    res.setHeader('Cache-Control', 'private, max-age=60');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    if (object.etag) res.setHeader('ETag', object.etag);
-    res.send(object.body);
+    res.redirect(302, url);
     return;
   }
   let filePath: string;

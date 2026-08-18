@@ -1,5 +1,5 @@
 import type { ApiUser } from '../auth/api';
-import { request } from '../../shared/api/client';
+import { apiResourceUrl, request } from '../../shared/api/client';
 
 export type AdminUser = ApiUser & {
   zone: string;
@@ -77,6 +77,30 @@ export type AdminDbAsset = {
   updatedAt: string;
 };
 
+export type StraightMapJob = {
+  id: string;
+  filename: string;
+  stationName: string;
+  sourceSha256: string;
+  status: string;
+  totalSheets: number;
+  completedSheets: number;
+  progress: number;
+  currentSheet: string | null;
+  currentStep: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+  heartbeatAt: string | null;
+  attempt: number;
+  maxAttempts: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  cacheHitSheets: number;
+};
+
 export const adminApi = {
   users: (status?: 'pending' | 'active' | 'disabled') => request<AdminUser[]>(`/admin/users${status ? `?status=${status}` : ''}`),
   approve: (id: string) => request<{ id: string; status: 'active' }>(`/admin/users/${encodeURIComponent(id)}/approve`, { method: 'PUT' }),
@@ -106,8 +130,8 @@ export const adminDbApi = {
   assets: (type: 'floor_plan' | 'b2c') => request<AdminDbAsset[]>(`/admin/db/assets?type=${type}`),
   saveAsset: (input: {
     dbType: 'floor_plan' | 'b2c'; stationName: string; fileName: string; fileSize: number; mimeType?: string;
-    records?: Array<Record<string, unknown>>; coordinates?: Record<string, unknown>; fileBase64?: string;
-  }) => request<{ id: string; straightMap?: { mapCount: number; objectCount: number; changedCount: number; reusedMapCount?: number; status: string } | null; straightMapError?: string | null }>('/admin/db/assets', {
+    records?: Array<Record<string, unknown>>; coordinates?: Record<string, unknown>;
+  }) => request<{ id: string }>('/admin/db/assets', {
     method: 'POST', body: JSON.stringify(input),
   }),
   updateAsset: (id: string, input: {
@@ -118,4 +142,55 @@ export const adminDbApi = {
   }),
   deleteAsset: (id: string) => request<{ id: string; deleted: true }>(`/admin/db/assets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   clearAssets: (type: 'floor_plan' | 'b2c') => request<{ deletedCount: number }>(`/admin/db/assets?type=${type}`, { method: 'DELETE' }),
+};
+
+const fileSha256 = async (file: File) => {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
+};
+
+export const straightMapAdminApi = {
+  jobs: () => request<StraightMapJob[]>('/admin/straight-maps/jobs'),
+  upload: async (file: File, stationName: string) => {
+    if (!/\.xlsx$/i.test(file.name) || file.size <= 0 || file.size > 20 * 1024 * 1024) {
+      throw new Error('직선도는 20MB 이하 .xlsx 파일만 업로드할 수 있습니다.');
+    }
+    const sourceSha256 = await fileSha256(file);
+    const prepared = await request<{
+      jobId: string;
+      uploadRequired: boolean;
+      uploadUrl: string | null;
+      uploadTarget: 'api' | 'r2';
+      requiredHeaders: Record<string, string>;
+    }>('/admin/straight-maps/upload-url', {
+      method: 'POST',
+      body: JSON.stringify({
+        sourceSha256,
+        filename: file.name,
+        size: file.size,
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        stationName,
+      }),
+    });
+    if (prepared.uploadRequired) {
+      if (!prepared.uploadUrl) throw new Error('직선도 업로드 URL을 발급받지 못했습니다.');
+      const uploaded = await fetch(
+        prepared.uploadTarget === 'api' ? apiResourceUrl(prepared.uploadUrl) : prepared.uploadUrl,
+        {
+          method: 'PUT',
+          headers: prepared.requiredHeaders,
+          body: file,
+          ...(prepared.uploadTarget === 'api' ? { credentials: 'include' as const } : {}),
+        },
+      );
+      if (!uploaded.ok) {
+        const payload = await uploaded.json().catch(() => null) as { message?: string } | null;
+        throw new Error(payload?.message || `직선도 원본 업로드에 실패했습니다. (${uploaded.status})`);
+      }
+    }
+    return request<{ jobId: string; status: string }>(`/admin/straight-maps/uploads/${encodeURIComponent(prepared.jobId)}/complete`, { method: 'POST' });
+  },
+  retry: (jobId: string) => request<{ jobId: string; status: string }>(`/admin/straight-maps/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' }),
+  cancel: (jobId: string) => request<{ jobId: string; status: string }>(`/admin/straight-maps/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+  rollback: (versionId: string) => request<{ versionId: string; status: string }>(`/admin/straight-maps/versions/${encodeURIComponent(versionId)}/rollback`, { method: 'POST' }),
 };

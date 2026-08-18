@@ -61,6 +61,14 @@ export const env = {
   r2BucketName: process.env.R2_BUCKET_NAME || '',
   r2Endpoint: (process.env.R2_ENDPOINT || '').replace(/\/$/, ''),
   r2SignedUrlTtlSeconds: numberValue('R2_SIGNED_URL_TTL_SECONDS', 300, 60, 3600),
+  // Local development must be usable without an R2 account. Production keeps
+  // the explicit feature flag so rollout can still be controlled safely.
+  straightMapPipelineV2Enabled: booleanValue('STRAIGHT_MAP_PIPELINE_V2_ENABLED', nodeEnv !== 'production'),
+  straightMapRendererDeviceToken: process.env.STRAIGHT_MAP_RENDERER_DEVICE_TOKEN || '',
+  straightMapTargetDpi: numberValue('STRAIGHT_MAP_TARGET_DPI', 1200, 300, 1200),
+  straightMapTileSize: numberValue('STRAIGHT_MAP_TILE_SIZE', 256, 128, 512),
+  straightMapWebpQuality: numberValue('STRAIGHT_MAP_WEBP_QUALITY', 94, 80, 100),
+  straightMapLeaseSeconds: numberValue('STRAIGHT_MAP_LEASE_SECONDS', 600, 300, 900),
   sessionSecret: process.env.SESSION_SECRET || 'development-only-change-me',
   sessionTtlHours: numberValue('SESSION_TTL_HOURS', 12, 1, 168),
   cookieName: process.env.SESSION_COOKIE_NAME || 'catv_session',

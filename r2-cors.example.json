@@ -7,7 +7,7 @@
       "https://www.ugt-transmission-network.com"
     ],
     "AllowedMethods": ["GET", "HEAD", "PUT"],
-    "AllowedHeaders": ["Content-Type", "Cache-Control"],
+    "AllowedHeaders": ["Content-Type", "Cache-Control", "x-amz-meta-sha256"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3600
   }

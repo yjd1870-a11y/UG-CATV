@@ -2,6 +2,7 @@ import b2cRouter from '../routes/b2c';
 import cellsRouter from '../routes/cells';
 import floorPlansRouter from '../routes/floor-plans';
 import straightMapsRouter from '../routes/straight-maps';
+import rendererRouter from '../routes/renderer';
 import type { ApiModule } from './types';
 
 export const networkModule: ApiModule = {
@@ -11,5 +12,6 @@ export const networkModule: ApiModule = {
     { path: '/api/b2c', router: b2cRouter },
     { path: '/api/floor-plans', router: floorPlansRouter },
     { path: '/api/straight-maps', router: straightMapsRouter },
+    { path: '/api/renderer', router: rendererRouter },
   ],
 };

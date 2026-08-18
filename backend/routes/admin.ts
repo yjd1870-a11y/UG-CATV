@@ -7,10 +7,19 @@ import { removeFloorPlanObject, saveFloorPlanDataUrl } from '../floor-plan-stora
 import { ApiError, asText, asyncRoute, optionalText, success } from '../http';
 import { hashPassword, isValidPassword, PASSWORD_POLICY_MESSAGE } from '../security/password';
 import { authUser, requireAuth, requireRoles } from '../security/session';
-import { deleteAllStraightMaps, deleteStraightMapsForStation, registerStraightMapUpload } from '../straight-map-pipeline';
+import { deleteAllStraightMaps, deleteStraightMapsForStation } from '../straight-map-pipeline';
 import { buildB2CSearchValue } from '../b2c-search';
 import { securityLog, writeAuditLog } from '../security/audit';
 import { env } from '../env';
+import {
+  cancelStraightMapJob,
+  completeStraightMapUpload,
+  createStraightMapUpload,
+  listStraightMapJobs,
+  retryStraightMapJob,
+  rollbackStraightMapVersion,
+  storeLocalStraightMapUpload,
+} from '../straight-map-jobs';
 
 const router = Router();
 router.use(requireAuth, requireRoles('admin'));
@@ -749,18 +758,7 @@ router.post('/db/assets', asyncRoute(async (req, res) => {
     if (replacedFloorPlanObject && replacedFloorPlanObject !== savedFloorPlanObject) {
       await removeFloorPlanObject(replacedFloorPlanObject);
     }
-    let straightMap: ReturnType<typeof registerStraightMapUpload> | null = null;
-    let straightMapError: string | null = null;
-    if (dbType === 'b2c' && /\.xlsx$/i.test(fileName) && typeof req.body?.fileBase64 === 'string') {
-      try {
-        straightMap = registerStraightMapUpload({ mapName: stationName, fileName, fileBase64: req.body.fileBase64 });
-      } catch (error) {
-        straightMapError = env.isProduction
-          ? '직선도 지도 등록에 실패했습니다.'
-          : error instanceof Error ? error.message : '직선도 지도 등록에 실패했습니다.';
-      }
-    }
-    success(res, { id, dbType, stationName, fileName, recordCount: records.length, straightMap, straightMapError }, 201);
+    success(res, { id, dbType, stationName, fileName, recordCount: records.length }, 201);
   } catch (error) {
     db.exec('ROLLBACK');
     if (savedFloorPlanObject && savedFloorPlanObject !== replacedFloorPlanObject) {
@@ -887,5 +885,35 @@ router.delete('/db/assets', asyncRoute(async (req, res) => {
   }
   success(res, { dbType, deletedCount: result.changes });
 }));
+
+router.post('/straight-maps/upload-url', asyncRoute(async (req, res) => {
+  const result = await createStraightMapUpload({
+    sourceSha256: asText(req.body?.sourceSha256, 'sourceSha256', 64),
+    filename: asText(req.body?.filename, 'filename', 255),
+    size: Number(req.body?.size),
+    contentType: typeof req.body?.contentType === 'string' ? req.body.contentType : '',
+    stationName: asText(req.body?.stationName, 'stationName', 100),
+    requestedBy: authUser(req).id,
+  });
+  success(res, result, 201);
+}));
+
+router.put('/straight-maps/local-uploads/:jobId', asyncRoute(async (req, res) => {
+  const rawLength = req.get('content-length');
+  const declaredLength = rawLength ? Number(rawLength) : null;
+  if (declaredLength !== null && (!Number.isSafeInteger(declaredLength) || declaredLength <= 0)) {
+    throw new ApiError(400, '업로드 파일 크기를 확인할 수 없습니다.', 'INVALID_SOURCE_SIZE');
+  }
+  success(res, await storeLocalStraightMapUpload(req.params.jobId, authUser(req).id, req, declaredLength));
+}));
+
+router.post('/straight-maps/uploads/:jobId/complete', asyncRoute(async (req, res) => {
+  success(res, await completeStraightMapUpload(req.params.jobId, authUser(req).id));
+}));
+
+router.get('/straight-maps/jobs', (_req, res) => success(res, listStraightMapJobs()));
+router.post('/straight-maps/jobs/:jobId/retry', (req, res) => success(res, retryStraightMapJob(req.params.jobId)));
+router.post('/straight-maps/jobs/:jobId/cancel', (req, res) => success(res, cancelStraightMapJob(req.params.jobId)));
+router.post('/straight-maps/versions/:versionId/rollback', (req, res) => success(res, rollbackStraightMapVersion(req.params.versionId)));
 
 export default router;
