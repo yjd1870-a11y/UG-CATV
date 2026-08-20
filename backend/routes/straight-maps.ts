@@ -5,7 +5,7 @@ import { normalizeStationName } from '../catv';
 import { ApiError, asyncRoute, success } from '../http';
 import { requireAuth } from '../security/session';
 import { straightMapContinuousTerms, type StraightMapMatchLength } from '../straight-map-search';
-import { resolveStraightMapTile, signedStraightMapTileUrl } from '../straight-map-storage';
+import { resolveStraightMapArtifactTile, resolveStraightMapTile, signedStraightMapTileUrl } from '../straight-map-storage';
 import { cachedStraightMapSearch } from '../straight-map-cache';
 import { usesR2Storage } from '../object-storage';
 
@@ -102,7 +102,11 @@ router.get('/:mapId/versions/:version/tiles/:level/:tile', asyncRoute(async (req
     return;
   }
   let filePath: string;
-  try { filePath = resolveStraightMapTile(req.params.mapId, version, level, req.params.tile); }
+  try {
+    filePath = allowed.artifactSetId
+      ? resolveStraightMapArtifactTile(allowed.artifactSetId, level, req.params.tile)
+      : resolveStraightMapTile(req.params.mapId, version, level, req.params.tile);
+  }
   catch { throw new ApiError(400, '직선도 타일 경로가 올바르지 않습니다.', 'INVALID_TILE_PATH'); }
   if (!fs.existsSync(filePath)) throw new ApiError(404, '직선도 타일을 찾을 수 없습니다.', 'TILE_NOT_FOUND');
   res.setHeader('Content-Type', 'image/webp');

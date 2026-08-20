@@ -10,4 +10,6 @@
 4. `CATV_RENDERER_API_URL`을 Render 서비스의 HTTPS URL로 설정합니다.
 5. `renderer-agent\start-renderer.cmd` 또는 `npm run renderer:agent -- --once`를 실행합니다.
 
+로컬 `http://localhost:3000`은 서버가 `backend/data/straight-map-renderer.token`을 자동 생성하고 Agent가 같은 파일을 읽으므로 별도 token 입력이 필요 없습니다. Codex 번들 Poppler가 설치된 PC에서는 시작 스크립트가 해당 경로를 자동으로 PATH에 추가합니다.
+
 Agent는 한 번에 한 Job만 처리합니다. 매크로, 이벤트, 외부 링크 갱신을 차단하고, XLSX를 로컬 임시 폴더로 스트리밍 다운로드한 뒤 SHA-256을 검증합니다. 시트별 PDF를 마스터로 보존하고 전체 워크시트 PNG 없이 PDF 페이지 단위로 Deep Zoom 타일을 생성합니다. 산출물은 R2 immutable prefix에 직접 업로드되며 Manifest는 항상 마지막에 업로드됩니다.

@@ -6,13 +6,16 @@ import {
   claimStraightMapJob,
   completeStraightMapJob,
   createArtifactUploadUrls,
+  createStraightMapSourceRepairUploadUrl,
   failStraightMapJob,
   heartbeatStraightMapJob,
+  localStraightMapSourceFile,
   progressStraightMapJob,
   registerStraightMapJobSheets,
   straightMapRendererProfile,
   straightMapRendererProfileHash,
   straightMapSourceDownload,
+  storeLocalStraightMapArtifact,
 } from '../straight-map-jobs';
 
 const router = Router();
@@ -59,6 +62,18 @@ router.post('/jobs/:jobId/source-url', asyncRoute(async (req, res) => {
   success(res, await straightMapSourceDownload(req.params.jobId, owner(req.body)));
 }));
 
+router.post('/jobs/:jobId/source-upload-url', asyncRoute(async (req, res) => {
+  success(res, await createStraightMapSourceRepairUploadUrl(req.params.jobId, owner(req.body)));
+}));
+
+router.get('/jobs/:jobId/source', (req, res) => {
+  const rendererId = asText(req.query.rendererId, 'rendererId', 120);
+  const filePath = localStraightMapSourceFile(req.params.jobId, rendererId);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(filePath);
+});
+
 router.post('/jobs/:jobId/heartbeat', (req, res) => {
   success(res, heartbeatStraightMapJob(req.params.jobId, owner(req.body)));
 });
@@ -82,6 +97,22 @@ router.post('/jobs/:jobId/artifacts/upload-urls', asyncRoute(async (req, res) =>
     sheetName: asText(req.body?.sheetName, 'sheetName', 255),
     artifactSetId: typeof req.body?.artifactSetId === 'string' ? req.body.artifactSetId : undefined,
     files: req.body?.files,
+  }));
+}));
+
+router.put('/jobs/:jobId/artifacts/:artifactSetId', asyncRoute(async (req, res) => {
+  if (!req.is('application/octet-stream')) throw new ApiError(415, '로컬 artifact는 octet-stream으로 업로드해야 합니다.', 'INVALID_ARTIFACT_CONTENT_TYPE');
+  const rawLength = req.get('content-length');
+  const declaredLength = rawLength ? Number(rawLength) : null;
+  success(res, await storeLocalStraightMapArtifact({
+    jobId: req.params.jobId,
+    owner: asText(req.query.rendererId, 'rendererId', 120),
+    artifactSetId: req.params.artifactSetId,
+    relativeKey: asText(req.query.relativeKey, 'relativeKey', 500),
+    expectedSize: Number(req.query.size),
+    expectedSha256: asText(req.query.sha256, 'sha256', 64),
+    declaredLength,
+    body: req,
   }));
 }));
 

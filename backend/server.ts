@@ -17,9 +17,13 @@ if (!apiOnly) {
     app.use(express.static(distPath));
     app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
   } else {
+    const privateStorageWatchGlob = `${path.relative(projectRoot, env.privateStoragePath).replace(/\\/g, '/')}/**`;
     const vite = await createViteServer({
       root: projectRoot,
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        watch: { ignored: [privateStorageWatchGlob, '**/.tmp/**'] },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

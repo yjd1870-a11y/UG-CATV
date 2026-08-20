@@ -18,7 +18,7 @@ import {
 import { normalizeStationName } from './catv';
 import { normalizeStraightMapCompactText } from './straight-map-search';
 import { invalidateStraightMapSearchCache } from './straight-map-cache';
-import { straightMapStorageRoot } from './straight-map-storage';
+import { resolveLocalStraightMapObject } from './straight-map-storage';
 
 export const STRAIGHT_MAP_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 export const STRAIGHT_MAP_MAX_SOURCE_SIZE = 20 * 1024 * 1024;
@@ -53,24 +53,68 @@ const requireV2 = () => {
   }
 };
 
-const localSourcePath = (key: string) => {
-  const match = /^line-diagrams\/sources\/([a-f0-9]{64})\.xlsx$/.exec(key);
-  if (!match) throw new ApiError(400, '로컬 직선도 원본 경로가 올바르지 않습니다.', 'INVALID_SOURCE_KEY');
-  return path.join(straightMapStorageRoot, 'sources', `${match[1]}.xlsx`);
+const localSourcePath = (key: string) => resolveLocalStraightMapObject(key);
+
+const localObjectHash = async (filePath: string) => {
+  const hash = createHash('sha256');
+  await pipeline(fs.createReadStream(filePath), new Transform({
+    transform(chunk: Buffer, _encoding, callback) { hash.update(chunk); callback(); },
+  }));
+  return hash.digest('hex');
+};
+
+const localObjectHead = async (key: string) => {
+  const filePath = resolveLocalStraightMapObject(key);
+  const stat = await fs.promises.stat(filePath);
+  const sourceHash = /^line-diagrams\/sources\/([a-f0-9]{64})\.xlsx$/i.exec(key)?.[1]?.toLowerCase();
+  return {
+    contentType: key.endsWith('.xlsx') ? STRAIGHT_MAP_XLSX_MIME : key.endsWith('.webp') ? 'image/webp'
+      : key.endsWith('.pdf') ? 'application/pdf' : 'application/json',
+    size: stat.size,
+    etag: null,
+    metadata: { sha256: sourceHash || await localObjectHash(filePath) },
+    lastModified: stat.mtime.toISOString(),
+  };
+};
+
+const storedObjectHead = async (key: string) => usesR2Storage ? headR2Object(key) : localObjectHead(key);
+
+const inspectStoredPrefix = async (
+  prefix: string,
+  visitor: (object: { key: string; size: number; etag: string | null; lastModified: string | null }) => void | Promise<void>,
+) => {
+  if (usesR2Storage) return inspectR2Prefix(prefix, visitor);
+  const marker = resolveLocalStraightMapObject(`${prefix.replace(/\/$/, '')}/__prefix__`);
+  const root = path.dirname(marker);
+  let count = 0;
+  let totalSize = 0;
+  const walk = async (directory: string, relative = ''): Promise<void> => {
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const childPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) await walk(childPath, childRelative);
+      else if (entry.isFile()) {
+        const stat = await fs.promises.stat(childPath);
+        count += 1;
+        totalSize += stat.size;
+        await visitor({ key: `${prefix}${childRelative}`, size: stat.size, etag: null, lastModified: stat.mtime.toISOString() });
+      }
+    }
+  };
+  await walk(root);
+  return { count, totalSize };
 };
 
 const objectExists = async (key: string) => {
   if (!usesR2Storage) {
-    const sourcePath = localSourcePath(key);
     try {
-      const stat = await fs.promises.stat(sourcePath);
-      return {
-        contentType: STRAIGHT_MAP_XLSX_MIME,
-        size: stat.size,
-        etag: null,
-        metadata: { sha256: path.basename(sourcePath, '.xlsx') },
-        lastModified: stat.mtime.toISOString(),
-      };
+      return await localObjectHead(key);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
@@ -285,6 +329,25 @@ export const claimStraightMapJob = (owner: string) => {
       db.exec('COMMIT');
       return null;
     }
+    db.prepare(`
+      UPDATE straight_map_job_sheets
+         SET status = 'PENDING', artifact_set_id = NULL, progress = 0,
+             started_at = NULL, completed_at = NULL
+       WHERE job_id = ? AND status <> 'CACHE_HIT'
+         AND artifact_set_id IN (
+           SELECT id FROM straight_map_artifact_sets WHERE status = 'FAILED'
+         )
+    `).run(job.id);
+    db.prepare(`
+      DELETE FROM straight_map_artifact_sets
+       WHERE status = 'FAILED'
+         AND NOT EXISTS (
+           SELECT 1 FROM straight_map_job_sheets WHERE artifact_set_id = straight_map_artifact_sets.id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM map_versions WHERE artifact_set_id = straight_map_artifact_sets.id
+         )
+    `).run();
     const leaseExpiresAt = isoAfter(env.straightMapLeaseSeconds);
     const updated = db.prepare(`
       UPDATE straight_map_jobs
@@ -309,7 +372,40 @@ export const claimStraightMapJob = (owner: string) => {
 
 export const straightMapSourceDownload = async (jobId: string, owner: string) => {
   const job = claimedJob(jobId, owner);
+  if (!usesR2Storage) {
+    return {
+      downloadUrl: `/api/renderer/jobs/${encodeURIComponent(jobId)}/source?rendererId=${encodeURIComponent(owner)}`,
+      expiresAt: null,
+      downloadTarget: 'api',
+    };
+  }
   return { downloadUrl: await signedR2DownloadUrl(String(job.source_key)), expiresAt: r2SignedUrlExpiresAt() };
+};
+
+export const localStraightMapSourceFile = (jobId: string, owner: string) => {
+  if (usesR2Storage) throw new ApiError(404, '로컬 원본 다운로드를 사용할 수 없습니다.', 'LOCAL_SOURCE_UNAVAILABLE');
+  const job = claimedJob(jobId, owner);
+  return localSourcePath(String(job.source_key));
+};
+
+export const createStraightMapSourceRepairUploadUrl = async (jobId: string, owner: string) => {
+  if (!usesR2Storage) throw new ApiError(404, 'R2 원본 복구는 운영 저장소에서만 사용할 수 있습니다.', 'SOURCE_REPAIR_UNAVAILABLE');
+  const job = claimedJob(jobId, owner);
+  const sourceKey = String(job.source_key);
+  const existing = await objectExists(sourceKey);
+  if (existing) return { uploadRequired: false, uploadUrl: null, requiredHeaders: {}, expiresAt: null };
+  const sourceSize = Number(job.source_size);
+  const sourceSha256 = String(job.source_sha256);
+  return {
+    uploadRequired: true,
+    uploadUrl: await signedR2UploadUrl(sourceKey, STRAIGHT_MAP_XLSX_MIME, sourceSize, { sha256: sourceSha256 }),
+    requiredHeaders: {
+      'Content-Type': STRAIGHT_MAP_XLSX_MIME,
+      'Cache-Control': 'private, max-age=300',
+      'x-amz-meta-sha256': sourceSha256,
+    },
+    expiresAt: r2SignedUrlExpiresAt(),
+  };
 };
 
 export const heartbeatStraightMapJob = (jobId: string, owner: string) => {
@@ -417,15 +513,85 @@ export const createArtifactUploadUrls = async (jobId: string, owner: string, inp
     return {
       relativeKey: file.relativeKey,
       objectKey,
-      uploadUrl: await signedR2UploadUrl(objectKey, file.contentType, file.size, { sha256: file.sha256 }),
-      requiredHeaders: {
+      uploadUrl: usesR2Storage
+        ? await signedR2UploadUrl(objectKey, file.contentType, file.size, { sha256: file.sha256 })
+        : `/api/renderer/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactSetId)}`
+          + `?rendererId=${encodeURIComponent(owner)}&relativeKey=${encodeURIComponent(file.relativeKey)}`
+          + `&size=${file.size}&sha256=${file.sha256}`,
+      requiredHeaders: usesR2Storage ? {
         'Content-Type': file.contentType,
         'Cache-Control': cacheControl,
         'x-amz-meta-sha256': file.sha256,
-      },
+      } : { 'Content-Type': 'application/octet-stream' },
     };
   }));
-  return { artifactSetId, prefix, expiresAt: r2SignedUrlExpiresAt(), uploads };
+  return { artifactSetId, prefix, expiresAt: usesR2Storage ? r2SignedUrlExpiresAt() : null, uploads };
+};
+
+export const storeLocalStraightMapArtifact = async (input: {
+  jobId: string;
+  owner: string;
+  artifactSetId: string;
+  relativeKey: string;
+  expectedSize: number;
+  expectedSha256: string;
+  declaredLength: number | null;
+  body: Readable;
+}) => {
+  if (usesR2Storage) throw new ApiError(404, '로컬 artifact 업로드를 사용할 수 없습니다.', 'LOCAL_ARTIFACT_UNAVAILABLE');
+  claimedJob(input.jobId, input.owner);
+  if (!/^[a-f0-9-]{36}$/i.test(input.artifactSetId) || !validateArtifactPart(input.relativeKey)
+    || input.relativeKey.startsWith('/') || input.relativeKey.includes('..')) {
+    throw new ApiError(400, 'artifact 경로가 올바르지 않습니다.', 'INVALID_ARTIFACT_PATH');
+  }
+  if (!Number.isSafeInteger(input.expectedSize) || input.expectedSize <= 0 || input.expectedSize > 512 * 1024 * 1024
+    || !sha256Pattern.test(input.expectedSha256)) {
+    throw new ApiError(400, 'artifact 크기 또는 해시가 올바르지 않습니다.', 'INVALID_ARTIFACT_FILE');
+  }
+  if (input.declaredLength !== null && input.declaredLength !== input.expectedSize) {
+    throw new ApiError(400, 'artifact Content-Length가 요청과 다릅니다.', 'ARTIFACT_SIZE_MISMATCH');
+  }
+  const assigned = db.prepare(`
+    SELECT 1 FROM straight_map_job_sheets
+     WHERE job_id = ? AND artifact_set_id = ? AND status = 'RENDERING'
+  `).get(input.jobId, input.artifactSetId);
+  if (!assigned) throw new ApiError(409, '작업에 할당되지 않은 artifact set입니다.', 'ARTIFACT_NOT_ASSIGNED');
+  const objectKey = `line-diagrams/artifacts/${input.artifactSetId}/${input.relativeKey}`;
+  const target = resolveLocalStraightMapObject(objectKey);
+  const temporary = `${target}.${randomUUID()}.upload`;
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  const hash = createHash('sha256');
+  let received = 0;
+  const verifier = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      received += chunk.length;
+      if (received > input.expectedSize) {
+        callback(new ApiError(413, 'artifact 크기가 요청보다 큽니다.', 'ARTIFACT_TOO_LARGE'));
+        return;
+      }
+      hash.update(chunk);
+      callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(input.body, verifier, fs.createWriteStream(temporary, { flags: 'wx' }));
+    if (received !== input.expectedSize) throw new ApiError(409, 'artifact 크기가 요청과 다릅니다.', 'ARTIFACT_SIZE_MISMATCH');
+    if (hash.digest('hex') !== input.expectedSha256) throw new ApiError(409, 'artifact SHA-256이 요청과 다릅니다.', 'ARTIFACT_HASH_MISMATCH');
+    try {
+      const existing = await localObjectHead(objectKey);
+      if (existing.size !== received || existing.metadata.sha256 !== input.expectedSha256) {
+        throw new ApiError(409, '기존 artifact와 업로드 내용이 다릅니다.', 'ARTIFACT_CONFLICT');
+      }
+      await fs.promises.rm(temporary, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      await fs.promises.rename(temporary, target);
+    }
+    return { uploaded: true, relativeKey: input.relativeKey, size: received };
+  } catch (error) {
+    await fs.promises.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 };
 
 export type StraightMapCoordinate = {
@@ -524,7 +690,7 @@ const verifyArtifactObjects = async (artifact: CompletedArtifact) => {
   let newestNonManifest = 0;
   let manifestModified = 0;
   const levelCounts = new Map<number, number>();
-  const result = await inspectR2Prefix(prefix, (object) => {
+  const result = await inspectStoredPrefix(prefix, (object) => {
     const relative = object.key.slice(prefix.length);
     if (required.has(relative)) {
       required.delete(relative);
@@ -563,8 +729,8 @@ const verifyArtifactObjects = async (artifact: CompletedArtifact) => {
     throw new ApiError(409, 'manifest.json은 모든 산출물 뒤에 마지막으로 업로드해야 합니다.', 'MANIFEST_NOT_LAST');
   }
   const [manifestHead, coordinateHead] = await Promise.all([
-    headR2Object(`${prefix}manifest.json`),
-    headR2Object(`${prefix}coordinates.json`),
+    storedObjectHead(`${prefix}manifest.json`),
+    storedObjectHead(`${prefix}coordinates.json`),
   ]);
   if (String(manifestHead.metadata.sha256 || '') !== artifact.manifestSha256
     || String(coordinateHead.metadata.sha256 || '') !== artifact.manifest.coordinateHash) {
@@ -714,9 +880,9 @@ export const completeStraightMapJob = async (jobId: string, owner: string, artif
       if (!cached) throw new ApiError(409, '캐시 artifact가 더 이상 유효하지 않습니다.', 'CACHE_ARTIFACT_MISSING');
       const prefix = `${String(cached.r2_prefix).replace(/\/$/, '')}/`;
       const requiredKeys = ['source-info.json', 'map.pdf', 'coordinates.json', 'checksums.json', 'manifest.json'];
-      await Promise.all(requiredKeys.map((key) => headR2Object(`${prefix}${key}`)));
+      await Promise.all(requiredKeys.map((key) => storedObjectHead(`${prefix}${key}`)));
       let cachedTileCount = 0;
-      await inspectR2Prefix(`${prefix}tiles/`, () => { cachedTileCount += 1; });
+      await inspectStoredPrefix(`${prefix}tiles/`, () => { cachedTileCount += 1; });
       if (!cachedTileCount) throw new ApiError(409, '캐시 artifact 타일이 없습니다.', 'CACHE_TILES_MISSING');
       cachedToActivate.push({ sheetName: sheet.sheetName, artifactSetId: String(sheet.artifactSetId) });
       continue;

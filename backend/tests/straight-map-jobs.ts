@@ -6,6 +6,7 @@ import {
   cancelStraightMapJob,
   claimStraightMapJob,
   completeStraightMapUpload,
+  createArtifactUploadUrls,
   createStraightMapUpload,
   failStraightMapJob,
   heartbeatStraightMapJob,
@@ -15,6 +16,7 @@ import {
   straightMapCacheKey,
   straightMapRendererProfileHash,
   storeLocalStraightMapUpload,
+  storeLocalStraightMapArtifact,
 } from '../straight-map-jobs';
 
 await initializeDatabase();
@@ -57,6 +59,7 @@ const failed = failStraightMapJob(leasedJobId, 'office-pc-b', 'AGENT_STOPPED', '
 assert.equal(failed.status, 'RETRY_WAIT');
 assert.equal(failStraightMapJob(leasedJobId, 'office-pc-b', 'AGENT_STOPPED', 'duplicate').idempotent, true);
 assert.equal(retryStraightMapJob(leasedJobId).status, 'WAITING_FOR_OFFICE_RENDERER');
+assert.equal(cancelStraightMapJob(leasedJobId).status, 'CANCELLED');
 
 const cancelledJobId = randomUUID();
 insertJob(cancelledJobId);
@@ -106,4 +109,40 @@ const stored = await storeLocalStraightMapUpload(
 assert.equal(stored.uploaded, true);
 assert.equal((await completeStraightMapUpload(localUpload.jobId, 'admin-test')).status, 'WAITING_FOR_OFFICE_RENDERER');
 
-console.log('Straight-map v2 job test passed: local streaming upload, lease reclaim, heartbeat, cache hit, retry, cancel, and atomic rollback.');
+const localClaim = claimStraightMapJob('local-agent') as Record<string, unknown>;
+assert.equal(localClaim.id, localUpload.jobId);
+registerStraightMapJobSheets(localUpload.jobId, 'local-agent', ['직선도3']);
+const localArtifact = Buffer.from('{"schemaVersion":1}');
+const localArtifactHash = createHash('sha256').update(localArtifact).digest('hex');
+const localArtifactSetId = randomUUID();
+const preparedArtifact = await createArtifactUploadUrls(localUpload.jobId, 'local-agent', {
+  sheetName: '직선도3',
+  artifactSetId: localArtifactSetId,
+  files: [{ relativeKey: 'source-info.json', size: localArtifact.length, contentType: 'application/json', sha256: localArtifactHash }],
+});
+assert.match(preparedArtifact.uploads[0].uploadUrl, /\/api\/renderer\/jobs\/.+\/artifacts\//);
+assert.equal(preparedArtifact.uploads[0].requiredHeaders['Content-Type'], 'application/octet-stream');
+const storedArtifact = await storeLocalStraightMapArtifact({
+  jobId: localUpload.jobId,
+  owner: 'local-agent',
+  artifactSetId: localArtifactSetId,
+  relativeKey: 'source-info.json',
+  expectedSize: localArtifact.length,
+  expectedSha256: localArtifactHash,
+  declaredLength: localArtifact.length,
+  body: Readable.from(localArtifact),
+});
+assert.equal(storedArtifact.uploaded, true);
+assert.equal(failStraightMapJob(localUpload.jobId, 'local-agent', 'UPLOAD_INTERRUPTED', 'retry fixture').status, 'RETRY_WAIT');
+assert.equal((claimStraightMapJob('local-agent-retry') as Record<string, unknown>).id, localUpload.jobId);
+assert.equal(db.prepare('SELECT 1 FROM straight_map_artifact_sets WHERE id = ?').get(localArtifactSetId), undefined);
+const retriedSheet = (registerStraightMapJobSheets(localUpload.jobId, 'local-agent-retry', ['직선도3']) as Array<Record<string, unknown>>)[0];
+assert.equal(retriedSheet.artifactSetId, null);
+const replacementArtifactSetId = randomUUID();
+assert.equal((await createArtifactUploadUrls(localUpload.jobId, 'local-agent-retry', {
+  sheetName: '직선도3',
+  artifactSetId: replacementArtifactSetId,
+  files: [{ relativeKey: 'source-info.json', size: localArtifact.length, contentType: 'application/json', sha256: localArtifactHash }],
+})).artifactSetId, replacementArtifactSetId);
+
+console.log('Straight-map v2 job test passed: local source/artifact streaming, lease reclaim, heartbeat, cache hit, retry, cancel, and atomic rollback.');

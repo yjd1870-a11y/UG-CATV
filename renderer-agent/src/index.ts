@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, openAsBlob } from 'node:fs';
+import { createReadStream, openAsBlob, readFileSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,7 +12,11 @@ import sharp from 'sharp';
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, '../..');
 const apiBase = (process.env.CATV_RENDERER_API_URL || '').replace(/\/$/, '');
-const deviceToken = process.env.CATV_RENDERER_DEVICE_TOKEN || '';
+const usesProductionApi = /^https:\/\//i.test(apiBase);
+const localTokenPath = path.resolve(process.env.PRIVATE_STORAGE_PATH || path.join(projectRoot, 'backend', 'data'), 'straight-map-renderer.token');
+const deviceToken = process.env.CATV_RENDERER_DEVICE_TOKEN || (/^http:\/\/localhost(?::\d+)?$/i.test(apiBase)
+  ? (() => { try { return readFileSync(localTokenPath, 'utf8').trim(); } catch { return ''; } })()
+  : '');
 const rendererId = (process.env.CATV_RENDERER_ID || `${os.hostname()}-${os.userInfo().username}`).slice(0, 120);
 const once = process.argv.includes('--once');
 
@@ -38,6 +42,17 @@ const api = async <T>(endpoint: string, body: Record<string, unknown> = {}) => {
   return payload.data;
 };
 
+const rendererResource = (url: string) => {
+  const resolved = new URL(url, `${apiBase}/`);
+  const api = new URL(apiBase);
+  return {
+    url: resolved.toString(),
+    headers: resolved.origin === api.origin && resolved.pathname.startsWith('/api/renderer/')
+      ? { Authorization: `Bearer ${deviceToken}` }
+      : {},
+  };
+};
+
 const sha256File = async (filePath: string) => {
   const hash = createHash('sha256');
   await pipeline(createReadStream(filePath), new Transform({ transform(chunk, _encoding, callback) { hash.update(chunk); callback(); } }));
@@ -45,7 +60,8 @@ const sha256File = async (filePath: string) => {
 };
 
 const downloadFile = async (url: string, filePath: string, expectedSha256: string) => {
-  const response = await fetch(url);
+  const resource = rendererResource(url);
+  const response = await fetch(resource.url, { headers: resource.headers });
   if (!response.ok || !response.body) throw new Error(`XLSX 다운로드 실패 (${response.status})`);
   const hash = createHash('sha256');
   await pipeline(
@@ -54,6 +70,28 @@ const downloadFile = async (url: string, filePath: string, expectedSha256: strin
     (await import('node:fs')).createWriteStream(filePath, { flags: 'wx' }),
   );
   if (hash.digest('hex') !== expectedSha256) throw new Error('다운로드한 XLSX SHA-256이 작업 원본과 다릅니다.');
+};
+
+const repairMissingProductionSource = async (jobId: string, job: Record<string, unknown>) => {
+  const sourceSha256 = String(job.sourceSha256);
+  const sourceDirectory = path.resolve(process.env.CATV_RENDERER_SOURCE_DIR
+    || path.join(projectRoot, 'backend', 'data', 'straight-maps', 'sources'));
+  const candidate = path.join(sourceDirectory, `${sourceSha256}.xlsx`);
+  const candidateStat = await stat(candidate).catch(() => null);
+  if (!candidateStat || await sha256File(candidate) !== sourceSha256) {
+    throw new Error(`R2 원본이 없고 일치하는 로컬 복구 파일도 없습니다: ${sourceSha256}.xlsx`);
+  }
+  const prepared = await api<{
+    uploadRequired: boolean;
+    uploadUrl: string | null;
+    requiredHeaders: Record<string, string>;
+  }>(`/jobs/${jobId}/source-upload-url`);
+  if (!prepared.uploadRequired) return;
+  if (!prepared.uploadUrl) throw new Error('R2 원본 복구 업로드 URL을 발급받지 못했습니다.');
+  const blob = await openAsBlob(candidate, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const response = await fetch(prepared.uploadUrl, { method: 'PUT', headers: prepared.requiredHeaders, body: blob });
+  if (!response.ok) throw new Error(`R2 원본 복구 업로드 실패 (${response.status})`);
+  console.log(`[SOURCE_REPAIRED] ${job.filename} (${sourceSha256})`);
 };
 
 const powershell = async (script: string, args: string[]) => {
@@ -125,11 +163,19 @@ const generateTiles = async (input: {
   dpi: number;
   tileSize: number;
   quality: number;
+  onProgress?: (fraction: number, level: number, maxLevel: number) => Promise<void>;
 }) => {
   const renderedWidth = Math.ceil(input.pdf.widthPoints * input.columns * input.dpi / 72);
   const renderedHeight = Math.ceil(input.pdf.heightPoints * input.rows * input.dpi / 72);
   const maxLevel = Math.ceil(Math.log2(Math.max(renderedWidth, renderedHeight)));
   const levels: Array<{ level: number; columns: number; rows: number; tileCount: number }> = [];
+  const expectedTiles = Array.from({ length: maxLevel + 1 }, (_, level) => {
+    const divisor = 2 ** (maxLevel - level);
+    return Math.ceil(Math.ceil(renderedWidth / divisor) / input.tileSize)
+      * Math.ceil(Math.ceil(renderedHeight / divisor) / input.tileSize);
+  });
+  const expectedTileTotal = expectedTiles.reduce((sum, count) => sum + count, 0);
+  let completedTiles = 0;
   await mkdir(input.outputRoot, { recursive: true });
   for (let level = 0; level <= maxLevel; level += 1) {
     const divisor = 2 ** (maxLevel - level);
@@ -177,10 +223,11 @@ const generateTiles = async (input: {
           const tilePath = path.join(levelRoot, `${column}_${row}.webp`);
           let canvas = sharp({ create: { width: tileWidth, height: tileHeight, channels: 3, background: '#ffffff' } });
           try {
-            await stat(tilePath);
-            canvas = sharp(tilePath).flatten({ background: '#ffffff' });
+            const existingTile = await readFile(tilePath);
+            canvas = sharp(existingTile).flatten({ background: '#ffffff' });
           } catch { /* first page touching this tile */ }
           await canvas.composite([{ input: piece, left: pieceLeft, top: pieceTop }]).webp({ quality: input.quality, effort: 4 }).toFile(`${tilePath}.next`);
+          canvas.destroy();
           await rm(tilePath, { force: true });
           await (await import('node:fs/promises')).rename(`${tilePath}.next`, tilePath);
         }
@@ -201,6 +248,8 @@ const generateTiles = async (input: {
       }
     }
     levels.push({ level, columns: levelColumns, rows: levelRows, tileCount: levelColumns * levelRows });
+    completedTiles += levelColumns * levelRows;
+    await input.onProgress?.(completedTiles / expectedTileTotal, level, maxLevel);
   }
   return { renderedWidth, renderedHeight, maxLevel, levels, tileCount: levels.reduce((sum, level) => sum + level.tileCount, 0) };
 };
@@ -240,8 +289,11 @@ const uploadArtifact = async (jobId: string, sheetName: string, artifactSetId: s
       const file = files.find((candidate) => candidate.relativeKey === upload.relativeKey);
       if (!file) throw new Error(`업로드 파일을 찾을 수 없습니다: ${upload.relativeKey}`);
       const blob = await openAsBlob(file.filePath, { type: file.contentType });
-      const response = await fetch(upload.uploadUrl, { method: 'PUT', headers: upload.requiredHeaders, body: blob });
-      if (!response.ok) throw new Error(`R2 artifact 업로드 실패: ${upload.relativeKey} (${response.status})`);
+      const resource = rendererResource(upload.uploadUrl);
+      const response = await fetch(resource.url, {
+        method: 'PUT', headers: { ...upload.requiredHeaders, ...resource.headers }, body: blob,
+      });
+      if (!response.ok) throw new Error(`artifact 업로드 실패: ${upload.relativeKey} (${response.status})`);
     }
   }
   return artifactSetId;
@@ -250,15 +302,22 @@ const uploadArtifact = async (jobId: string, sheetName: string, artifactSetId: s
 const processJob = async (job: Record<string, unknown>, profile: Record<string, number>) => {
   const jobId = String(job.id);
   const temporaryRoot = path.join(os.tmpdir(), `catv-straight-map-${jobId}`);
-  await rm(temporaryRoot, { recursive: true, force: true });
+  await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   await mkdir(temporaryRoot, { recursive: true });
   let heartbeat: NodeJS.Timeout | undefined;
   try {
     heartbeat = setInterval(() => void api(`/jobs/${jobId}/heartbeat`).catch((error) => console.error('[HEARTBEAT_FAILED]', error)), 30_000);
-    await api(`/jobs/${jobId}/progress`, { status: 'DOWNLOADING', progress: 1, currentStep: 'R2 원본 다운로드 중' });
-    const source = await api<{ downloadUrl: string }>(`/jobs/${jobId}/source-url`);
+    await api(`/jobs/${jobId}/progress`, { status: 'DOWNLOADING', progress: 1, currentStep: '직선도 원본 다운로드 중' });
     const xlsxPath = path.join(temporaryRoot, 'source.xlsx');
-    await downloadFile(source.downloadUrl, xlsxPath, String(job.sourceSha256));
+    let source = await api<{ downloadUrl: string }>(`/jobs/${jobId}/source-url`);
+    try {
+      await downloadFile(source.downloadUrl, xlsxPath, String(job.sourceSha256));
+    } catch (error) {
+      if (!usesProductionApi || !(error instanceof Error) || !/\(404\)/.test(error.message)) throw error;
+      await repairMissingProductionSource(jobId, job);
+      source = await api<{ downloadUrl: string }>(`/jobs/${jobId}/source-url`);
+      await downloadFile(source.downloadUrl, xlsxPath, String(job.sourceSha256));
+    }
     await api(`/jobs/${jobId}/progress`, { status: 'ANALYZING', progress: 3, currentStep: 'Excel 통합 문서 분석 중' });
     const analysisPath = path.join(temporaryRoot, 'workbook.json');
     await powershell(path.join(projectRoot, 'scripts', 'inspect-excel-workbook.ps1'), ['-InputXlsx', xlsxPath, '-OutputJson', analysisPath]);
@@ -287,6 +346,12 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
         pdfPath, outputRoot: path.join(artifactRoot, 'tiles'), pdf,
         columns: transformed.columns, rows: transformed.rows,
         dpi: profile.dpi, tileSize: profile.tileSize, quality: profile.webpQuality,
+        onProgress: async (fraction, level, maxLevel) => {
+          await api(`/jobs/${jobId}/progress`, {
+            status: 'TILE_GENERATING', progress: progressBase + 2 + fraction * 5,
+            currentSheet: sheet.sheetName, currentStep: `Deep Zoom level ${level}/${maxLevel} 생성 완료`,
+          });
+        },
       });
       const coordinateJson = JSON.stringify(transformed.coordinates);
       const coordinateHash = createHash('sha256').update(coordinateJson).digest('hex');
@@ -329,7 +394,7 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
         manifestSha256: createHash('sha256').update(manifestJson).digest('hex'),
         manifest, coordinates: transformed.coordinates,
       });
-      await rm(artifactRoot, { recursive: true, force: true });
+      await rm(artifactRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
     await api(`/jobs/${jobId}/progress`, { status: 'VERIFYING', progress: 95, currentStep: 'Manifest·타일·좌표 검증 요청 중' });
     await api(`/jobs/${jobId}/complete`, { artifacts });
@@ -340,7 +405,7 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
     await api(`/jobs/${jobId}/fail`, { errorCode: 'RENDERER_AGENT_FAILED', errorMessage: message }).catch((reportError) => console.error('[FAIL_REPORT_FAILED]', reportError));
   } finally {
     if (heartbeat) clearInterval(heartbeat);
-    await rm(temporaryRoot, { recursive: true, force: true });
+    await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 };
 

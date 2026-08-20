@@ -7,6 +7,26 @@ import { deleteR2Prefix, signedR2DownloadUrl, usesR2Storage } from './object-sto
 // uploaded directly by the Windows Agent to immutable R2 prefixes.
 export const straightMapStorageRoot = path.join(env.privateStoragePath, 'straight-maps');
 
+export const resolveLocalStraightMapObject = (key: string) => {
+  const source = /^line-diagrams\/sources\/([a-f0-9]{64})\.xlsx$/i.exec(key);
+  if (source) return path.join(straightMapStorageRoot, 'sources', `${source[1].toLowerCase()}.xlsx`);
+  const artifact = /^line-diagrams\/artifacts\/([a-f0-9-]{36})\/(.+)$/iu.exec(key);
+  if (!artifact || artifact[2].split('/').some((part) => !part || part === '.' || part === '..' || /[\\:]/.test(part))) {
+    throw new Error('유효하지 않은 로컬 직선도 객체 경로입니다.');
+  }
+  const root = path.resolve(straightMapStorageRoot, 'artifacts', artifact[1]);
+  const target = path.resolve(root, ...artifact[2].split('/'));
+  if (!target.startsWith(root + path.sep)) throw new Error('유효하지 않은 로컬 직선도 객체 경로입니다.');
+  return target;
+};
+
+export const resolveStraightMapArtifactTile = (artifactSetId: string, level: number, tileName: string) => {
+  if (!/^[a-f0-9-]{36}$/i.test(artifactSetId) || !Number.isSafeInteger(level) || level < 0 || !/^\d+_\d+\.webp$/.test(tileName)) {
+    throw new Error('유효하지 않은 직선도 artifact 타일 경로입니다.');
+  }
+  return resolveLocalStraightMapObject(`line-diagrams/artifacts/${artifactSetId}/tiles/${level}/${tileName}`);
+};
+
 export const straightMapVersionRoot = (mapId: string, version: number) => {
   if (!/^[a-z0-9-]+$/i.test(mapId) || !Number.isSafeInteger(version) || version < 1) throw new Error('유효하지 않은 직선도 저장 경로입니다.');
   const root = path.resolve(straightMapStorageRoot);

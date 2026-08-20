@@ -1,4 +1,6 @@
 import dotenv from 'dotenv';
+import fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +11,9 @@ dotenv.config({ path: path.join(projectRoot, '.env') });
 
 const databaseValue = process.env.DATABASE_PATH || 'backend/data/catv.sqlite';
 const privateStorageValue = process.env.PRIVATE_STORAGE_PATH || 'backend/data';
+const resolvedPrivateStoragePath = path.isAbsolute(privateStorageValue)
+  ? privateStorageValue
+  : path.resolve(projectRoot, privateStorageValue);
 
 const numberValue = (name: string, fallback: number, minimum: number, maximum: number) => {
   const value = Number(process.env[name] || fallback);
@@ -25,6 +30,20 @@ const booleanValue = (name: string, fallback: boolean) => {
 };
 
 const nodeEnv = process.env.NODE_ENV || 'development';
+const localRendererToken = () => {
+  if (nodeEnv === 'production') return '';
+  const tokenPath = path.join(resolvedPrivateStoragePath, 'straight-map-renderer.token');
+  try {
+    const existing = fs.readFileSync(tokenPath, 'utf8').trim();
+    if (Buffer.byteLength(existing, 'utf8') >= 32) return existing;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
+  const generated = randomBytes(32).toString('base64url');
+  fs.writeFileSync(tokenPath, `${generated}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  return generated;
+};
 const storageDriver = (process.env.STORAGE_DRIVER || 'local').toLowerCase();
 if (!['local', 'r2'].includes(storageDriver)) {
   throw new Error('STORAGE_DRIVER must be local or r2.');
@@ -51,9 +70,7 @@ export const env = {
   databasePath: path.isAbsolute(databaseValue)
     ? databaseValue
     : path.resolve(projectRoot, databaseValue),
-  privateStoragePath: path.isAbsolute(privateStorageValue)
-    ? privateStorageValue
-    : path.resolve(projectRoot, privateStorageValue),
+  privateStoragePath: resolvedPrivateStoragePath,
   storageDriver: storageDriver as 'local' | 'r2',
   r2AccountId: process.env.R2_ACCOUNT_ID || '',
   r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || '',
@@ -64,7 +81,7 @@ export const env = {
   // Local development must be usable without an R2 account. Production keeps
   // the explicit feature flag so rollout can still be controlled safely.
   straightMapPipelineV2Enabled: booleanValue('STRAIGHT_MAP_PIPELINE_V2_ENABLED', nodeEnv !== 'production'),
-  straightMapRendererDeviceToken: process.env.STRAIGHT_MAP_RENDERER_DEVICE_TOKEN || '',
+  straightMapRendererDeviceToken: process.env.STRAIGHT_MAP_RENDERER_DEVICE_TOKEN || localRendererToken(),
   straightMapTargetDpi: numberValue('STRAIGHT_MAP_TARGET_DPI', 1200, 300, 1200),
   straightMapTileSize: numberValue('STRAIGHT_MAP_TILE_SIZE', 256, 128, 512),
   straightMapWebpQuality: numberValue('STRAIGHT_MAP_WEBP_QUALITY', 94, 80, 100),
