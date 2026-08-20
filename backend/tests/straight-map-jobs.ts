@@ -11,6 +11,7 @@ import {
   failStraightMapJob,
   heartbeatStraightMapJob,
   registerStraightMapJobSheets,
+  resumeStraightMapJobForSourceRepair,
   retryStraightMapJob,
   rollbackStraightMapVersion,
   straightMapCacheKey,
@@ -144,5 +145,13 @@ assert.equal((await createArtifactUploadUrls(localUpload.jobId, 'local-agent-ret
   artifactSetId: replacementArtifactSetId,
   files: [{ relativeKey: 'source-info.json', size: localArtifact.length, contentType: 'application/json', sha256: localArtifactHash }],
 })).artifactSetId, replacementArtifactSetId);
+
+const exhaustedJobId = randomUUID();
+insertJob(exhaustedJobId, 'FAILED');
+db.prepare("UPDATE straight_map_jobs SET attempt = max_attempts, error_code = 'SOURCE_REPAIR_PENDING' WHERE id = ?").run(exhaustedJobId);
+assert.equal(resumeStraightMapJobForSourceRepair(exhaustedJobId, 'a'.repeat(64)).status, 'WAITING_FOR_OFFICE_RENDERER');
+const resumed = db.prepare('SELECT attempt, max_attempts AS maxAttempts FROM straight_map_jobs WHERE id = ?')
+  .get(exhaustedJobId) as { attempt: number; maxAttempts: number };
+assert.equal(resumed.maxAttempts, resumed.attempt + 1);
 
 console.log('Straight-map v2 job test passed: local source/artifact streaming, lease reclaim, heartbeat, cache hit, retry, cancel, and atomic rollback.');

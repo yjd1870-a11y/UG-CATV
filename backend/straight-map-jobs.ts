@@ -294,6 +294,26 @@ export const cancelStraightMapJob = (jobId: string) => {
   return { jobId, status, idempotent: false };
 };
 
+export const resumeStraightMapJobForSourceRepair = (jobId: string, sourceSha256: string) => {
+  if (!sha256Pattern.test(sourceSha256)) throw new ApiError(400, '원본 SHA-256을 확인해주세요.', 'INVALID_SOURCE_SHA256');
+  const job = db.prepare(`
+    SELECT status, source_sha256 AS sourceSha256, lease_owner AS leaseOwner
+      FROM straight_map_jobs WHERE id = ?
+  `).get(jobId) as { status: string; sourceSha256: string; leaseOwner: string | null } | undefined;
+  if (!job) throw new ApiError(404, '직선도 작업을 찾을 수 없습니다.', 'JOB_NOT_FOUND');
+  if (job.sourceSha256 !== sourceSha256 || job.leaseOwner || !['FAILED', 'RETRY_WAIT'].includes(job.status)) {
+    throw new ApiError(409, '원본 복구로 재개할 수 없는 작업입니다.', 'SOURCE_REPAIR_NOT_RESUMABLE');
+  }
+  db.prepare(`
+    UPDATE straight_map_jobs
+       SET status = 'WAITING_FOR_OFFICE_RENDERER', max_attempts = MAX(max_attempts, attempt + 1),
+           error_code = NULL, error_message = NULL, lease_owner = NULL, lease_expires_at = NULL,
+           heartbeat_at = NULL, current_step = '누락 원본 복구 재시도 대기 중'
+     WHERE id = ?
+  `).run(jobId);
+  return { jobId, status: 'WAITING_FOR_OFFICE_RENDERER' };
+};
+
 const claimedJob = (jobId: string, owner: string) => {
   const job = db.prepare(`
     SELECT * FROM straight_map_jobs

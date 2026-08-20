@@ -12,6 +12,7 @@ import {
   localStraightMapSourceFile,
   progressStraightMapJob,
   registerStraightMapJobSheets,
+  resumeStraightMapJobForSourceRepair,
   straightMapRendererProfile,
   straightMapRendererProfileHash,
   straightMapSourceDownload,
@@ -57,6 +58,14 @@ router.post('/session', (req, res) => {
 });
 
 router.post('/jobs/claim', (req, res) => success(res, { job: claimStraightMapJob(owner(req.body)) }));
+
+router.post('/jobs/:jobId/source-repair-resume', (req, res) => {
+  owner(req.body);
+  success(res, resumeStraightMapJobForSourceRepair(
+    req.params.jobId,
+    asText(req.body?.sourceSha256, 'sourceSha256', 64),
+  ));
+});
 
 router.post('/jobs/:jobId/source-url', asyncRoute(async (req, res) => {
   success(res, await straightMapSourceDownload(req.params.jobId, owner(req.body)));
