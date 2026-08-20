@@ -147,7 +147,7 @@ assert.equal((await createArtifactUploadUrls(localUpload.jobId, 'local-agent-ret
 })).artifactSetId, replacementArtifactSetId);
 
 const exhaustedJobId = randomUUID();
-insertJob(exhaustedJobId, 'FAILED');
+insertJob(exhaustedJobId, 'WAITING_FOR_OFFICE_RENDERER');
 db.prepare("UPDATE straight_map_jobs SET attempt = max_attempts, error_code = 'SOURCE_REPAIR_PENDING' WHERE id = ?").run(exhaustedJobId);
 assert.equal(resumeStraightMapJobForSourceRepair(exhaustedJobId, 'a'.repeat(64)).status, 'WAITING_FOR_OFFICE_RENDERER');
 const resumed = db.prepare('SELECT attempt, max_attempts AS maxAttempts FROM straight_map_jobs WHERE id = ?')

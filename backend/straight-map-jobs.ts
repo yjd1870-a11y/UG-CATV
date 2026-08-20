@@ -301,7 +301,8 @@ export const resumeStraightMapJobForSourceRepair = (jobId: string, sourceSha256:
       FROM straight_map_jobs WHERE id = ?
   `).get(jobId) as { status: string; sourceSha256: string; leaseOwner: string | null } | undefined;
   if (!job) throw new ApiError(404, '직선도 작업을 찾을 수 없습니다.', 'JOB_NOT_FOUND');
-  if (job.sourceSha256 !== sourceSha256 || job.leaseOwner || !['FAILED', 'RETRY_WAIT'].includes(job.status)) {
+  if (job.sourceSha256 !== sourceSha256 || job.leaseOwner
+    || !['FAILED', 'RETRY_WAIT', 'WAITING_FOR_OFFICE_RENDERER'].includes(job.status)) {
     throw new ApiError(409, '원본 복구로 재개할 수 없는 작업입니다.', 'SOURCE_REPAIR_NOT_RESUMABLE');
   }
   db.prepare(`
