@@ -114,6 +114,7 @@ type ExcelAnalysis = { hasExternalLinks: boolean; sheets: Array<{ name: string; 
 type ExcelCoordinates = {
   printArea: string;
   printScale: number;
+  pageOrder?: number;
   printWidth: number;
   printHeight: number;
   verticalStarts: number[];
@@ -138,18 +139,45 @@ const findPageIndex = (starts: number[], value: number) => {
   return 0;
 };
 
-const normalizedCoordinates = (excel: ExcelCoordinates, pdf: Awaited<ReturnType<typeof inspectPdf>>) => {
-  const columns = excel.verticalStarts.length;
-  const rows = excel.horizontalStarts.length;
+export const inferPdfPageGrid = (excel: ExcelCoordinates, pdf: Awaited<ReturnType<typeof inspectPdf>>) => {
+  const scaledWidth = Math.max(1, excel.printWidth * excel.printScale);
+  const scaledHeight = Math.max(1, excel.printHeight * excel.printScale);
+  const estimatedColumns = Math.max(1, Math.ceil((scaledWidth - 0.01) / pdf.widthPoints));
+  const estimatedRows = Math.max(1, Math.ceil((scaledHeight - 0.01) / pdf.heightPoints));
+  if (estimatedColumns * estimatedRows === pdf.pages) return { columns: estimatedColumns, rows: estimatedRows };
+
+  // Excel does not reliably expose automatic page breaks through COM after
+  // ResetAllPageBreaks. Infer the exact factor pair from the exported PDF and
+  // choose the grid whose stitched aspect ratio best matches the print area.
+  const targetAspect = scaledWidth / scaledHeight;
+  let best = { columns: 1, rows: pdf.pages, score: Number.POSITIVE_INFINITY };
+  for (let columns = 1; columns <= pdf.pages; columns += 1) {
+    if (pdf.pages % columns !== 0) continue;
+    const rows = pdf.pages / columns;
+    const stitchedAspect = pdf.widthPoints * columns / (pdf.heightPoints * rows);
+    const score = Math.abs(Math.log(stitchedAspect / targetAspect));
+    if (score < best.score) best = { columns, rows, score };
+  }
+  return { columns: best.columns, rows: best.rows };
+};
+
+export const normalizedCoordinates = (excel: ExcelCoordinates, pdf: Awaited<ReturnType<typeof inspectPdf>>) => {
+  const { columns, rows } = inferPdfPageGrid(excel, pdf);
+  const verticalStarts = excel.verticalStarts.length === columns
+    ? excel.verticalStarts
+    : Array.from({ length: columns }, (_, index) => index * pdf.widthPoints / excel.printScale);
+  const horizontalStarts = excel.horizontalStarts.length === rows
+    ? excel.horizontalStarts
+    : Array.from({ length: rows }, (_, index) => index * pdf.heightPoints / excel.printScale);
   const canvasWidthPoints = pdf.widthPoints * columns;
   const canvasHeightPoints = pdf.heightPoints * rows;
   const coordinates = excel.coordinates.map((item) => {
     const centerX = item.left + item.width / 2;
     const centerY = item.top + item.height / 2;
-    const column = findPageIndex(excel.verticalStarts, centerX);
-    const row = findPageIndex(excel.horizontalStarts, centerY);
-    const xPoints = column * pdf.widthPoints + (centerX - excel.verticalStarts[column]) * excel.printScale - excel.cropLeftPoints;
-    const yPoints = row * pdf.heightPoints + (centerY - excel.horizontalStarts[row]) * excel.printScale - excel.cropTopPoints;
+    const column = findPageIndex(verticalStarts, centerX);
+    const row = findPageIndex(horizontalStarts, centerY);
+    const xPoints = column * pdf.widthPoints + (centerX - verticalStarts[column]) * excel.printScale - excel.cropLeftPoints;
+    const yPoints = row * pdf.heightPoints + (centerY - horizontalStarts[row]) * excel.printScale - excel.cropTopPoints;
     return {
       shapeId: item.shapeId,
       label: item.label,
@@ -181,6 +209,7 @@ export const generateTiles = async (input: {
   pdf: Awaited<ReturnType<typeof inspectPdf>>;
   columns: number;
   rows: number;
+  pageOrder?: number;
   dpi: number;
   tileSize: number;
   quality: number;
@@ -229,8 +258,8 @@ export const generateTiles = async (input: {
     } finally { pdfRasterMs += Date.now() - rasterStartedAt; }
     const pagePath = `${pageBase}.png`;
     const pageImage = sharp(pagePath, { limitInputPixels: false, sequentialRead: true }).resize(pageWidth, pageHeight, { fit: 'fill' });
-    const pageColumn = pageIndex % input.columns;
-    const pageRow = Math.floor(pageIndex / input.columns);
+    const pageColumn = input.pageOrder === 1 ? Math.floor(pageIndex / input.rows) : pageIndex % input.columns;
+    const pageRow = input.pageOrder === 1 ? pageIndex % input.rows : Math.floor(pageIndex / input.columns);
     const originX = pageColumn * pageWidth;
     const originY = pageRow * pageHeight;
     const firstColumn = Math.floor(originX / input.tileSize);
@@ -512,7 +541,7 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
       await api(`/jobs/${jobId}/progress`, { status: 'TILE_GENERATING', progress: progressBase + 2, currentSheet: sheet.sheetName, currentStep: 'PDF 페이지 기반 Deep Zoom 타일 생성 중' });
       const tiled = await measure('tileGenerationMs', () => generateTiles({
         pdfPath, outputRoot: path.join(artifactRoot, 'tiles'), pdf,
-        columns: transformed.columns, rows: transformed.rows,
+        columns: transformed.columns, rows: transformed.rows, pageOrder: excelCoordinates.pageOrder,
         dpi: profile.dpi, tileSize: profile.tileSize, quality: profile.webpQuality,
         effort: profile.webpEffort || 2, concurrency: profile.tileConcurrency || 2,
         onProgress: async (fraction, level, maxLevel) => {
