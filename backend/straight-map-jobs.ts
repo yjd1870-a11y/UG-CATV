@@ -140,7 +140,8 @@ export const createStraightMapUpload = async (input: {
   requireV2();
   const sourceSha256 = input.sourceSha256.toLowerCase();
   if (!sha256Pattern.test(sourceSha256)) throw new ApiError(400, 'XLSX SHA-256 형식이 올바르지 않습니다.', 'INVALID_SOURCE_HASH');
-  if (!/\.xlsx$/i.test(input.filename) || input.filename.length > 255) throw new ApiError(400, '.xlsx 파일만 등록할 수 있습니다.', 'INVALID_SOURCE_FILE');
+  const filename = input.filename.trim().normalize('NFC');
+  if (!/\.xlsx$/i.test(filename) || filename.length > 255) throw new ApiError(400, '.xlsx 파일만 등록할 수 있습니다.', 'INVALID_SOURCE_FILE');
   if (!Number.isSafeInteger(input.size) || input.size <= 0 || input.size > STRAIGHT_MAP_MAX_SOURCE_SIZE) {
     throw new ApiError(400, '직선도 XLSX 파일은 20MB 이하여야 합니다.', 'INVALID_SOURCE_SIZE');
   }
@@ -154,31 +155,52 @@ export const createStraightMapUpload = async (input: {
   }
   const jobId = randomUUID();
   const contentType = STRAIGHT_MAP_XLSX_MIME;
-  db.prepare(`
-    INSERT INTO straight_map_jobs (
-      id, source_key, source_sha256, filename, station_name, station_key, requested_by,
-      status, source_size, source_content_type, renderer_profile_hash
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPLOADING', ?, ?, ?)
-  `).run(jobId, sourceKey, sourceSha256, input.filename, stationName, stationKey, input.requestedBy,
-    input.size, contentType, straightMapRendererProfileHash());
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const duplicate = db.prepare(`
+      SELECT id FROM straight_map_jobs
+       WHERE filename = ? COLLATE NOCASE
+         AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+       LIMIT 1
+    `).get(filename);
+    if (duplicate) {
+      throw new ApiError(409, '같은 이름의 직선도 파일이 이미 업로드 또는 렌더링 중입니다. 기존 작업이 끝난 뒤 다시 시도해주세요.', 'DUPLICATE_ACTIVE_FILENAME');
+    }
+    db.prepare(`
+      INSERT INTO straight_map_jobs (
+        id, source_key, source_sha256, filename, station_name, station_key, requested_by,
+        status, source_size, source_content_type, renderer_profile_hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPLOADING', ?, ?, ?)
+    `).run(jobId, sourceKey, sourceSha256, filename, stationName, stationKey, input.requestedBy,
+      input.size, contentType, straightMapRendererProfileHash());
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
   const metadata = { sha256: sourceSha256 };
-  return {
-    jobId,
-    sourceKey,
-    uploadRequired: !existing,
-    uploadUrl: existing ? null : (usesR2Storage
-      ? await signedR2UploadUrl(sourceKey, contentType, input.size, metadata)
-      : `/api/admin/straight-maps/local-uploads/${jobId}`),
-    uploadTarget: usesR2Storage ? 'r2' : 'api',
-    requiredHeaders: existing ? {} : {
-      'Content-Type': contentType,
-      ...(usesR2Storage ? {
-        'Cache-Control': 'private, max-age=300',
-        'x-amz-meta-sha256': sourceSha256,
-      } : {}),
-    },
-    expiresAt: existing || !usesR2Storage ? null : r2SignedUrlExpiresAt(),
-  };
+  try {
+    return {
+      jobId,
+      sourceKey,
+      uploadRequired: !existing,
+      uploadUrl: existing ? null : (usesR2Storage
+        ? await signedR2UploadUrl(sourceKey, contentType, input.size, metadata)
+        : `/api/admin/straight-maps/local-uploads/${jobId}`),
+      uploadTarget: usesR2Storage ? 'r2' : 'api',
+      requiredHeaders: existing ? {} : {
+        'Content-Type': contentType,
+        ...(usesR2Storage ? {
+          'Cache-Control': 'private, max-age=300',
+          'x-amz-meta-sha256': sourceSha256,
+        } : {}),
+      },
+      expiresAt: existing || !usesR2Storage ? null : r2SignedUrlExpiresAt(),
+    };
+  } catch (error) {
+    db.prepare("DELETE FROM straight_map_jobs WHERE id = ? AND status = 'UPLOADING'").run(jobId);
+    throw error;
+  }
 };
 
 export const storeLocalStraightMapUpload = async (
@@ -292,6 +314,34 @@ export const cancelStraightMapJob = (jobId: string) => {
   db.prepare(`UPDATE straight_map_jobs SET status = ?, cancelled_at = CASE WHEN ? = 'CANCELLED' THEN CURRENT_TIMESTAMP ELSE cancelled_at END WHERE id = ?`)
     .run(status, status, jobId);
   return { jobId, status, idempotent: false };
+};
+
+export const deleteStraightMapJob = (jobId: string) => {
+  const current = db.prepare('SELECT status FROM straight_map_jobs WHERE id = ?').get(jobId) as { status: string } | undefined;
+  if (!current) throw new ApiError(404, '직선도 작업을 찾을 수 없습니다.', 'JOB_NOT_FOUND');
+  if (!['FAILED', 'CANCELLED'].includes(current.status)) {
+    throw new ApiError(409, '실패 또는 취소가 완료된 직선도 작업만 삭제할 수 있습니다.', 'JOB_NOT_DELETABLE');
+  }
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`
+      UPDATE straight_map_artifact_sets SET status = 'FAILED'
+       WHERE id IN (SELECT artifact_set_id FROM straight_map_job_sheets WHERE job_id = ?)
+         AND status = 'PREPARING'
+    `).run(jobId);
+    db.prepare('DELETE FROM straight_map_jobs WHERE id = ?').run(jobId);
+    db.prepare(`
+      DELETE FROM straight_map_artifact_sets
+       WHERE status = 'FAILED'
+         AND NOT EXISTS (SELECT 1 FROM straight_map_job_sheets WHERE artifact_set_id = straight_map_artifact_sets.id)
+         AND NOT EXISTS (SELECT 1 FROM map_versions WHERE artifact_set_id = straight_map_artifact_sets.id)
+    `).run();
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return { jobId, deleted: true };
 };
 
 export const resumeStraightMapJobForSourceRepair = (jobId: string, sourceSha256: string) => {

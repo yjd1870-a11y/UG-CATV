@@ -8,6 +8,7 @@ import {
   completeStraightMapUpload,
   createArtifactUploadUrls,
   createStraightMapUpload,
+  deleteStraightMapJob,
   failStraightMapJob,
   heartbeatStraightMapJob,
   registerStraightMapJobSheets,
@@ -66,6 +67,8 @@ const cancelledJobId = randomUUID();
 insertJob(cancelledJobId);
 assert.equal(cancelStraightMapJob(cancelledJobId).status, 'CANCELLED');
 assert.equal(cancelStraightMapJob(cancelledJobId).idempotent, true);
+assert.equal(deleteStraightMapJob(cancelledJobId).deleted, true);
+assert.equal(db.prepare('SELECT 1 FROM straight_map_jobs WHERE id = ?').get(cancelledJobId), undefined);
 
 const mapId = randomUUID();
 const oldVersionId = randomUUID();
@@ -98,6 +101,14 @@ const localUpload = await createStraightMapUpload({
   stationName: '송탄국사',
   requestedBy: 'admin-test',
 });
+await assert.rejects(
+  createStraightMapUpload({
+    sourceSha256: 'f'.repeat(64), filename: 'local-test.xlsx', size: localSource.length,
+    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    stationName: '다른국사', requestedBy: 'admin-test',
+  }),
+  (error: unknown) => error instanceof Error && error.message.includes('같은 이름의 직선도 파일'),
+);
 assert.equal(localUpload.uploadTarget, 'api');
 assert.equal(localUpload.uploadRequired, true);
 assert.match(String(localUpload.uploadUrl), /\/api\/admin\/straight-maps\/local-uploads\//);

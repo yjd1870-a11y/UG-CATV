@@ -15,6 +15,7 @@ import {
   cancelStraightMapJob,
   completeStraightMapUpload,
   createStraightMapUpload,
+  deleteStraightMapJob,
   listStraightMapJobs,
   retryStraightMapJob,
   rollbackStraightMapVersion,
@@ -914,6 +915,7 @@ router.post('/straight-maps/uploads/:jobId/complete', asyncRoute(async (req, res
 router.get('/straight-maps/jobs', (_req, res) => success(res, listStraightMapJobs()));
 router.post('/straight-maps/jobs/:jobId/retry', (req, res) => success(res, retryStraightMapJob(req.params.jobId)));
 router.post('/straight-maps/jobs/:jobId/cancel', (req, res) => success(res, cancelStraightMapJob(req.params.jobId)));
+router.delete('/straight-maps/jobs/:jobId', (req, res) => success(res, deleteStraightMapJob(req.params.jobId)));
 router.post('/straight-maps/versions/:versionId/rollback', (req, res) => success(res, rollbackStraightMapVersion(req.params.versionId)));
 
 export default router;

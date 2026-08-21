@@ -187,6 +187,7 @@ type AssetSectionProps = {
   accept: string;
   icon: React.ReactNode;
   assets: AdminDbAsset[];
+  activeStraightMapFilenames?: string[];
   onChanged: () => Promise<void>;
 };
 
@@ -220,7 +221,7 @@ const rackCoordinatesOnly = (input: Record<string, unknown>) => Object.fromEntri
   ])
 );
 
-const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, accept, icon, assets, onChanged }) => {
+const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, accept, icon, assets, activeStraightMapFilenames = [], onChanged }) => {
   const { showToast } = useApp();
   const [stationName, setStationName] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -266,6 +267,12 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
       showToast('국사명과 파일을 선택해주세요.', 'warning');
       return;
     }
+    const duplicateStraightMapUpload = Boolean(file && type === 'b2c' && /\.xlsx$/i.test(file.name)
+      && activeStraightMapFilenames.some((name) => name.localeCompare(file.name, undefined, { sensitivity: 'accent' }) === 0));
+    if (duplicateStraightMapUpload) {
+      showToast('같은 이름의 직선도 파일이 이미 업로드 또는 렌더링 중입니다. 기존 작업이 끝난 뒤 다시 시도해주세요.', 'warning');
+      return;
+    }
     setSaving(true);
     try {
       let records: Array<Record<string, unknown>> = [];
@@ -282,6 +289,9 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
       }
       let coordinates: Record<string, unknown> = {};
       if (coordinateText.trim()) coordinates = rackCoordinatesOnly(JSON.parse(coordinateText) as Record<string, unknown>);
+      const straightMapJob = !editingAsset && file && type === 'b2c' && /\.xlsx$/i.test(file.name)
+        ? await straightMapAdminApi.upload(file, stationName.trim())
+        : null;
       if (editingAsset) {
         await adminDbApi.updateAsset(editingAsset.id, {
           stationName: stationName.trim(),
@@ -301,10 +311,7 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
           records,
           coordinates,
         });
-        if (type === 'b2c' && /\.xlsx$/i.test(file.name)) {
-          const job = await straightMapAdminApi.upload(file, stationName.trim());
-          showToast(`XLSX를 R2에 직접 업로드했습니다. 작업 ${job.jobId.slice(0, 8)}은 사무실 렌더러 실행을 기다립니다.`, 'info');
-        }
+        if (straightMapJob) showToast(`XLSX를 R2에 직접 업로드했습니다. 작업 ${straightMapJob.jobId.slice(0, 8)}은 사무실 렌더러 실행을 기다립니다.`, 'info');
       }
       const completedAction = editingAsset ? '수정' : '등록';
       resetEditor();
@@ -332,6 +339,8 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
   };
 
   const coordinatePoints = parseCoordinates(coordinateText);
+  const duplicateStraightMapUpload = Boolean(file && type === 'b2c' && /\.xlsx$/i.test(file.name)
+    && activeStraightMapFilenames.some((name) => name.localeCompare(file.name, undefined, { sensitivity: 'accent' }) === 0));
   const removeCoordinate = (label: string) => {
     try {
       const current = coordinateText.trim() ? JSON.parse(coordinateText) as Record<string, unknown> : {};
@@ -364,7 +373,7 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-xs font-bold text-slate-600">국사명<input className={`${inputClass} mt-1.5`} value={stationName} onChange={(event) => setStationName(event.target.value)} placeholder="예: 안성국사" /></label>
         <label className="text-xs font-bold text-slate-600 lg:col-span-2">{editingAsset ? '새 평면도 파일 (선택)' : '파일'}<input key={editingAsset?.id || 'new-asset'} className="mt-1.5 block h-10 w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs" type="file" accept={accept} onChange={(event) => setFile(event.target.files?.[0] || null)} /></label>
-        <button type="button" className={`${primaryButtonClass} self-end`} disabled={saving} onClick={() => void save()}>{editingAsset ? <Save className="h-4 w-4" /> : <Upload className="h-4 w-4" />} {saving ? '저장 중...' : editingAsset ? '수정 저장' : '신규 등록'}</button>
+        <button type="button" className={`${primaryButtonClass} self-end`} disabled={saving || duplicateStraightMapUpload} onClick={() => void save()}>{editingAsset ? <Save className="h-4 w-4" /> : <Upload className="h-4 w-4" />} {saving ? '저장 중...' : duplicateStraightMapUpload ? '동일 파일 업로드 중' : editingAsset ? '수정 저장' : '신규 등록'}</button>
       </div>
       {type === 'floor_plan' ? (
         <div className="mt-3 space-y-3">
@@ -688,6 +697,32 @@ export const AdminUsersView: React.FC = () => {
     }
   };
 
+  const cancelStraightMapRender = async (job: StraightMapJob) => {
+    if (!window.confirm(`${job.filename} 직선도 작업을 취소하시겠습니까?`)) return;
+    try {
+      await straightMapAdminApi.cancel(job.id);
+      showToast('직선도 작업 취소를 요청했습니다.', 'success');
+      await loadAdminData();
+    } catch (cancelError) {
+      showToast(cancelError instanceof Error ? cancelError.message : '직선도 작업을 취소하지 못했습니다.', 'error');
+    }
+  };
+
+  const removeStraightMapRender = async (job: StraightMapJob) => {
+    if (!window.confirm(`${job.filename} 직선도 작업 기록을 삭제하시겠습니까?`)) return;
+    try {
+      await straightMapAdminApi.remove(job.id);
+      showToast('직선도 작업 기록을 삭제했습니다.', 'success');
+      await loadAdminData();
+    } catch (removeError) {
+      showToast(removeError instanceof Error ? removeError.message : '직선도 작업 기록을 삭제하지 못했습니다.', 'error');
+    }
+  };
+
+  const activeStraightMapFilenames = straightMapJobs
+    .filter((job) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status))
+    .map((job) => job.filename);
+
   return (
     <div className="space-y-4 pb-24 sm:pb-8">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
@@ -791,7 +826,7 @@ export const AdminUsersView: React.FC = () => {
         </div>      </section>
 
       <AssetSection type="floor_plan" title="국사 평면도 DB" description="국사 평면도 이미지는 파일 저장소에, Rack 위치 비율 좌표는 DB에 관리합니다." accept=".png,.jpg,.jpeg,.webp" icon={<Building2 className="h-5 w-5" />} assets={floorPlans} onChanged={loadAdminData} />
-      <AssetSection type="b2c" title="B2C 선번장 / 직선도 DB" description="선번장 D/H/L~P열을 조회 DB로 교체하고, 나머지 직선도 시트는 국사별 버전 지도·Deep Zoom 타일로 순차 생성합니다." accept=".xlsx,.xls,.csv" icon={<Cable className="h-5 w-5" />} assets={b2cAssets} onChanged={loadAdminData} />
+      <AssetSection type="b2c" title="B2C 선번장 / 직선도 DB" description="선번장 D/H/L~P열을 조회 DB로 교체하고, 나머지 직선도 시트는 국사별 버전 지도·Deep Zoom 타일로 순차 생성합니다." accept=".xlsx,.xls,.csv" icon={<Cable className="h-5 w-5" />} assets={b2cAssets} activeStraightMapFilenames={activeStraightMapFilenames} onChanged={loadAdminData} />
 
       <section className={panelClass}>
         <div className="flex items-center gap-2.5"><Cable className="h-5 w-5 text-[#2878B5]" /><div><h2 className="font-extrabold text-[#173B57]">직선도 렌더링 작업</h2><p className="text-xs text-slate-500">새 버전을 검증하는 동안 기존 ACTIVE 직선도는 계속 제공됩니다.</p></div></div>
@@ -802,7 +837,8 @@ export const AdminUsersView: React.FC = () => {
                 <div><strong className="text-[#173B57]">{job.stationName} · {job.filename}</strong><p className="mt-1 text-slate-500">{job.status === 'WAITING_FOR_OFFICE_RENDERER' ? '사무실 렌더러 실행 대기 중' : job.currentStep || job.status} · {job.completedSheets}/{job.totalSheets || '-'} 시트 · {Number(job.progress).toFixed(1)}%</p></div>
                 <div className="flex gap-2">
                   {['FAILED', 'RETRY_WAIT', 'CANCELLED'].includes(job.status) && job.attempt < job.maxAttempts ? <button type="button" className={secondaryButtonClass} onClick={() => void straightMapAdminApi.retry(job.id).then(loadAdminData)}>재시도</button> : null}
-                  {!['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status) ? <button type="button" className={dangerButtonClass} onClick={() => void straightMapAdminApi.cancel(job.id).then(loadAdminData)}>취소</button> : null}
+                  {!['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status) ? <button type="button" className={dangerButtonClass} onClick={() => void cancelStraightMapRender(job)}>취소</button> : null}
+                  {['FAILED', 'CANCELLED'].includes(job.status) ? <button type="button" className={dangerButtonClass} onClick={() => void removeStraightMapRender(job)}><Trash2 className="h-3.5 w-3.5" /> 삭제</button> : null}
                 </div>
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-[#2878B5]" style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div>
