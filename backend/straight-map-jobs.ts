@@ -10,6 +10,7 @@ import { ApiError } from './http';
 import {
   headR2Object,
   inspectR2Prefix,
+  putR2Object,
   r2SignedUrlExpiresAt,
   signedR2DownloadUrl,
   signedR2UploadUrl,
@@ -178,24 +179,15 @@ export const createStraightMapUpload = async (input: {
     db.exec('ROLLBACK');
     throw error;
   }
-  const metadata = { sha256: sourceSha256 };
   try {
     return {
       jobId,
       sourceKey,
       uploadRequired: !existing,
-      uploadUrl: existing ? null : (usesR2Storage
-        ? await signedR2UploadUrl(sourceKey, contentType, input.size, metadata)
-        : `/api/admin/straight-maps/local-uploads/${jobId}`),
-      uploadTarget: usesR2Storage ? 'r2' : 'api',
-      requiredHeaders: existing ? {} : {
-        'Content-Type': contentType,
-        ...(usesR2Storage ? {
-          'Cache-Control': 'private, max-age=300',
-          'x-amz-meta-sha256': sourceSha256,
-        } : {}),
-      },
-      expiresAt: existing || !usesR2Storage ? null : r2SignedUrlExpiresAt(),
+      uploadUrl: existing ? null : `/api/admin/straight-maps/local-uploads/${jobId}`,
+      uploadTarget: 'api',
+      requiredHeaders: existing ? {} : { 'Content-Type': contentType },
+      expiresAt: null,
     };
   } catch (error) {
     db.prepare("DELETE FROM straight_map_jobs WHERE id = ? AND status = 'UPLOADING'").run(jobId);
@@ -210,7 +202,6 @@ export const storeLocalStraightMapUpload = async (
   declaredLength: number | null,
 ) => {
   requireV2();
-  if (usesR2Storage) throw new ApiError(404, '로컬 업로드 경로를 사용할 수 없습니다.', 'LOCAL_UPLOAD_UNAVAILABLE');
   const job = db.prepare(`
     SELECT source_key AS sourceKey, source_sha256 AS sourceSha256, source_size AS sourceSize,
            status, requested_by AS requestedBy
@@ -220,6 +211,31 @@ export const storeLocalStraightMapUpload = async (
   if (job.status !== 'UPLOADING') throw new ApiError(409, '이미 업로드가 끝난 직선도 작업입니다.', 'UPLOAD_ALREADY_COMPLETED');
   if (declaredLength !== null && declaredLength !== job.sourceSize) {
     throw new ApiError(400, '업로드 파일 크기가 요청과 다릅니다.', 'SOURCE_SIZE_MISMATCH');
+  }
+
+  if (usesR2Storage) {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    for await (const chunk of body) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      received += buffer.length;
+      if (received > STRAIGHT_MAP_MAX_SOURCE_SIZE || received > job.sourceSize) {
+        throw new ApiError(413, '직선도 XLSX 파일은 20MB 이하여야 합니다.', 'SOURCE_TOO_LARGE');
+      }
+      chunks.push(buffer);
+    }
+    if (received !== job.sourceSize) throw new ApiError(409, '업로드 파일 크기가 요청과 다릅니다.', 'SOURCE_SIZE_MISMATCH');
+    const source = Buffer.concat(chunks, received);
+    if (createHash('sha256').update(source).digest('hex') !== job.sourceSha256) {
+      throw new ApiError(409, '업로드 파일 SHA-256이 요청과 다릅니다.', 'SOURCE_HASH_MISMATCH');
+    }
+    const existing = await objectExists(job.sourceKey);
+    if (existing) {
+      if (existing.size !== received) throw new ApiError(409, '같은 해시의 R2 원본 크기가 일치하지 않습니다.', 'SOURCE_SIZE_CONFLICT');
+    } else {
+      await putR2Object(job.sourceKey, source, STRAIGHT_MAP_XLSX_MIME, { sha256: job.sourceSha256 });
+    }
+    return { jobId, uploaded: true, size: received };
   }
 
   const target = localSourcePath(job.sourceKey);

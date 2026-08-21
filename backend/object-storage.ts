@@ -32,13 +32,19 @@ const client = () => {
 
 export const usesR2Storage = env.storageDriver === 'r2';
 
-export const putR2Object = async (key: string, body: Buffer, contentType: string) => {
+export const putR2Object = async (
+  key: string,
+  body: Buffer,
+  contentType: string,
+  metadata: Record<string, string> = {},
+) => {
   await client().send(new PutObjectCommand({
     Bucket: env.r2BucketName,
     Key: key,
     Body: body,
     ContentLength: body.length,
     ContentType: contentType,
+    Metadata: metadata,
     CacheControl: 'private, max-age=300',
   }));
 };
