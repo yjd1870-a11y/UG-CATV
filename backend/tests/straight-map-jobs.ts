@@ -232,4 +232,12 @@ const resumed = db.prepare('SELECT attempt, max_attempts AS maxAttempts FROM str
   .get(exhaustedJobId) as { attempt: number; maxAttempts: number };
 assert.equal(resumed.maxAttempts, resumed.attempt + 1);
 
+const exhaustedRetryJobId = randomUUID();
+insertJob(exhaustedRetryJobId, 'FAILED');
+db.prepare('UPDATE straight_map_jobs SET attempt = max_attempts WHERE id = ?').run(exhaustedRetryJobId);
+assert.equal(retryStraightMapJob(exhaustedRetryJobId).status, 'WAITING_FOR_OFFICE_RENDERER');
+const extendedRetry = db.prepare('SELECT attempt, max_attempts AS maxAttempts FROM straight_map_jobs WHERE id = ?')
+  .get(exhaustedRetryJobId) as { attempt: number; maxAttempts: number };
+assert.equal(extendedRetry.maxAttempts, extendedRetry.attempt + 1, 'a fixed exhausted job must receive one controlled retry');
+
 console.log('Straight-map v2 job test passed: local source/artifact streaming, lease reclaim, heartbeat, cache hit, retry, cancel, and atomic rollback.');

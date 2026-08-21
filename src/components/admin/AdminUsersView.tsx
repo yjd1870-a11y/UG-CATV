@@ -854,7 +854,7 @@ export const AdminUsersView: React.FC = () => {
               <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
                 <div><strong className="text-[#173B57]">{job.stationName} · {job.filename}</strong><p className="mt-1 text-slate-500">{job.status === 'WAITING_FOR_OFFICE_RENDERER' ? '사무실 렌더러 실행 대기 중' : job.currentStep || job.status} · {job.completedSheets}/{job.totalSheets || '-'} 시트 · {Number(job.progress).toFixed(1)}%</p></div>
                 <div className="flex gap-2">
-                  {['FAILED', 'RETRY_WAIT', 'CANCELLED'].includes(job.status) && job.attempt < job.maxAttempts ? <button type="button" className={secondaryButtonClass} onClick={() => void straightMapAdminApi.retry(job.id).then(loadAdminData)}>재시도</button> : null}
+                  {['FAILED', 'RETRY_WAIT', 'CANCELLED'].includes(job.status) ? <button type="button" className={secondaryButtonClass} onClick={() => void straightMapAdminApi.retry(job.id).then(loadAdminData)}>재시도</button> : null}
                   {!['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status) ? <button type="button" className={dangerButtonClass} onClick={() => void cancelStraightMapRender(job)}>취소</button> : null}
                   {['FAILED', 'CANCELLED'].includes(job.status) ? <button type="button" className={dangerButtonClass} onClick={() => void removeStraightMapRender(job)}><Trash2 className="h-3.5 w-3.5" /> 삭제</button> : null}
                 </div>

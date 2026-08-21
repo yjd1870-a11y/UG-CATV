@@ -345,8 +345,9 @@ export const retryStraightMapJob = (jobId: string) => {
   const changed = db.prepare(`
     UPDATE straight_map_jobs
        SET status = 'WAITING_FOR_OFFICE_RENDERER', error_code = NULL, error_message = NULL,
-           lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL, current_step = '재시도 대기 중'
-     WHERE id = ? AND status IN ('FAILED', 'RETRY_WAIT', 'CANCELLED') AND attempt < max_attempts
+           lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL, current_step = '재시도 대기 중',
+           max_attempts = MAX(max_attempts, attempt + 1)
+     WHERE id = ? AND status IN ('FAILED', 'RETRY_WAIT', 'CANCELLED')
   `).run(jobId);
   if (!changed.changes) throw new ApiError(409, '재시도할 수 없는 작업 상태입니다.', 'JOB_NOT_RETRYABLE');
   return { jobId, status: 'WAITING_FOR_OFFICE_RENDERER' };
