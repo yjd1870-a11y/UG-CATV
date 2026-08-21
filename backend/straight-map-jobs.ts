@@ -8,9 +8,11 @@ import { db } from './db';
 import { env } from './env';
 import { ApiError } from './http';
 import {
+  deleteR2Object,
   headR2Object,
   inspectR2Prefix,
   putR2Object,
+  putR2ObjectStream,
   r2SignedUrlExpiresAt,
   signedR2DownloadUrl,
   signedR2UploadUrl,
@@ -558,6 +560,9 @@ export const registerStraightMapJobSheets = (jobId: string, owner: string, sheet
 };
 
 type UploadFile = { relativeKey: string; size: number; contentType: string; sha256: string };
+const artifactContentType = (relativeKey: string) => relativeKey.endsWith('.webp') ? 'image/webp'
+  : relativeKey.endsWith('.pdf') ? 'application/pdf'
+    : 'application/json';
 const validateArtifactPart = (value: string) => value.split('/').every((part) => objectPartPattern.test(part));
 
 export const createArtifactUploadUrls = async (jobId: string, owner: string, input: {
@@ -595,24 +600,20 @@ export const createArtifactUploadUrls = async (jobId: string, owner: string, inp
     if (!Number.isSafeInteger(file.size) || file.size <= 0 || file.size > 512 * 1024 * 1024 || !sha256Pattern.test(file.sha256)) {
       throw new ApiError(400, 'artifact 파일 크기 또는 해시가 올바르지 않습니다.', 'INVALID_ARTIFACT_FILE');
     }
+    if (file.contentType !== artifactContentType(file.relativeKey)) {
+      throw new ApiError(400, 'artifact 파일 형식이 경로와 일치하지 않습니다.', 'INVALID_ARTIFACT_CONTENT_TYPE');
+    }
     const objectKey = `${prefix}/${file.relativeKey}`;
-    const cacheControl = 'private, max-age=31536000, immutable';
     return {
       relativeKey: file.relativeKey,
       objectKey,
-      uploadUrl: usesR2Storage
-        ? await signedR2UploadUrl(objectKey, file.contentType, file.size, { sha256: file.sha256 })
-        : `/api/renderer/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactSetId)}`
-          + `?rendererId=${encodeURIComponent(owner)}&relativeKey=${encodeURIComponent(file.relativeKey)}`
-          + `&size=${file.size}&sha256=${file.sha256}`,
-      requiredHeaders: usesR2Storage ? {
-        'Content-Type': file.contentType,
-        'Cache-Control': cacheControl,
-        'x-amz-meta-sha256': file.sha256,
-      } : { 'Content-Type': 'application/octet-stream' },
+      uploadUrl: `/api/renderer/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactSetId)}`
+        + `?rendererId=${encodeURIComponent(owner)}&relativeKey=${encodeURIComponent(file.relativeKey)}`
+        + `&size=${file.size}&sha256=${file.sha256}`,
+      requiredHeaders: { 'Content-Type': 'application/octet-stream' },
     };
   }));
-  return { artifactSetId, prefix, expiresAt: usesR2Storage ? r2SignedUrlExpiresAt() : null, uploads };
+  return { artifactSetId, prefix, expiresAt: null, uploads };
 };
 
 export const storeLocalStraightMapArtifact = async (input: {
@@ -625,7 +626,6 @@ export const storeLocalStraightMapArtifact = async (input: {
   declaredLength: number | null;
   body: Readable;
 }) => {
-  if (usesR2Storage) throw new ApiError(404, '로컬 artifact 업로드를 사용할 수 없습니다.', 'LOCAL_ARTIFACT_UNAVAILABLE');
   claimedJob(input.jobId, input.owner);
   if (!/^[a-f0-9-]{36}$/i.test(input.artifactSetId) || !validateArtifactPart(input.relativeKey)
     || input.relativeKey.startsWith('/') || input.relativeKey.includes('..')) {
@@ -644,6 +644,40 @@ export const storeLocalStraightMapArtifact = async (input: {
   `).get(input.jobId, input.artifactSetId);
   if (!assigned) throw new ApiError(409, '작업에 할당되지 않은 artifact set입니다.', 'ARTIFACT_NOT_ASSIGNED');
   const objectKey = `line-diagrams/artifacts/${input.artifactSetId}/${input.relativeKey}`;
+  if (usesR2Storage) {
+    const hash = createHash('sha256');
+    let received = 0;
+    const verifier = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        received += chunk.length;
+        if (received > input.expectedSize) {
+          callback(new ApiError(413, 'artifact 크기가 요청보다 큽니다.', 'ARTIFACT_TOO_LARGE'));
+          return;
+        }
+        hash.update(chunk);
+        callback(null, chunk);
+      },
+    });
+    try {
+      await putR2ObjectStream(
+        objectKey,
+        input.body.pipe(verifier),
+        input.expectedSize,
+        artifactContentType(input.relativeKey),
+        { sha256: input.expectedSha256 },
+      );
+      if (received !== input.expectedSize) {
+        throw new ApiError(409, 'artifact 크기가 요청과 다릅니다.', 'ARTIFACT_SIZE_MISMATCH');
+      }
+      if (hash.digest('hex') !== input.expectedSha256) {
+        throw new ApiError(409, 'artifact SHA-256이 요청과 다릅니다.', 'ARTIFACT_HASH_MISMATCH');
+      }
+      return { uploaded: true, relativeKey: input.relativeKey, size: received };
+    } catch (error) {
+      await deleteR2Object(objectKey).catch(() => undefined);
+      throw error;
+    }
+  }
   const target = resolveLocalStraightMapObject(objectKey);
   const temporary = `${target}.${randomUUID()}.upload`;
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
