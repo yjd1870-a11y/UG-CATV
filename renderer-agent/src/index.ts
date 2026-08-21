@@ -37,7 +37,12 @@ const api = async <T>(endpoint: string, body: Record<string, unknown> = {}) => {
     headers: { Authorization: `Bearer ${deviceToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ rendererId, ...body }),
   });
-  const payload = await response.json() as Envelope<T>;
+  const responseText = await response.text();
+  let payload: Envelope<T>;
+  try { payload = JSON.parse(responseText) as Envelope<T>; }
+  catch {
+    throw new Error(`Renderer API가 JSON이 아닌 응답을 반환했습니다 (${response.status}, ${endpoint}). 잠시 후 재시도합니다.`);
+  }
   if (!response.ok || !payload.success) {
     const failed = payload as Extract<Envelope<T>, { success: false }>;
     throw new Error(`${failed.code || response.status}: ${failed.message || '렌더러 API 요청 실패'}`);
@@ -609,13 +614,19 @@ if (process.env.CATV_RENDERER_LIBRARY_MODE !== '1') {
   const session = await api<{ profile: Record<string, number>; rendererProfileHash: string }>('/session');
   console.log(`[CATV] renderer=${rendererId} profile=${session.rendererProfileHash}`);
   do {
-    const claimed = await api<{ job: Record<string, unknown> | null }>('/jobs/claim');
-    if (!claimed.job) {
-      console.log('[CATV] 대기 작업이 없습니다.');
-      if (once) break;
-      await new Promise((resolve) => setTimeout(resolve, 30_000));
-      continue;
+    try {
+      const claimed = await api<{ job: Record<string, unknown> | null }>('/jobs/claim');
+      if (!claimed.job) {
+        console.log('[CATV] 대기 작업이 없습니다.');
+        if (once) break;
+        await new Promise((resolve) => setTimeout(resolve, 30_000));
+        continue;
+      }
+      await processJob(claimed.job, session.profile);
+    } catch (error) {
+      console.error('[CLAIM_RETRY]', error instanceof Error ? error.message : String(error));
+      if (once) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
     }
-    await processJob(claimed.job, session.profile);
   } while (!once);
 }

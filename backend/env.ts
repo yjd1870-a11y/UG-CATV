@@ -88,6 +88,7 @@ export const env = {
   straightMapWebpEffort: numberValue('STRAIGHT_MAP_WEBP_EFFORT', 2, 0, 6),
   straightMapTileConcurrency: numberValue('STRAIGHT_MAP_TILE_CONCURRENCY', 2, 1, 4),
   straightMapUploadConcurrency: numberValue('STRAIGHT_MAP_UPLOAD_CONCURRENCY', 6, 1, 8),
+  straightMapDirectR2UploadEnabled: booleanValue('STRAIGHT_MAP_DIRECT_R2_UPLOAD_ENABLED', true),
   straightMapLeaseSeconds: numberValue('STRAIGHT_MAP_LEASE_SECONDS', 600, 300, 900),
   sessionSecret: process.env.SESSION_SECRET || 'development-only-change-me',
   sessionTtlHours: numberValue('SESSION_TTL_HOURS', 12, 1, 168),

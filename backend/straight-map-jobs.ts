@@ -647,7 +647,7 @@ export const createArtifactUploadUrls = async (jobId: string, owner: string, inp
     const apiUploadUrl = `/api/renderer/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactSetId)}`
       + `?rendererId=${encodeURIComponent(owner)}&relativeKey=${encodeURIComponent(file.relativeKey)}`
       + `&size=${file.size}&sha256=${file.sha256}`;
-    if (usesR2Storage) {
+    if (usesR2Storage && env.straightMapDirectR2UploadEnabled) {
       return {
         relativeKey: file.relativeKey,
         objectKey,

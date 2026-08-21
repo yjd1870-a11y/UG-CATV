@@ -59,3 +59,5 @@ services:
         value: "2"
       - key: STRAIGHT_MAP_UPLOAD_CONCURRENCY
         value: "6"
+      - key: STRAIGHT_MAP_DIRECT_R2_UPLOAD_ENABLED
+        value: "false"
