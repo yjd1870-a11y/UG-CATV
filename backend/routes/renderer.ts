@@ -4,6 +4,7 @@ import { env } from '../env';
 import { ApiError, asText, asyncRoute, success } from '../http';
 import {
   claimStraightMapJob,
+  checkpointStraightMapJobSheet,
   completeStraightMapJob,
   createArtifactUploadUrls,
   createStraightMapSourceRepairUploadUrl,
@@ -93,12 +94,18 @@ router.post('/jobs/:jobId/progress', (req, res) => {
     progress: Number(req.body?.progress),
     currentSheet: typeof req.body?.currentSheet === 'string' ? req.body.currentSheet : undefined,
     currentStep: typeof req.body?.currentStep === 'string' ? req.body.currentStep : undefined,
+    metrics: req.body?.metrics && typeof req.body.metrics === 'object' ? req.body.metrics : undefined,
+    tileCount: Number(req.body?.tileCount || 0),
+    artifactBytes: Number(req.body?.artifactBytes || 0),
   }));
 });
 
 router.post('/jobs/:jobId/sheets', (req, res) => {
   if (!Array.isArray(req.body?.sheetNames)) throw new ApiError(400, 'sheetNames 배열이 필요합니다.', 'INVALID_SHEETS');
-  success(res, { sheets: registerStraightMapJobSheets(req.params.jobId, owner(req.body), req.body.sheetNames) });
+  success(res, { sheets: registerStraightMapJobSheets(
+    req.params.jobId, owner(req.body), req.body.sheetNames,
+    req.body?.sheetHashes && typeof req.body.sheetHashes === 'object' ? req.body.sheetHashes : {},
+  ) });
 });
 
 router.post('/jobs/:jobId/artifacts/upload-urls', asyncRoute(async (req, res) => {
@@ -128,6 +135,11 @@ router.put('/jobs/:jobId/artifacts/:artifactSetId', asyncRoute(async (req, res) 
 router.post('/jobs/:jobId/complete', asyncRoute(async (req, res) => {
   if (!Array.isArray(req.body?.artifacts)) throw new ApiError(400, 'artifacts 배열이 필요합니다.', 'INVALID_ARTIFACTS');
   success(res, await completeStraightMapJob(req.params.jobId, owner(req.body), req.body.artifacts));
+}));
+
+router.post('/jobs/:jobId/sheets/checkpoint', asyncRoute(async (req, res) => {
+  if (!req.body?.artifact || typeof req.body.artifact !== 'object') throw new ApiError(400, '체크포인트 artifact가 필요합니다.', 'INVALID_CHECKPOINT');
+  success(res, await checkpointStraightMapJobSheet(req.params.jobId, owner(req.body), req.body.artifact));
 }));
 
 router.post('/jobs/:jobId/fail', (req, res) => {

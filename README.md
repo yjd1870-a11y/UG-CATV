@@ -6,7 +6,7 @@ Vite + React 화면을 유지하면서 Express API와 SQLite 데이터베이스�
 
 - 관리자 B2C/직선도 XLSX 업로드 시 ZIP 내부의 worksheet, DrawingML, sharedStrings XML만 먼저 분석합니다.
 - 도형/그룹/셀 텍스트의 EMU 원본 좌표, 중심 좌표, 정규화 좌표와 검색 문자열을 `map_versions`, `map_objects`에 버전별 저장합니다.
-- 검색 좌표 등록 후 Windows Excel 원본 렌더링 → PDF → 고해상도 PNG → 256px WebP Deep Zoom 타일 생성을 백그라운드에서 수행합니다.
+- 검색 좌표 등록 후 Windows Excel 원본 렌더링 → PDF → 페이지 스트리밍 → 512px WebP Deep Zoom 타일 생성을 백그라운드에서 수행합니다.
 - 새 버전이 완료되기 전에는 기존 `ACTIVE` 버전을 유지하고, 완료 시에만 이전 버전을 `ARCHIVED`로 전환합니다.
 - CELL/B2C의 기존 직선도 버튼은 OpenSeadragon 지도 뷰어로 연결되며 exact/normalized/prefix/partial 순서 검색, 다중 결과 선택, 자동 이동과 마커를 지원합니다.
 
@@ -254,7 +254,7 @@ npm run build
 - CELL 직선도는 조회된 국사의 OTX/ORX 노드 시트에서 CELL명 기준 공백 제외 연속 6글자를 검색합니다. B2C 직선도는 선번장 D열 노드 시트에서 L~P 검색값 기준 연속 5글자를 검색하고 첫 좌표를 즉시 표시합니다.
 - 선번장을 제외한 모든 시트는 각각 독립된 직선도로 등록됩니다. `국사 + 시트명`을 동일 지도 키로 사용하므로 다음 업로드에서 시트별 버전이 이어집니다.
 - 새 직선도 렌더링이 완료되기 전에는 기존 ACTIVE 버전을 계속 제공합니다. Excel 도형의 실제 끝점까지 인쇄 범위를 넓히고, 여러 PDF 페이지를 원래 지도 순서로 결합한 뒤 PNG → WebP Deep Zoom 타일을 순차 생성합니다. CELL은 PDF에 실제로 그려진 식별문자 중심, B2C는 가장 가까운 인쇄 표기 중심으로 좌표를 보정합니다.
-- 렌더링 해상도는 `STRAIGHT_MAP_DPI`로 조정할 수 있으며 기본값은 1000, 허용 범위는 300~1200입니다.
+- 신규 렌더링 기본값은 `STRAIGHT_MAP_TARGET_DPI=1100`, `STRAIGHT_MAP_TILE_SIZE=512`, `STRAIGHT_MAP_WEBP_QUALITY=94`, `STRAIGHT_MAP_WEBP_EFFORT=2`입니다. 기존 버전은 각 Manifest의 DPI와 tileSize를 그대로 사용합니다.
 
 관련 검증 명령:
 

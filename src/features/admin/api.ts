@@ -99,6 +99,9 @@ export type StraightMapJob = {
   startedAt: string | null;
   completedAt: string | null;
   cacheHitSheets: number;
+  metricsJson: string;
+  totalTileCount: number;
+  totalArtifactBytes: number;
 };
 
 export const adminApi = {

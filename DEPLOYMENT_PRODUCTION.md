@@ -81,6 +81,8 @@ https://www.ugt-transmission-network.com
 
 로컬 개발에서는 v2 경로가 기본 활성화되며 XLSX를 로컬 디스크로 스트리밍 저장합니다. 운영은 R2를 사용하고 `STRAIGHT_MAP_PIPELINE_V2_ENABLED=true`로 배포합니다. 배포 전에 DB/R2 백업과 파일럿 검증을 완료하고, Windows 렌더러가 작업을 가져가려면 `STRAIGHT_MAP_RENDERER_DEVICE_TOKEN`을 32바이트 이상의 별도 비밀값으로 설정합니다. 토큰이 비어 있으면 업로드 작업은 안전하게 대기하고 렌더러 API만 `RENDERER_NOT_CONFIGURED`로 차단됩니다.
 
+직선도 운영 기본값은 `STRAIGHT_MAP_TARGET_DPI=1100`, `STRAIGHT_MAP_TILE_SIZE=512`, `STRAIGHT_MAP_WEBP_QUALITY=94`, `STRAIGHT_MAP_WEBP_EFFORT=2`, `STRAIGHT_MAP_TILE_CONCURRENCY=2`, `STRAIGHT_MAP_UPLOAD_CONCURRENCY=6`입니다. Render 재배포 후 Windows Renderer Agent도 재시작해야 같은 프로필을 받습니다. 기존 1200 DPI·256px ACTIVE 버전은 Manifest 기반으로 계속 제공되며, 신규 버전의 검증과 원자적 ACTIVE 전환이 끝나기 전에는 교체되지 않습니다.
+
 ## 배포 전 검증
 
 ```powershell

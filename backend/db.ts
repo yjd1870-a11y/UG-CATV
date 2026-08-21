@@ -599,6 +599,10 @@ export const createSchema = () => {
   ensureColumn('map_versions', 'rendered_dpi', 'INTEGER');
   ensureColumn('map_versions', 'archived_at', 'TEXT');
   ensureColumn('map_objects', 'compact_text', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('straight_map_jobs', 'metrics_json', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn('straight_map_jobs', 'total_tile_count', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('straight_map_jobs', 'total_artifact_bytes', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('straight_map_job_sheets', 'checkpoint_json', 'TEXT');
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_station_key ON catv_b2c_lines(station_key);
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_normalized_search ON catv_b2c_lines(normalized_search);

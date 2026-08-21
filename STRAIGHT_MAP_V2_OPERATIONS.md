@@ -124,7 +124,7 @@ prefix 전체에 무조건적인 짧은 Lifecycle을 적용하면 rollback artif
 저장소의 자동 테스트는 DB migration, lease 재CLAIM, heartbeat, retry/cancel, cache 판정, rollback, 기존 좌표 추출, 빌드와 API 회귀를 검증한다. 실제 Excel/R2/운영 XLSX가 필요한 다음 값은 사무실 PC 파일럿 전에는 확정할 수 없다.
 
 - 송탄국사 실제 시트 목록과 표식 표시 결과
-- 1200 DPI 렌더링 시간 및 최대 Excel/Poppler/Node 메모리
+- 1100 DPI·512px 렌더링 시간 및 최대 Excel/Poppler/Node 메모리
 - Render 운영 RSS, R2 객체 수·용량
 - Excel/PDF/타일과 마커의 실측 1px 오차
 - 모바일 pan/zoom 및 3개 운영 직선도의 시각 승인

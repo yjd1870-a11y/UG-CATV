@@ -191,6 +191,19 @@ type AssetSectionProps = {
   onChanged: () => Promise<void>;
 };
 
+const formatDuration = (milliseconds: number) => {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return '-';
+  const seconds = Math.round(milliseconds / 1000);
+  if (seconds < 60) return `${seconds}초`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}분 ${seconds % 60}초`;
+};
+
+const straightMapMetrics = (value: string) => {
+  try { return JSON.parse(value || '{}') as Record<string, number>; }
+  catch { return {}; }
+};
+
 type CoordinatePoint = { label: string; xRatio: number; yRatio: number };
 
 const parseCoordinates = (text: string): CoordinatePoint[] => {
@@ -831,7 +844,12 @@ export const AdminUsersView: React.FC = () => {
       <section className={panelClass}>
         <div className="flex items-center gap-2.5"><Cable className="h-5 w-5 text-[#2878B5]" /><div><h2 className="font-extrabold text-[#173B57]">직선도 렌더링 작업</h2><p className="text-xs text-slate-500">새 버전을 검증하는 동안 기존 ACTIVE 직선도는 계속 제공됩니다.</p></div></div>
         <div className="mt-4 space-y-2">
-          {straightMapJobs.length ? straightMapJobs.map((job) => (
+          {straightMapJobs.length ? straightMapJobs.map((job) => {
+            const metrics = straightMapMetrics(job.metricsJson);
+            const uploadRate = metrics.uploadMs > 0
+              ? Number(job.totalArtifactBytes || 0) / (metrics.uploadMs / 1000)
+              : 0;
+            return (
             <div key={job.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
               <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
                 <div><strong className="text-[#173B57]">{job.stationName} · {job.filename}</strong><p className="mt-1 text-slate-500">{job.status === 'WAITING_FOR_OFFICE_RENDERER' ? '사무실 렌더러 실행 대기 중' : job.currentStep || job.status} · {job.completedSheets}/{job.totalSheets || '-'} 시트 · {Number(job.progress).toFixed(1)}%</p></div>
@@ -843,8 +861,18 @@ export const AdminUsersView: React.FC = () => {
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-[#2878B5]" style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-slate-500"><span>Heartbeat: {formatDate(job.heartbeatAt)}</span><span>시도: {job.attempt}/{job.maxAttempts}</span><span>캐시: {job.cacheHitSheets} 시트</span>{job.errorMessage ? <span className="font-bold text-red-600">{job.errorCode}: {job.errorMessage}</span> : null}</div>
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-slate-500">
+                <span>다운로드 {formatDuration(metrics.downloadMs)}</span>
+                <span>Excel 시작 {formatDuration(metrics.excelStartMs)} · 열기 {formatDuration(metrics.workbookOpenMs)} · PDF {formatDuration(metrics.pdfGenerationMs)}</span>
+                <span>PDF 래스터 {formatDuration(metrics.pdfRasterMs)}</span>
+                <span>타일 {formatDuration(metrics.tileGenerationMs)} (WebP CPU {formatDuration(metrics.webpEncodeMs)})</span>
+                <span>해시 {formatDuration(metrics.checksumMs)}</span>
+                <span>업로드 {formatDuration(metrics.uploadMs)} · {uploadRate > 0 ? `${formatBytes(uploadRate)}/s` : '-'} · 재시도 {metrics.uploadRetryCount || 0}회</span>
+                <span>검증 {formatDuration(metrics.verifyArtifactsMs)} · ACTIVE {formatDuration(metrics.activeTransitionMs)}</span>
+                <span>{Number(job.totalTileCount || 0).toLocaleString('ko-KR')} 타일 · {formatBytes(Number(job.totalArtifactBytes || 0))}</span>
+              </div>
             </div>
-          )) : <p className="rounded-xl bg-slate-50 p-5 text-center text-xs text-slate-400">등록된 직선도 렌더링 작업이 없습니다.</p>}
+          ); }) : <p className="rounded-xl bg-slate-50 p-5 text-center text-xs text-slate-400">등록된 직선도 렌더링 작업이 없습니다.</p>}
         </div>
       </section>
 

@@ -4,6 +4,7 @@ import { Readable } from 'node:stream';
 import { db, initializeDatabase } from '../db';
 import {
   cancelStraightMapJob,
+  checkpointStraightMapJobSheet,
   claimStraightMapJob,
   completeStraightMapUpload,
   createArtifactUploadUrls,
@@ -16,12 +17,20 @@ import {
   retryStraightMapJob,
   rollbackStraightMapVersion,
   straightMapCacheKey,
+  straightMapRendererProfile,
   straightMapRendererProfileHash,
   storeLocalStraightMapUpload,
   storeLocalStraightMapArtifact,
+  type CompletedArtifact,
 } from '../straight-map-jobs';
 
 await initializeDatabase();
+assert.equal(straightMapRendererProfile().dpi, 1100);
+assert.equal(straightMapRendererProfile().tileSize, 512);
+assert.equal(straightMapRendererProfile().webpQuality, 94);
+assert.equal(straightMapRendererProfile().webpEffort, 2);
+assert.equal(straightMapRendererProfile().tileConcurrency, 2);
+assert.equal(straightMapRendererProfile().uploadConcurrency, 6);
 
 const insertJob = (id: string, status = 'WAITING_FOR_OFFICE_RENDERER') => db.prepare(`
   INSERT INTO straight_map_jobs (
@@ -156,6 +165,64 @@ assert.equal((await createArtifactUploadUrls(localUpload.jobId, 'local-agent-ret
   artifactSetId: replacementArtifactSetId,
   files: [{ relativeKey: 'source-info.json', size: localArtifact.length, contentType: 'application/json', sha256: localArtifactHash }],
 })).artifactSetId, replacementArtifactSetId);
+
+const checkpointJobId = randomUUID();
+insertJob(checkpointJobId);
+assert.equal((claimStraightMapJob('checkpoint-agent') as Record<string, unknown>).id, checkpointJobId);
+registerStraightMapJobSheets(checkpointJobId, 'checkpoint-agent', ['완료시트']);
+const checkpointArtifactSetId = randomUUID();
+const coordinates = [{ shapeId: 'shape-1', label: 'B2B', xRatio: 0.5, yRatio: 0.5, width: 1, height: 1 }];
+const coordinateJson = JSON.stringify(coordinates);
+const coordinateHash = createHash('sha256').update(coordinateJson).digest('hex');
+const manifest: CompletedArtifact['manifest'] = {
+  schemaVersion: 1, complete: true, jobId: checkpointJobId, artifactSetId: checkpointArtifactSetId,
+  sourceSha256: 'a'.repeat(64), sheetName: '완료시트', rendererProfileHash: straightMapRendererProfileHash(),
+  rendererEngine: 'windows-excel-pdf', excelPrintArea: '$A$1', worksheetWidthPoints: 1,
+  worksheetHeightPoints: 1, pageColumns: 1, pageRows: 1, pdfPageBox: { widthPoints: 1, heightPoints: 1 },
+  cropLeftPoints: 0, cropTopPoints: 0, canvasWidthPoints: 1, canvasHeightPoints: 1,
+  dpi: 1100, renderedWidth: 16, renderedHeight: 16, coordinateScaleX: 16, coordinateScaleY: 16,
+  tileSize: 512, webpQuality: 94, webpEffort: 2, maxLevel: 4, tileCount: 1,
+  coordinateCount: coordinates.length, coordinateHash, levels: [{ level: 4, columns: 1, rows: 1, tileCount: 1 }],
+};
+const manifestJson = JSON.stringify(manifest);
+const fixtureFiles = [
+  { relativeKey: 'source-info.json', contentType: 'application/json', body: Buffer.from('{}') },
+  { relativeKey: 'map.pdf', contentType: 'application/pdf', body: Buffer.from('%PDF-checkpoint') },
+  { relativeKey: 'coordinates.json', contentType: 'application/json', body: Buffer.from(coordinateJson) },
+  { relativeKey: 'checksums.json', contentType: 'application/json', body: Buffer.from('{}') },
+  { relativeKey: 'tiles/4/0_0.webp', contentType: 'image/webp', body: Buffer.from('RIFF-checkpoint') },
+  { relativeKey: 'manifest.json', contentType: 'application/json', body: Buffer.from(manifestJson) },
+];
+await createArtifactUploadUrls(checkpointJobId, 'checkpoint-agent', {
+  sheetName: '완료시트', artifactSetId: checkpointArtifactSetId,
+  files: fixtureFiles.map((file) => ({
+    relativeKey: file.relativeKey, contentType: file.contentType, size: file.body.length,
+    sha256: createHash('sha256').update(file.body).digest('hex'),
+  })),
+});
+for (const file of fixtureFiles) {
+  const hash = createHash('sha256').update(file.body).digest('hex');
+  await storeLocalStraightMapArtifact({
+    jobId: checkpointJobId, owner: 'checkpoint-agent', artifactSetId: checkpointArtifactSetId,
+    relativeKey: file.relativeKey, expectedSize: file.body.length, expectedSha256: hash,
+    declaredLength: file.body.length, body: Readable.from(file.body),
+  });
+}
+const checkpointArtifact: CompletedArtifact = {
+  artifactSetId: checkpointArtifactSetId, sheetName: '완료시트', manifest,
+  manifestSha256: createHash('sha256').update(manifestJson).digest('hex'), coordinates,
+};
+assert.equal((await checkpointStraightMapJobSheet(checkpointJobId, 'checkpoint-agent', checkpointArtifact)).status, 'CHECKPOINT');
+assert.equal(failStraightMapJob(checkpointJobId, 'checkpoint-agent', 'INTERRUPTED', 'after checkpoint').status, 'RETRY_WAIT');
+assert.equal(retryStraightMapJob(checkpointJobId).status, 'WAITING_FOR_OFFICE_RENDERER');
+assert.equal((claimStraightMapJob('checkpoint-agent-retry') as Record<string, unknown>).id, checkpointJobId);
+const reusedCheckpoint = (registerStraightMapJobSheets(checkpointJobId, 'checkpoint-agent-retry', ['완료시트']) as Array<Record<string, unknown>>)[0];
+assert.equal(reusedCheckpoint.status, 'CHECKPOINT');
+assert.equal(reusedCheckpoint.artifactSetId, checkpointArtifactSetId);
+assert.ok(reusedCheckpoint.checkpointJson);
+assert.equal((db.prepare('SELECT status FROM map_versions WHERE id = ?').get(oldVersionId) as { status: string }).status, 'ACTIVE',
+  'processing, failure, and retry must not replace the existing ACTIVE version');
+assert.equal((db.prepare('SELECT active_artifact_set_id AS id FROM straight_maps WHERE map_id = ?').get(mapId) as { id: string }).id, oldArtifact);
 
 const exhaustedJobId = randomUUID();
 insertJob(exhaustedJobId, 'WAITING_FOR_OFFICE_RENDERER');

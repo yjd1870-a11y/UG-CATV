@@ -31,6 +31,12 @@ const sha256Pattern = /^[a-f0-9]{64}$/;
 const objectPartPattern = /^[A-Za-z0-9._가-힣-]+$/u;
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 const isoAfter = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
+const numericMetrics = (value: unknown) => {
+  try {
+    const parsed = JSON.parse(String(value || '{}')) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => Number.isFinite(entry[1])));
+  } catch { return {} as Record<string, number>; }
+};
 
 export const straightMapRendererProfile = () => ({
   schemaVersion: 1,
@@ -43,9 +49,15 @@ export const straightMapRendererProfile = () => ({
   dpi: env.straightMapTargetDpi,
   tileSize: env.straightMapTileSize,
   webpQuality: env.straightMapWebpQuality,
+  webpEffort: env.straightMapWebpEffort,
+  tileConcurrency: env.straightMapTileConcurrency,
+  uploadConcurrency: env.straightMapUploadConcurrency,
 });
 
-export const straightMapRendererProfileHash = () => sha256(JSON.stringify(straightMapRendererProfile()));
+export const straightMapRendererProfileHash = () => {
+  const { tileConcurrency: _tileConcurrency, uploadConcurrency: _uploadConcurrency, ...artifactProfile } = straightMapRendererProfile();
+  return sha256(JSON.stringify(artifactProfile));
+};
 export const straightMapCacheKey = (sourceSha256: string, sheetName: string, profileHash: string) => (
   sha256(`${sourceSha256}:${sheetName.normalize('NFC')}:${profileHash}`)
 );
@@ -182,12 +194,27 @@ export const createStraightMapUpload = async (input: {
     throw error;
   }
   try {
+    if (usesR2Storage && !existing) {
+      return {
+        jobId,
+        sourceKey,
+        uploadRequired: true,
+        uploadUrl: await signedR2UploadUrl(sourceKey, contentType, input.size, { sha256: sourceSha256 }),
+        uploadTarget: 'r2' as const,
+        requiredHeaders: {
+          'Content-Type': contentType,
+          'Cache-Control': 'private, max-age=300',
+          'x-amz-meta-sha256': sourceSha256,
+        },
+        expiresAt: r2SignedUrlExpiresAt(),
+      };
+    }
     return {
       jobId,
       sourceKey,
       uploadRequired: !existing,
       uploadUrl: existing ? null : `/api/admin/straight-maps/local-uploads/${jobId}`,
-      uploadTarget: 'api',
+      uploadTarget: 'api' as const,
       requiredHeaders: existing ? {} : { 'Content-Type': contentType },
       expiresAt: null,
     };
@@ -305,6 +332,8 @@ export const listStraightMapJobs = () => db.prepare(`
          j.heartbeat_at AS heartbeatAt, j.attempt, j.max_attempts AS maxAttempts,
          j.error_code AS errorCode, j.error_message AS errorMessage,
          j.created_at AS createdAt, j.started_at AS startedAt, j.completed_at AS completedAt,
+         j.metrics_json AS metricsJson, j.total_tile_count AS totalTileCount,
+         j.total_artifact_bytes AS totalArtifactBytes,
          COALESCE(SUM(CASE WHEN s.status = 'CACHE_HIT' THEN 1 ELSE 0 END), 0) AS cacheHitSheets
     FROM straight_map_jobs j
     LEFT JOIN straight_map_job_sheets s ON s.job_id = j.id
@@ -345,7 +374,7 @@ export const deleteStraightMapJob = (jobId: string) => {
     db.prepare(`
       UPDATE straight_map_artifact_sets SET status = 'FAILED'
        WHERE id IN (SELECT artifact_set_id FROM straight_map_job_sheets WHERE job_id = ?)
-         AND status = 'PREPARING'
+         AND status IN ('PREPARING', 'STAGED')
     `).run(jobId);
     db.prepare('DELETE FROM straight_map_jobs WHERE id = ?').run(jobId);
     db.prepare(`
@@ -511,6 +540,9 @@ export const progressStraightMapJob = (jobId: string, owner: string, input: {
   progress: number;
   currentSheet?: string;
   currentStep?: string;
+  metrics?: Record<string, number>;
+  tileCount?: number;
+  artifactBytes?: number;
 }) => {
   const job = claimedJob(jobId, owner);
   if (job.status === 'CANCEL_REQUESTED') return { jobId, status: 'CANCEL_REQUESTED', progress: Number(job.progress) };
@@ -519,13 +551,18 @@ export const progressStraightMapJob = (jobId: string, owner: string, input: {
   if (!Number.isFinite(progress)) throw new ApiError(400, '진행률이 올바르지 않습니다.', 'INVALID_PROGRESS');
   db.prepare(`
     UPDATE straight_map_jobs SET status = ?, progress = ?, current_sheet = ?, current_step = ?,
+           metrics_json = ?, total_tile_count = MAX(total_tile_count, ?),
+           total_artifact_bytes = MAX(total_artifact_bytes, ?),
            heartbeat_at = CURRENT_TIMESTAMP, lease_expires_at = ? WHERE id = ? AND lease_owner = ?
   `).run(input.status, progress, input.currentSheet?.slice(0, 255) || null, input.currentStep?.slice(0, 255) || null,
+    JSON.stringify(input.metrics || numericMetrics(job.metrics_json)),
+    Math.max(0, Math.floor(input.tileCount || Number(job.total_tile_count) || 0)),
+    Math.max(0, Math.floor(input.artifactBytes || Number(job.total_artifact_bytes) || 0)),
     isoAfter(env.straightMapLeaseSeconds), jobId, owner);
   return { jobId, status: input.status, progress };
 };
 
-export const registerStraightMapJobSheets = (jobId: string, owner: string, sheetNames: string[]) => {
+export const registerStraightMapJobSheets = (jobId: string, owner: string, sheetNames: string[], sheetHashes: Record<string, string> = {}) => {
   const job = claimedJob(jobId, owner);
   const unique = [...new Set(sheetNames.map((name) => name.trim()).filter(Boolean))];
   if (!unique.length || unique.length > 200) throw new ApiError(400, '렌더링할 시트 목록을 확인해주세요.', 'INVALID_SHEETS');
@@ -537,7 +574,8 @@ export const registerStraightMapJobSheets = (jobId: string, owner: string, sheet
       ON CONFLICT(job_id, sheet_name) DO NOTHING
     `);
     for (const sheetName of unique) {
-      const cacheKey = straightMapCacheKey(String(job.source_sha256), sheetName, String(job.renderer_profile_hash));
+      const sheetHash = /^[a-f0-9]{64}$/.test(sheetHashes[sheetName] || '') ? sheetHashes[sheetName] : String(job.source_sha256);
+      const cacheKey = straightMapCacheKey(sheetHash, sheetName, String(job.renderer_profile_hash));
       const existingArtifact = db.prepare(`SELECT id, status FROM straight_map_artifact_sets WHERE cache_key = ?`).get(cacheKey) as { id: string; status: string } | undefined;
       const cached = existingArtifact?.status === 'VERIFIED' ? existingArtifact : undefined;
       insert.run(randomUUID(), jobId, sheetName, cached ? 'CACHE_HIT' : 'PENDING', cacheKey, existingArtifact?.id || null,
@@ -554,7 +592,8 @@ export const registerStraightMapJobSheets = (jobId: string, owner: string, sheet
     throw error;
   }
   return db.prepare(`
-    SELECT id, sheet_name AS sheetName, status, cache_key AS cacheKey, artifact_set_id AS artifactSetId
+    SELECT id, sheet_name AS sheetName, status, cache_key AS cacheKey, artifact_set_id AS artifactSetId,
+           checkpoint_json AS checkpointJson
       FROM straight_map_job_sheets WHERE job_id = ? ORDER BY rowid
   `).all(jobId);
 };
@@ -604,9 +643,23 @@ export const createArtifactUploadUrls = async (jobId: string, owner: string, inp
       throw new ApiError(400, 'artifact 파일 형식이 경로와 일치하지 않습니다.', 'INVALID_ARTIFACT_CONTENT_TYPE');
     }
     const objectKey = `${prefix}/${file.relativeKey}`;
+    if (usesR2Storage) {
+      return {
+        relativeKey: file.relativeKey,
+        objectKey,
+        uploadTarget: 'r2' as const,
+        uploadUrl: await signedR2UploadUrl(objectKey, file.contentType, file.size, { sha256: file.sha256 }),
+        requiredHeaders: {
+          'Content-Type': file.contentType,
+          'Cache-Control': 'private, max-age=31536000, immutable',
+          'x-amz-meta-sha256': file.sha256,
+        },
+      };
+    }
     return {
       relativeKey: file.relativeKey,
       objectKey,
+      uploadTarget: 'api' as const,
       uploadUrl: `/api/renderer/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactSetId)}`
         + `?rendererId=${encodeURIComponent(owner)}&relativeKey=${encodeURIComponent(file.relativeKey)}`
         + `&size=${file.size}&sha256=${file.sha256}`,
@@ -750,6 +803,7 @@ export type StraightMapArtifactManifest = {
   coordinateScaleY: number;
   tileSize: number;
   webpQuality: number;
+  webpEffort?: number;
   maxLevel: number;
   tileCount: number;
   coordinateCount: number;
@@ -757,7 +811,7 @@ export type StraightMapArtifactManifest = {
   levels: Array<{ level: number; columns: number; rows: number; tileCount: number }>;
 };
 
-type CompletedArtifact = {
+export type CompletedArtifact = {
   artifactSetId: string;
   sheetName: string;
   manifestSha256: string;
@@ -774,7 +828,8 @@ const verifyManifestShape = (jobId: string, job: Record<string, unknown>, artifa
     throw new ApiError(409, 'Manifest 작업/원본/렌더러 정보가 일치하지 않습니다.', 'MANIFEST_IDENTITY_MISMATCH');
   }
   if (manifest.dpi !== env.straightMapTargetDpi || manifest.tileSize !== env.straightMapTileSize
-    || manifest.webpQuality !== env.straightMapWebpQuality) {
+    || manifest.webpQuality !== env.straightMapWebpQuality
+    || (manifest.webpEffort !== undefined && manifest.webpEffort !== env.straightMapWebpEffort)) {
     throw new ApiError(409, 'Manifest 렌더러 프로필 값이 서버 설정과 다릅니다.', 'MANIFEST_PROFILE_MISMATCH');
   }
   for (const value of [manifest.worksheetWidthPoints, manifest.worksheetHeightPoints,
@@ -857,6 +912,33 @@ const verifyArtifactObjects = async (artifact: CompletedArtifact) => {
     || String(coordinateHead.metadata.sha256 || '') !== artifact.manifest.coordinateHash) {
     throw new ApiError(409, 'R2 artifact 해시 메타데이터가 완료 요청과 다릅니다.', 'ARTIFACT_HASH_MISMATCH');
   }
+};
+
+export const checkpointStraightMapJobSheet = async (jobId: string, owner: string, artifact: CompletedArtifact) => {
+  const job = claimedJob(jobId, owner);
+  const sheet = db.prepare('SELECT artifact_set_id AS artifactSetId FROM straight_map_job_sheets WHERE job_id = ? AND sheet_name = ?')
+    .get(jobId, artifact.sheetName) as { artifactSetId: string | null } | undefined;
+  if (!sheet || sheet.artifactSetId !== artifact.artifactSetId) {
+    throw new ApiError(409, '체크포인트 artifact가 작업 시트와 일치하지 않습니다.', 'CHECKPOINT_ARTIFACT_MISMATCH');
+  }
+  verifyManifestShape(jobId, job, artifact);
+  await verifyArtifactObjects(artifact);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare("UPDATE straight_map_artifact_sets SET status = 'STAGED', manifest_sha256 = ?, coordinate_hash = ? WHERE id = ?")
+      .run(artifact.manifestSha256, artifact.manifest.coordinateHash, artifact.artifactSetId);
+    db.prepare(`UPDATE straight_map_job_sheets
+      SET status = 'CHECKPOINT', progress = 100, checkpoint_json = ?, completed_at = CURRENT_TIMESTAMP
+      WHERE job_id = ? AND sheet_name = ?`).run(JSON.stringify(artifact), jobId, artifact.sheetName);
+    db.prepare(`UPDATE straight_map_jobs SET completed_sheets = (
+      SELECT COUNT(*) FROM straight_map_job_sheets WHERE job_id = ? AND status IN ('CACHE_HIT', 'CHECKPOINT', 'COMPLETED')
+    ) WHERE id = ?`).run(jobId, jobId);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return { jobId, sheetName: artifact.sheetName, status: 'CHECKPOINT' };
 };
 
 const activateArtifacts = (jobId: string, artifacts: CompletedArtifact[], cachedSheets: Array<{ sheetName: string; artifactSetId: string }>) => {
@@ -994,6 +1076,7 @@ export const completeStraightMapJob = async (jobId: string, owner: string, artif
   const supplied = new Map(artifacts.map((artifact) => [artifact.sheetName, artifact]));
   const toActivate: CompletedArtifact[] = [];
   const cachedToActivate: Array<{ sheetName: string; artifactSetId: string }> = [];
+  const verificationStartedAt = Date.now();
   db.prepare("UPDATE straight_map_jobs SET status = 'VERIFYING', current_step = 'R2 산출물 검증 중' WHERE id = ?").run(jobId);
   for (const sheet of sheets) {
     if (sheet.status === 'CACHE_HIT') {
@@ -1014,7 +1097,14 @@ export const completeStraightMapJob = async (jobId: string, owner: string, artif
     await verifyArtifactObjects(artifact);
     toActivate.push(artifact);
   }
+  const verifyArtifactsMs = Date.now() - verificationStartedAt;
+  const activationStartedAt = Date.now();
   activateArtifacts(jobId, toActivate, cachedToActivate);
+  const activeTransitionMs = Date.now() - activationStartedAt;
+  const completed = db.prepare('SELECT metrics_json AS metricsJson FROM straight_map_jobs WHERE id = ?').get(jobId) as { metricsJson: string };
+  db.prepare('UPDATE straight_map_jobs SET metrics_json = ? WHERE id = ?').run(JSON.stringify({
+    ...numericMetrics(completed.metricsJson), verifyArtifactsMs, activeTransitionMs,
+  }), jobId);
   return { jobId, status: 'COMPLETED', idempotent: false, activatedSheets: toActivate.length + cachedToActivate.length };
 };
 

@@ -48,8 +48,14 @@ services:
       - key: STRAIGHT_MAP_RENDERER_DEVICE_TOKEN
         sync: false
       - key: STRAIGHT_MAP_TARGET_DPI
-        value: "1200"
+        value: "1100"
       - key: STRAIGHT_MAP_TILE_SIZE
-        value: "256"
+        value: "512"
       - key: STRAIGHT_MAP_WEBP_QUALITY
         value: "94"
+      - key: STRAIGHT_MAP_WEBP_EFFORT
+        value: "2"
+      - key: STRAIGHT_MAP_TILE_CONCURRENCY
+        value: "2"
+      - key: STRAIGHT_MAP_UPLOAD_CONCURRENCY
+        value: "6"
