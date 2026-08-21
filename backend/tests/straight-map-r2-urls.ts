@@ -32,4 +32,6 @@ assert.match(upload.uploadUrl, /^http:\/\/127\.0\.0\.1:45678\/test-bucket\/line-
 assert.equal(upload.requiredHeaders['Content-Type'], 'image/webp');
 assert.equal(upload.requiredHeaders['x-amz-meta-sha256'], 'b'.repeat(64));
 assert.equal(upload.requiredHeaders['Cache-Control'], 'private, max-age=31536000, immutable');
+assert.match(String(upload.fallbackUploadUrl), /\/api\/renderer\/jobs\/.+\/artifacts\//);
+assert.equal(upload.fallbackRequiredHeaders?.['Content-Type'], 'application/octet-stream');
 console.log('Straight-map R2 URL test passed: renderer receives direct immutable presigned PUT with integrity metadata.');

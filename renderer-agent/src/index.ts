@@ -356,13 +356,17 @@ const contentType = (relative: string) => relative.endsWith('.webp') ? 'image/we
     : 'application/json';
 
 type ArtifactFile = { filePath: string; relativeKey: string; size: number; contentType: string; sha256: string };
+class UploadHttpError extends Error {
+  constructor(public readonly status: number, message: string) { super(message); }
+}
 export const retryUpload = async (label: string, action: () => Promise<Response>, onRetry?: () => void) => {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const response = await action();
       if (response.ok) return;
-      lastError = new Error(`${label} (${response.status})`);
+      const details = (await response.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 240);
+      lastError = new UploadHttpError(response.status, `${label} (${response.status})${details ? `: ${details}` : ''}`);
     } catch (error) { lastError = error; }
     if (attempt < 3) {
       onRetry?.();
@@ -379,17 +383,33 @@ const uploadArtifact = async (jobId: string, sheetName: string, artifactSetId: s
   const uploadBatch = async (batch: ArtifactFile[]) => {
     const prepared = await api<{
       artifactSetId: string;
-      uploads: Array<{ relativeKey: string; uploadUrl: string; requiredHeaders: Record<string, string> }>;
+      uploads: Array<{
+        relativeKey: string;
+        uploadUrl: string;
+        requiredHeaders: Record<string, string>;
+        fallbackUploadUrl?: string;
+        fallbackRequiredHeaders?: Record<string, string>;
+      }>;
     }>(`/jobs/${jobId}/artifacts/upload-urls`, { sheetName, artifactSetId, files: batch.map(({ filePath: _filePath, ...file }) => file) });
     if (prepared.artifactSetId !== artifactSetId) throw new Error('서버가 다른 artifact set ID를 반환했습니다.');
     await mapLimit(prepared.uploads, concurrency, async (upload) => {
       const file = batch.find((candidate) => candidate.relativeKey === upload.relativeKey);
       if (!file) throw new Error(`업로드 파일을 찾을 수 없습니다: ${upload.relativeKey}`);
       const resource = rendererResource(upload.uploadUrl);
-      await retryUpload(`artifact ${upload.relativeKey}`, async () => fetch(resource.url, {
-        method: 'PUT', headers: { ...upload.requiredHeaders, ...resource.headers },
-        body: await openAsBlob(file.filePath, { type: file.contentType }),
-      }), onRetry);
+      try {
+        await retryUpload(`artifact ${upload.relativeKey}`, async () => fetch(resource.url, {
+          method: 'PUT', headers: { ...upload.requiredHeaders, ...resource.headers },
+          body: await openAsBlob(file.filePath, { type: file.contentType }),
+        }), onRetry);
+      } catch (error) {
+        if (!(error instanceof UploadHttpError) || ![401, 403].includes(error.status) || !upload.fallbackUploadUrl) throw error;
+        console.warn(`[R2_DIRECT_FALLBACK] ${upload.relativeKey}: ${error.message}`);
+        const fallback = rendererResource(upload.fallbackUploadUrl);
+        await retryUpload(`artifact API fallback ${upload.relativeKey}`, async () => fetch(fallback.url, {
+          method: 'PUT', headers: { ...(upload.fallbackRequiredHeaders || {}), ...fallback.headers },
+          body: await openAsBlob(file.filePath, { type: 'application/octet-stream' }),
+        }), onRetry);
+      }
     });
   };
   const ordinary = files.filter((file) => path.resolve(file.filePath) !== manifestAbsolute);

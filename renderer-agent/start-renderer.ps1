@@ -52,6 +52,7 @@ namespace Catv {
 }
 
 $root = Split-Path -Parent $PSScriptRoot
+$protectedTokenPath = Join-Path $root 'backend\data\straight-map-renderer.token.dpapi'
 $bundledPoppler = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\native\poppler\Library\bin'
 if (-not (Get-Command pdfinfo.exe -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $bundledPoppler 'pdfinfo.exe'))) {
   $env:PATH = "$bundledPoppler;$env:PATH"
@@ -72,6 +73,19 @@ if (-not $env:CATV_RENDERER_DEVICE_TOKEN) {
   }
   if (-not $env:CATV_RENDERER_DEVICE_TOKEN -and $storedPassword) {
     $env:CATV_RENDERER_DEVICE_TOKEN = $storedPassword
+  }
+  if (-not $env:CATV_RENDERER_DEVICE_TOKEN -and (Test-Path -LiteralPath $protectedTokenPath)) {
+    try {
+      Add-Type -AssemblyName System.Security
+      $protectedBytes = [Convert]::FromBase64String((Get-Content -LiteralPath $protectedTokenPath -Raw).Trim())
+      $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(
+        $protectedBytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser
+      )
+      $env:CATV_RENDERER_DEVICE_TOKEN = [Text.Encoding]::UTF8.GetString($plainBytes)
+      [Array]::Clear($plainBytes, 0, $plainBytes.Length)
+    } catch {
+      Write-Warning 'DPAPI로 보호된 Renderer token을 읽지 못했습니다.'
+    }
   }
   if (-not $env:CATV_RENDERER_DEVICE_TOKEN) {
     Write-Host 'Windows Credential Manager 대상 "CATV Straight Map Renderer"가 없어 이번 실행에만 token을 입력합니다.' -ForegroundColor Yellow

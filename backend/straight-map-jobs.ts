@@ -643,6 +643,9 @@ export const createArtifactUploadUrls = async (jobId: string, owner: string, inp
       throw new ApiError(400, 'artifact 파일 형식이 경로와 일치하지 않습니다.', 'INVALID_ARTIFACT_CONTENT_TYPE');
     }
     const objectKey = `${prefix}/${file.relativeKey}`;
+    const apiUploadUrl = `/api/renderer/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactSetId)}`
+      + `?rendererId=${encodeURIComponent(owner)}&relativeKey=${encodeURIComponent(file.relativeKey)}`
+      + `&size=${file.size}&sha256=${file.sha256}`;
     if (usesR2Storage) {
       return {
         relativeKey: file.relativeKey,
@@ -654,15 +657,15 @@ export const createArtifactUploadUrls = async (jobId: string, owner: string, inp
           'Cache-Control': 'private, max-age=31536000, immutable',
           'x-amz-meta-sha256': file.sha256,
         },
+        fallbackUploadUrl: apiUploadUrl,
+        fallbackRequiredHeaders: { 'Content-Type': 'application/octet-stream' },
       };
     }
     return {
       relativeKey: file.relativeKey,
       objectKey,
       uploadTarget: 'api' as const,
-      uploadUrl: `/api/renderer/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactSetId)}`
-        + `?rendererId=${encodeURIComponent(owner)}&relativeKey=${encodeURIComponent(file.relativeKey)}`
-        + `&size=${file.size}&sha256=${file.sha256}`,
+      uploadUrl: apiUploadUrl,
       requiredHeaders: { 'Content-Type': 'application/octet-stream' },
     };
   }));
