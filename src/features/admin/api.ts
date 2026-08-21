@@ -192,5 +192,6 @@ export const straightMapAdminApi = {
   },
   retry: (jobId: string) => request<{ jobId: string; status: string }>(`/admin/straight-maps/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' }),
   cancel: (jobId: string) => request<{ jobId: string; status: string }>(`/admin/straight-maps/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+  remove: (jobId: string) => request<{ jobId: string; deleted: true }>(`/admin/straight-maps/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
   rollback: (versionId: string) => request<{ versionId: string; status: string }>(`/admin/straight-maps/versions/${encodeURIComponent(versionId)}/rollback`, { method: 'POST' }),
 };
