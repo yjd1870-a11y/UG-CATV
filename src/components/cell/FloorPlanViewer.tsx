@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Building2, Maximize2, Minimize2, RefreshCw, ZoomIn, ZoomOut } from 'lucide-react';
 import type { CellInfo, CatvFloorPlanResult } from '../../types';
 import { catvApi } from '../../features/cells/api';
 import { apiResourceUrl, ApiClientError } from '../../shared/api/client';
+import { pinchView, pointCenter, pointDistance, zoomViewAt, type GesturePoint, type PanZoomView } from '../../shared/gestures/pan-zoom';
 
 interface FloorPlanViewerProps {
   cell?: CellInfo;
@@ -31,7 +32,18 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
   const [viewerSize, setViewerSize] = useState<Size>({ width: 0, height: 0 });
   const [imageSize, setImageSize] = useState<Size>({ width: 0, height: 0 });
   const viewerRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const viewRef = useRef<PanZoomView>({ scale: 1, x: 0, y: 0 });
+  const pointersRef = useRef(new Map<number, GesturePoint>());
+  const gestureRef = useRef<{
+    kind: 'pan' | 'pinch'; startView: PanZoomView; pointerId?: number; startPoint?: GesturePoint;
+    startCenter?: GesturePoint; startDistance?: number;
+  } | null>(null);
+
+  const applyView = useCallback((view: PanZoomView) => {
+    viewRef.current = view;
+    setScale(view.scale);
+    setOffset({ x: view.x, y: view.y });
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -60,9 +72,8 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
   }, [result, fullscreen]);
 
   useEffect(() => {
-    setScale(1);
-    setOffset({ x: 0, y: 0 });
-  }, [result, fullscreen]);
+    applyView({ scale: 1, x: 0, y: 0 });
+  }, [result, fullscreen, applyView]);
 
   const fittedSize = useMemo(() => {
     if (!viewerSize.width || !viewerSize.height || !imageSize.width || !imageSize.height) return { width: 0, height: 0 };
@@ -74,8 +85,45 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
   }, [fullscreen, imageSize, viewerSize]);
 
   const resetView = () => {
-    setScale(1);
-    setOffset({ x: 0, y: 0 });
+    applyView({ scale: 1, x: 0, y: 0 });
+  };
+
+  const beginGesture = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const points = [...pointersRef.current.values()];
+    gestureRef.current = points.length >= 2
+      ? { kind: 'pinch', startView: viewRef.current, startCenter: pointCenter(points[0], points[1]), startDistance: pointDistance(points[0], points[1]) }
+      : { kind: 'pan', startView: viewRef.current, pointerId: event.pointerId, startPoint: points[0] };
+  };
+
+  const moveGesture = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!pointersRef.current.has(event.pointerId)) return;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const gesture = gestureRef.current;
+    const points = [...pointersRef.current.values()];
+    if (gesture?.kind === 'pinch' && points.length >= 2 && gesture.startCenter && gesture.startDistance) {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const center = pointCenter(points[0], points[1]);
+      applyView(pinchView(
+        gesture.startView,
+        { x: gesture.startCenter.x - bounds.left - bounds.width / 2, y: gesture.startCenter.y - bounds.top - bounds.height / 2 },
+        { x: center.x - bounds.left - bounds.width / 2, y: center.y - bounds.top - bounds.height / 2 },
+        pointDistance(points[0], points[1]) / gesture.startDistance,
+        0.5,
+        4,
+      ));
+    } else if (gesture?.kind === 'pan' && gesture.pointerId === event.pointerId && gesture.startPoint) {
+      applyView({ ...gesture.startView, x: gesture.startView.x + event.clientX - gesture.startPoint.x, y: gesture.startView.y + event.clientY - gesture.startPoint.y });
+    }
+  };
+
+  const endGesture = (event: React.PointerEvent<HTMLDivElement>) => {
+    pointersRef.current.delete(event.pointerId);
+    const remaining = [...pointersRef.current.entries()];
+    if (remaining.length === 1) {
+      gestureRef.current = { kind: 'pan', startView: viewRef.current, pointerId: remaining[0][0], startPoint: remaining[0][1] };
+    } else if (!remaining.length) gestureRef.current = null;
   };
 
   if (loading) return <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm font-semibold text-slate-600">국사 평면도를 불러오는 중입니다.</div>;
@@ -87,19 +135,20 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
       <div
         ref={viewerRef}
         className="relative h-full w-full cursor-grab touch-none bg-white active:cursor-grabbing"
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          drag.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y };
-        }}
-        onPointerMove={(event) => {
-          if (!drag.current) return;
-          setOffset({ x: drag.current.ox + event.clientX - drag.current.x, y: drag.current.oy + event.clientY - drag.current.y });
-        }}
-        onPointerUp={() => { drag.current = null; }}
-        onPointerCancel={() => { drag.current = null; }}
+        onPointerDown={beginGesture}
+        onPointerMove={moveGesture}
+        onPointerUp={endGesture}
+        onPointerCancel={endGesture}
         onWheel={(event) => {
           event.preventDefault();
-          setScale((current) => Math.min(4, Math.max(0.5, current + (event.deltaY < 0 ? 0.12 : -0.12))));
+          const bounds = event.currentTarget.getBoundingClientRect();
+          applyView(zoomViewAt(
+            viewRef.current,
+            event.deltaY < 0 ? 1.12 : 0.89,
+            { x: event.clientX - bounds.left - bounds.width / 2, y: event.clientY - bounds.top - bounds.height / 2 },
+            0.5,
+            4,
+          ));
         }}
       >
         <div
@@ -140,9 +189,9 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
           <p className="mt-0.5 text-xs text-slate-500">{result.floorPlan.fileName}</p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <button type="button" className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600" onClick={() => setScale((current) => Math.max(.5, current - .15))} aria-label="축소"><ZoomOut className="h-4 w-4" /></button>
+          <button type="button" className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600" onClick={() => applyView(zoomViewAt(viewRef.current, .86, { x: 0, y: 0 }, .5, 4))} aria-label="축소"><ZoomOut className="h-4 w-4" /></button>
           <span className="min-w-12 text-center text-xs font-bold text-slate-600">{Math.round(scale * 100)}%</span>
-          <button type="button" className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600" onClick={() => setScale((current) => Math.min(4, current + .15))} aria-label="확대"><ZoomIn className="h-4 w-4" /></button>
+          <button type="button" className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600" onClick={() => applyView(zoomViewAt(viewRef.current, 1.16, { x: 0, y: 0 }, .5, 4))} aria-label="확대"><ZoomIn className="h-4 w-4" /></button>
           <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-bold text-slate-700" onClick={resetView}><RefreshCw className="h-4 w-4" />전체 맞춤</button>
           <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-[#173B57] px-2.5 py-2 text-xs font-bold text-white" onClick={() => setFullscreen((current) => !current)}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}{fullscreen ? '닫기' : '전체화면'}</button>
         </div>

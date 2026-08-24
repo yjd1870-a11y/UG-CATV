@@ -3,6 +3,7 @@ import type { Server } from 'node:http';
 import { createApiApp } from '../app';
 import { db, initializeDatabase } from '../db';
 import { todayInSeoul } from '../daily-work-service';
+import type { CatvManpowerStatus } from '../../src/types';
 
 await initializeDatabase();
 const app = createApiApp();
@@ -41,6 +42,9 @@ let archivedAssetId = '';
 let floorPlanAssetId = '';
 const uploadHistoryIds: string[] = [];
 const auditStart = (db.prepare('SELECT CURRENT_TIMESTAMP AS value').get() as { value: string }).value;
+const manpowerBefore = db.prepare('SELECT payload_json, version, updated_at, updated_by FROM catv_manpower_status WHERE id = 1').get() as {
+  payload_json: string; version: number; updated_at: string; updated_by: string | null;
+} | undefined;
 
 try {
   const health = await call<{ status: string }>('/health');
@@ -102,6 +106,31 @@ try {
   });
   assert.equal(changeManagedRole.response.status, 200);
   assert.equal(changeManagedRole.payload.data?.role, 'public_official');
+  const deleteManaged = await call(`/admin/users/${managedUserId}`, { method: 'DELETE', cookie: adminLogin.cookie });
+  assert.equal(deleteManaged.response.status, 200);
+  const recreatedManaged = await call<{ id: string }>('/admin/users', {
+    method: 'POST',
+    cookie: adminLogin.cookie,
+    body: { username: `managed_${suffix}`, zone: '재생성지역', name: '재생성계정', role: 'public_official', password: 'Recreate9!' },
+  });
+  assert.equal(recreatedManaged.response.status, 201);
+  assert.equal(recreatedManaged.payload.data?.id, managedUserId);
+  const recreatedLogin = await call('/auth/login', { method: 'POST', body: { username: `managed_${suffix}`, password: 'Recreate9!' } });
+  assert.equal(recreatedLogin.response.status, 200);
+
+  const manpower = await call<{ status: CatvManpowerStatus }>('/manpower', { cookie: workerLogin.cookie });
+  assert.equal(manpower.response.status, 200);
+  const changedManpower = structuredClone(manpower.payload.data?.status);
+  assert.ok(changedManpower);
+  changedManpower.regions[0].headcount += 1;
+  changedManpower.lastUpdated = '2099.12.31 23:59';
+  const forbiddenManpowerUpdate = await call('/manpower', { method: 'PUT', cookie: workerLogin.cookie, body: changedManpower });
+  assert.equal(forbiddenManpowerUpdate.response.status, 403);
+  const updatedManpower = await call<{ status: { lastUpdated: string } }>('/manpower', { method: 'PUT', cookie: adminLogin.cookie, body: changedManpower });
+  assert.equal(updatedManpower.response.status, 200);
+  assert.equal(updatedManpower.payload.data?.status.lastUpdated, '2099.12.31 23:59');
+  const synchronizedManpower = await call<{ status: { lastUpdated: string } }>('/manpower', { cookie: workerLogin.cookie });
+  assert.equal(synchronizedManpower.payload.data?.status.lastUpdated, '2099.12.31 23:59');
 
   const dbStatus = await call<{ counts: { cells: number } }>('/admin/db/status', { cookie: adminLogin.cookie });
   assert.equal(dbStatus.response.status, 200);
@@ -376,6 +405,15 @@ try {
   const completed = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: workerLogin.cookie, body: { status: '완료', comment: '통합 테스트 완료' } });
   assert.equal(completed.response.status, 200);
 
+  const deleteSignupUser = await call(`/admin/users/${testUserId}`, { method: 'DELETE', cookie: adminLogin.cookie });
+  assert.equal(deleteSignupUser.response.status, 200);
+  const recreatedSignup = await call<{ id: string }>('/auth/signup', {
+    method: 'POST',
+    body: { username, password: 'Renewed123!', name: '통합테스트 재가입', employeeNumber: `T-${suffix}`, department: '전송망1팀', phone: '010-0000-0000' },
+  });
+  assert.equal(recreatedSignup.response.status, 201);
+  assert.equal(recreatedSignup.payload.data?.id, testUserId);
+
   console.log('API integration test passed: auth → CELL/B2C search → floor plan/coordinates → daily work → material usage → transfer');
 } finally {
   db.exec('BEGIN IMMEDIATE');
@@ -407,6 +445,10 @@ try {
       db.prepare('DELETE FROM users WHERE id = ?').run(managedUserId);
     }
     if (noticeId) db.prepare('DELETE FROM home_notices WHERE id = ?').run(noticeId);
+    if (manpowerBefore) {
+      db.prepare(`UPDATE catv_manpower_status SET payload_json = ?, version = ?, updated_at = ?, updated_by = ? WHERE id = 1`)
+        .run(manpowerBefore.payload_json, manpowerBefore.version, manpowerBefore.updated_at, manpowerBefore.updated_by);
+    } else db.prepare('DELETE FROM catv_manpower_status WHERE id = 1').run();
     for (const historyId of uploadHistoryIds) {
       const row = db.prepare('SELECT file_name FROM db_upload_history WHERE id = ?').get(historyId) as { file_name: string } | undefined;
       if (row?.file_name === 'B2C_TEST.xlsx' || row?.file_name === 'B2C_TEST_UPDATED.xlsx') db.prepare('DELETE FROM db_upload_history WHERE id = ?').run(historyId);

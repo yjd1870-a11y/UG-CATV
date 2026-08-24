@@ -53,6 +53,14 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
 
+CREATE TABLE IF NOT EXISTS catv_manpower_status (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  payload_json TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS login_attempts (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL,

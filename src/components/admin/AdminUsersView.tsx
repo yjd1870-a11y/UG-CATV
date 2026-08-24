@@ -865,12 +865,10 @@ export const AdminUsersView: React.FC = () => {
               <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-slate-500">
                 <span>다운로드 {formatDuration(metrics.downloadMs)}</span>
                 <span>Excel 시작 {formatDuration(metrics.excelStartMs)} · 열기 {formatDuration(metrics.workbookOpenMs)} · PDF {formatDuration(metrics.pdfGenerationMs)}</span>
-                <span>PDF 래스터 {formatDuration(metrics.pdfRasterMs)}</span>
-                <span>타일 {formatDuration(metrics.tileGenerationMs)} (WebP CPU {formatDuration(metrics.webpEncodeMs)})</span>
                 <span>해시 {formatDuration(metrics.checksumMs)}</span>
                 <span>업로드 {formatDuration(metrics.uploadMs)} · {uploadRate > 0 ? `${formatBytes(uploadRate)}/s` : '-'} · 재시도 {metrics.uploadRetryCount || 0}회</span>
                 <span>검증 {formatDuration(metrics.verifyArtifactsMs)} · ACTIVE {formatDuration(metrics.activeTransitionMs)}</span>
-                <span>{Number(job.totalTileCount || 0).toLocaleString('ko-KR')} 타일 · {formatBytes(Number(job.totalArtifactBytes || 0))}</span>
+                <span>PDF 버터 산출물 {formatBytes(Number(job.totalArtifactBytes || 0))}</span>
               </div>
             </div>
           ); }) : <p className="rounded-xl bg-slate-50 p-5 text-center text-xs text-slate-400">등록된 직선도 렌더링 작업이 없습니다.</p>}

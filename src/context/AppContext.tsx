@@ -1,10 +1,11 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { INITIAL_CATV_MANPOWER } from '../data/mockData';
 import { authApi, type SignupInput } from '../features/auth/api';
 import { cellsApi } from '../features/cells/api';
 import { dailyWorkApi } from '../features/daily-work/api';
 import { loadBusinessData } from '../features/home/load-business-data';
 import { materialsApi } from '../features/materials/api';
+import { manpowerApi, type ManpowerEnvelope } from '../features/manpower/api';
 import { transfersApi } from '../features/transfers/api';
 import { ApiClientError } from '../shared/api/client';
 import { canEditCatvManpower } from '../shared/auth/permissions';
@@ -64,7 +65,7 @@ interface AppContextType {
   updateCellHistory: (cellId: string, historyId: string, updates: Partial<CellWorkHistory>) => void;
   deleteCellHistory: (cellId: string, historyId: string) => void;
   addTransferTicket: (ticket: Omit<WorkTransfer, 'id' | 'logs'>) => void;
-  updateCatvManpower: (newStatus: CatvManpowerStatus) => void;
+  updateCatvManpower: (newStatus: CatvManpowerStatus) => Promise<boolean>;
   updateCatvRegion: (regionId: string, updates: Partial<CatvRegionManpower>) => void;
   updateCatvManagement: (updates: Partial<CatvManagementStaff>) => void;
   showToast: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
@@ -90,19 +91,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const saved = localStorage.getItem('yt_recent_cells');
     return saved ? JSON.parse(saved) : ['OSAN-001', 'SUJI-021', 'PYEONGTAEK-015'];
   });
-  const [catvManpower, setCatvManpower] = useState<CatvManpowerStatus>(() => {
-    const saved = localStorage.getItem('yt_catv_manpower');
-    return saved ? JSON.parse(saved) : INITIAL_CATV_MANPOWER;
-  });
+  const [catvManpower, setCatvManpower] = useState<CatvManpowerStatus>(INITIAL_CATV_MANPOWER);
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const activeViewRef = useRef<AppView>('home');
+  const mobileHistoryReadyRef = useRef(false);
+  const restoringMobileGuardRef = useRef(false);
+  const lastMobileBackRef = useRef(0);
 
   useEffect(() => {
     localStorage.setItem('yt_recent_cells', JSON.stringify(recentCells));
   }, [recentCells]);
-
-  useEffect(() => {
-    localStorage.setItem('yt_catv_manpower', JSON.stringify(catvManpower));
-  }, [catvManpower]);
 
   const showToast = useCallback((message: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => {
     const id = Date.now().toString();
@@ -111,6 +109,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const hideToast = () => setToast(null);
+
+  useEffect(() => { activeViewRef.current = activeView; }, [activeView]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    let active = true;
+    const apply = (value: ManpowerEnvelope) => { if (active) setCatvManpower(value.status); };
+    const refresh = () => { void manpowerApi.get().then(apply).catch((error) => console.error('CATV manpower sync failed', error)); };
+    refresh();
+    const source = new EventSource(manpowerApi.eventsUrl(), { withCredentials: true });
+    source.addEventListener('manpower', (event) => {
+      try { apply(JSON.parse((event as MessageEvent<string>).data) as ManpowerEnvelope); }
+      catch (error) { console.error('CATV manpower event was invalid', error); }
+    });
+    const interval = window.setInterval(refresh, 60_000);
+    const handleVisibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      active = false;
+      source.close();
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser || mobileHistoryReadyRef.current) return;
+    const isMobile = navigator.maxTouchPoints > 0 && window.matchMedia('(pointer: coarse)').matches;
+    if (!isMobile) return;
+    mobileHistoryReadyRef.current = true;
+    const baseState = { catvApp: true, mobileBase: true, view: 'home' as AppView };
+    window.history.replaceState(baseState, '');
+    window.history.pushState({ catvApp: true, view: activeViewRef.current }, '');
+
+    const onPopState = (event: PopStateEvent) => {
+      if (restoringMobileGuardRef.current) {
+        restoringMobileGuardRef.current = false;
+        return;
+      }
+      const state = event.state as { catvApp?: boolean; mobileBase?: boolean; view?: AppView; cellId?: string; transferId?: string } | null;
+      if (!state?.catvApp) return;
+      if (state.mobileBase && activeViewRef.current === 'home') {
+        const now = Date.now();
+        if (now - lastMobileBackRef.current <= 2_000) {
+          mobileHistoryReadyRef.current = false;
+          window.history.back();
+          return;
+        }
+        lastMobileBackRef.current = now;
+        showToast('종료하려면 뒤로가기를 한 번 더 누르세요.', 'info');
+        restoringMobileGuardRef.current = true;
+        window.history.forward();
+        return;
+      }
+      if (state.view) {
+        setActiveView(state.view);
+        activeViewRef.current = state.view;
+        if (state.cellId) setSelectedCellId(state.cellId);
+        if (state.transferId) setSelectedTransferId(state.transferId);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+      mobileHistoryReadyRef.current = false;
+    };
+  }, [currentUser?.id, showToast]);
 
   const reloadBusinessData = async () => {
     setIsDataLoading(true);
@@ -176,6 +242,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setDailyRecords([]);
       setMaterialUsage([]);
       setActiveView('home');
+      mobileHistoryReadyRef.current = false;
       showToast('로그아웃되었습니다.', 'info');
     }
   };
@@ -197,6 +264,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (params?.cellId) setSelectedCellId(params.cellId);
     if (params?.transferId) setSelectedTransferId(params.transferId);
     setActiveView(view);
+    activeViewRef.current = view;
+    if (mobileHistoryReadyRef.current) {
+      window.history.pushState({ catvApp: true, view, cellId: params?.cellId, transferId: params?.transferId }, '');
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -311,13 +382,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .catch((error) => showToast(error instanceof Error ? error.message : genericLoadError, 'error'));
   };
 
-  const updateCatvManpower = (newStatus: CatvManpowerStatus) => {
+  const updateCatvManpower = async (newStatus: CatvManpowerStatus) => {
     if (!canEditCatvManpower(currentUser?.role)) {
       showToast('매니져는 CATV 인력현황을 수정할 수 없습니다.', 'error');
-      return;
+      return false;
     }
-    setCatvManpower(newStatus);
-    showToast('CATV 인력/차량 현황이 업데이트되었습니다.', 'success');
+    try {
+      const updated = await manpowerApi.update(newStatus);
+      setCatvManpower(updated.status);
+      showToast('CATV 인력/차량 현황이 모든 계정에 실시간 반영되었습니다.', 'success');
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : genericLoadError, 'error');
+      return false;
+    }
   };
 
   const updateCatvRegion = (regionId: string, updates: Partial<CatvRegionManpower>) => {
@@ -325,12 +403,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast('매니져는 CATV 인력현황을 수정할 수 없습니다.', 'error');
       return;
     }
-    setCatvManpower((previous) => ({
-      ...previous,
+    const next = {
+      ...catvManpower,
       lastUpdated: new Date().toLocaleString('ko-KR'),
-      regions: previous.regions.map((region) => region.id === regionId ? { ...region, ...updates } : region),
-    }));
-    showToast('거점 인력현황이 수정되었습니다.', 'success');
+      regions: catvManpower.regions.map((region) => region.id === regionId ? { ...region, ...updates } : region),
+    };
+    void updateCatvManpower(next);
   };
 
   const updateCatvManagement = (updates: Partial<CatvManagementStaff>) => {
@@ -338,12 +416,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast('매니져는 CATV 인력현황을 수정할 수 없습니다.', 'error');
       return;
     }
-    setCatvManpower((previous) => ({
-      ...previous,
+    const next = {
+      ...catvManpower,
       lastUpdated: new Date().toLocaleString('ko-KR'),
-      management: { ...previous.management, ...updates },
-    }));
-    showToast('관리인력 현황이 수정되었습니다.', 'success');
+      management: { ...catvManpower.management, ...updates },
+    };
+    void updateCatvManpower(next);
   };
 
   const notificationCount = transfers.filter((transfer) => transfer.status === '대기' || transfer.status === '작업중').length;

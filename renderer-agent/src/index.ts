@@ -471,7 +471,7 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
       await api(`/jobs/${jobId}/progress`, {
         status: 'PUBLISHING', progress: progressBase + 8, currentSheet: sheet.sheetName,
         currentStep: 'R2 PDF v3 산출물 3개 업로드 중', metrics: stageMetrics,
-        tileCount: 0, artifactBytes: totalArtifactBytes,
+        artifactBytes: totalArtifactBytes,
       });
       await measure('uploadMs', () => uploadArtifact(
         jobId, sheet.sheetName, artifactSetId, artifactFiles, manifestPath, profile.uploadConcurrency || 6,

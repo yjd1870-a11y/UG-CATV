@@ -37,18 +37,31 @@ router.post('/signup', asyncRoute(async (req, res) => {
     throw new ApiError(400, '전화번호 형식이 올바르지 않습니다.', 'VALIDATION_ERROR');
   }
 
-  const duplicate = db.prepare(`
-    SELECT id FROM users WHERE lower(username) = lower(?) OR (? IS NOT NULL AND employee_number = ?)
-  `).get(username, employeeNumber, employeeNumber);
-  if (duplicate) throw new ApiError(409, '이미 사용 중인 아이디 또는 사번입니다.', 'DUPLICATE_USER');
+  const existing = db.prepare('SELECT id, deleted_at AS deletedAt FROM users WHERE lower(username) = lower(?)').get(username) as { id: string; deletedAt: string | null } | undefined;
+  if (existing && !existing.deletedAt) throw new ApiError(409, '이미 사용 중인 아이디입니다.', 'DUPLICATE_USER');
+  const employeeOwner = employeeNumber ? db.prepare(`
+    SELECT id, deleted_at AS deletedAt FROM users WHERE employee_number = ? AND id <> ?
+  `).get(employeeNumber, existing?.id || '') as { id: string; deletedAt: string | null } | undefined : undefined;
+  if (employeeOwner && !employeeOwner.deletedAt) throw new ApiError(409, '이미 사용 중인 사번입니다.', 'DUPLICATE_USER');
+  if (employeeOwner?.deletedAt) db.prepare('UPDATE users SET employee_number = NULL WHERE id = ?').run(employeeOwner.id);
 
   const passwordHash = await hashPassword(password);
-  const id = randomUUID();
-  db.prepare(`
-    INSERT INTO users (
-      id, username, password_hash, name, employee_number, department, phone, role, access_role, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'worker', 'manager', 'pending')
-  `).run(id, username, passwordHash, name, employeeNumber, department, phone);
+  const id = existing?.id || randomUUID();
+  if (existing) {
+    db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
+    db.prepare(`
+      UPDATE users SET username = ?, password_hash = ?, name = ?, employee_number = ?, department = ?, phone = ?,
+        role = 'worker', access_role = 'manager', status = 'pending', last_login_at = NULL,
+        password_updated_at = CURRENT_TIMESTAMP, deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(username, passwordHash, name, employeeNumber, department, phone, id);
+  } else {
+    db.prepare(`
+      INSERT INTO users (
+        id, username, password_hash, name, employee_number, department, phone, role, access_role, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'worker', 'manager', 'pending')
+    `).run(id, username, passwordHash, name, employeeNumber, department, phone);
+  }
   writeAuditLog(req, { action: 'ACCOUNT_SIGNUP_REQUESTED', targetType: 'user', targetId: id, metadata: { username } });
   success(res, { id, username, status: 'pending' }, 201);
 }));

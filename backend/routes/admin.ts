@@ -206,17 +206,32 @@ router.post('/users', asyncRoute(async (req, res) => {
   const name = asText(req.body?.name, '이름', 100);
   const role = roleValue(req.body?.role);
   const password = passwordValue(req.body?.password);
-  const existing = db.prepare('SELECT id FROM users WHERE lower(username) = lower(?) AND deleted_at IS NULL').get(username);
-  if (existing) throw new ApiError(409, '이미 사용 중인 아이디입니다.', 'DUPLICATE_USERNAME');
+  const existing = db.prepare('SELECT id, deleted_at AS deletedAt FROM users WHERE lower(username) = lower(?)').get(username) as { id: string; deletedAt: string | null } | undefined;
+  if (existing && !existing.deletedAt) throw new ApiError(409, '이미 사용 중인 아이디입니다.', 'DUPLICATE_USERNAME');
+  const employeeOwner = db.prepare('SELECT id, deleted_at AS deletedAt FROM users WHERE employee_number = ? AND id <> ?').get(username, existing?.id || '') as { id: string; deletedAt: string | null } | undefined;
+  if (employeeOwner && !employeeOwner.deletedAt) throw new ApiError(409, '동일한 사번을 사용 중인 계정이 있습니다.', 'DUPLICATE_EMPLOYEE_NUMBER');
+  if (employeeOwner?.deletedAt) db.prepare('UPDATE users SET employee_number = NULL WHERE id = ?').run(employeeOwner.id);
 
-  const id = randomUUID();
+  const id = existing?.id || randomUUID();
   const passwordHash = await hashPassword(password);
-  db.prepare(`
-    INSERT INTO users (
-      id, username, password_hash, name, zone, employee_number, department,
-      company, role, access_role, status, password_updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, '유지텔레컴', ?, ?, 'active', CURRENT_TIMESTAMP)
-  `).run(id, username, passwordHash, name, zone, username, zone, legacyRoleValue(role), role);
+  if (existing) {
+    db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
+    db.prepare(`
+      UPDATE users SET
+        username = ?, password_hash = ?, name = ?, zone = ?, employee_number = ?, department = ?,
+        phone = NULL, company = '유지텔레컴', role = ?, access_role = ?, status = 'active',
+        last_login_at = NULL, password_updated_at = CURRENT_TIMESTAMP,
+        deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(username, passwordHash, name, zone, username, zone, legacyRoleValue(role), role, id);
+  } else {
+    db.prepare(`
+      INSERT INTO users (
+        id, username, password_hash, name, zone, employee_number, department,
+        company, role, access_role, status, password_updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '유지텔레컴', ?, ?, 'active', CURRENT_TIMESTAMP)
+    `).run(id, username, passwordHash, name, zone, username, zone, legacyRoleValue(role), role);
+  }
   success(res, { id, username, zone, name, role, status: 'active' }, 201);
 }));
 

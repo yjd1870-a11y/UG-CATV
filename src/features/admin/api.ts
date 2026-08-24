@@ -100,7 +100,6 @@ export type StraightMapJob = {
   completedAt: string | null;
   cacheHitSheets: number;
   metricsJson: string;
-  totalTileCount: number;
   totalArtifactBytes: number;
 };
 

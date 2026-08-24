@@ -26,17 +26,17 @@ export const CatvManpowerStatusCard: React.FC = () => {
     setIsEditing(true);
   };
 
-  const handleSaveEdit = (e: React.FormEvent) => {
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEdit) return;
     const now = new Date();
     const timeStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-    updateCatvManpower({
+    const saved = await updateCatvManpower({
       ...editForm,
       lastUpdated: timeStr,
     });
-    setIsEditing(false);
+    if (saved) setIsEditing(false);
   };
 
   const handleRegionChange = (
