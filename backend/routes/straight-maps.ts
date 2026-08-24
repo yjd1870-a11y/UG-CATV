@@ -5,9 +5,9 @@ import { normalizeStationName } from '../catv';
 import { ApiError, asyncRoute, success } from '../http';
 import { requireAuth } from '../security/session';
 import { straightMapContinuousTerms, type StraightMapMatchLength } from '../straight-map-search';
-import { resolveStraightMapPdf, signedStraightMapPdfUrl } from '../straight-map-storage';
+import { resolveStraightMapPdf } from '../straight-map-storage';
 import { cachedStraightMapSearch } from '../straight-map-cache';
-import { usesR2Storage } from '../object-storage';
+import { readR2Object, usesR2Storage } from '../object-storage';
 
 const router = Router();
 router.use(requireAuth);
@@ -82,12 +82,10 @@ router.get('/:mapId', asyncRoute(async (req, res) => {
   if (!version) throw new ApiError(404, '등록된 직선도 지도가 없습니다.', 'STRAIGHT_MAP_NOT_FOUND');
   if (version.status === 'PROCESSING') throw new ApiError(409, '직선도 지도를 생성 중입니다.', 'STRAIGHT_MAP_PROCESSING');
   const manifest = JSON.parse(String(version.manifestJson || '{}')) as { pagePlacements?: unknown[] };
-  const pdfUrl = usesR2Storage
-    ? await signedStraightMapPdfUrl(String(version.artifactSetId))
-    : `/api/straight-maps/${encodeURIComponent(String(version.mapId))}/versions/${version.version}/pdf`;
+  const pdfUrl = `/api/straight-maps/${encodeURIComponent(String(version.mapId))}/versions/${version.version}/pdf`;
   success(res, { ...version, artifactSetId: undefined, contentBounds: JSON.parse(String(version.contentBoundsJson || '{}')),
     pagePlacements: manifest.pagePlacements || [],
-    pdfUrl, pdfRequiresCredentials: !usesR2Storage,
+    pdfUrl, pdfRequiresCredentials: true,
     manifestJson: undefined, contentBoundsJson: undefined });
 }));
 
@@ -99,10 +97,44 @@ router.get('/:mapId/versions/:version/pdf', asyncRoute(async (req, res) => {
   `).get(req.params.mapId, version) as { artifactSetId: string | null } | undefined;
   if (!allowed?.artifactSetId) throw new ApiError(404, '직선도 PDF를 찾을 수 없습니다.', 'PDF_NOT_FOUND');
   if (usesR2Storage) {
-    const url = await signedStraightMapPdfUrl(allowed.artifactSetId);
-    res.setHeader('Cache-Control', 'private, max-age=60');
+    const object = await readR2Object(`line-diagrams/v3/documents/${allowed.artifactSetId}/map.pdf`);
+    const rangeHeader = req.get('range');
+    let start = 0;
+    let end = object.body.length - 1;
+    if (rangeHeader) {
+      const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+      if (!match) {
+        res.setHeader('Content-Range', `bytes */${object.body.length}`);
+        res.sendStatus(416);
+        return;
+      }
+      if (!match[1]) {
+        const suffixLength = Number(match[2]);
+        if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+          res.setHeader('Content-Range', `bytes */${object.body.length}`);
+          res.sendStatus(416);
+          return;
+        }
+        start = Math.max(0, object.body.length - suffixLength);
+      } else {
+        start = Number(match[1]);
+        if (match[2]) end = Math.min(end, Number(match[2]));
+      }
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= object.body.length) {
+        res.setHeader('Content-Range', `bytes */${object.body.length}`);
+        res.sendStatus(416);
+        return;
+      }
+    }
+    const body = object.body.subarray(start, end + 1);
+    res.status(rangeHeader ? 206 : 200);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', body.length);
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (rangeHeader) res.setHeader('Content-Range', `bytes ${start}-${end}/${object.body.length}`);
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.redirect(302, url);
+    res.send(body);
     return;
   }
   const filePath = resolveStraightMapPdf(allowed.artifactSetId);
