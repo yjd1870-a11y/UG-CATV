@@ -64,7 +64,7 @@ export const putR2ObjectStream = async (
     ContentType: contentType,
     Metadata: metadata,
     CacheControl: Object.keys(metadata).length
-      ? (key.includes('/artifacts/') ? 'private, max-age=31536000, immutable' : 'private, max-age=300')
+      ? (key.includes('/documents/') ? 'private, max-age=31536000, immutable' : 'private, max-age=300')
       : undefined,
   }));
 };
@@ -170,7 +170,7 @@ export const signedR2UploadUrl = (
     ContentLength: size,
     Metadata: metadata,
     CacheControl: Object.keys(metadata).length
-      ? (key.includes('/artifacts/') ? 'private, max-age=31536000, immutable' : 'private, max-age=300')
+      ? (key.includes('/documents/') ? 'private, max-age=31536000, immutable' : 'private, max-age=300')
       : undefined,
   }),
   { expiresIn: env.r2SignedUrlTtlSeconds },

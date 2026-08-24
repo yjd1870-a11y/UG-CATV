@@ -23,8 +23,8 @@ import {
 const router = Router();
 
 const rendererAuth: RequestHandler = (req, _res, next) => {
-  if (!env.straightMapPipelineV2Enabled) {
-    next(new ApiError(409, '직선도 렌더러 파이프라인이 비활성화되어 있습니다.', 'STRAIGHT_MAP_V2_DISABLED'));
+  if (!env.straightMapPipelineV3Enabled) {
+    next(new ApiError(409, '직선도 렌더러 파이프라인이 비활성화되어 있습니다.', 'STRAIGHT_MAP_V3_DISABLED'));
     return;
   }
   if (Buffer.byteLength(env.straightMapRendererDeviceToken, 'utf8') < 32) {

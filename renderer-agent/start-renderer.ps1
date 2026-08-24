@@ -53,10 +53,6 @@ namespace Catv {
 
 $root = Split-Path -Parent $PSScriptRoot
 $protectedTokenPath = Join-Path $root 'backend\data\straight-map-renderer.token.dpapi'
-$bundledPoppler = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\native\poppler\Library\bin'
-if (-not (Get-Command pdfinfo.exe -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $bundledPoppler 'pdfinfo.exe'))) {
-  $env:PATH = "$bundledPoppler;$env:PATH"
-}
 if (-not $env:CATV_RENDERER_API_URL) {
   $env:CATV_RENDERER_API_URL = Read-Host 'Render API URL (예: https://example.onrender.com)'
 }

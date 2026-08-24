@@ -16,7 +16,7 @@ const removeUnreferencedLegacySources = (sourcePaths: Iterable<string>) => {
   }
 };
 
-/** Explicit administrator deletion; immutable v2 artifacts remain for shared references and lifecycle cleanup. */
+/** Explicit administrator deletion; immutable v3 artifacts remain available for cache reuse. */
 export const deleteStraightMapsForStation = (stationName: string) => {
   const stationKey = normalizeStationName(stationName);
   if (!stationKey) return { deletedMapCount: 0, deletedVersionCount: 0 };

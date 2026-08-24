@@ -39,32 +39,27 @@ const numericMetrics = (value: unknown) => {
 };
 
 export const straightMapRendererProfile = () => ({
-  schemaVersion: 1,
+  schemaVersion: 3,
   engine: 'windows-excel-pdf',
-  excelRendererRevision: 'excel-com-pdf-v2',
-  pdfExportRevision: 'pdf-export-v2',
-  pageLayoutRevision: 'virtual-page-grid-v2',
-  coordinateParserRevision: 'excel-shapes-v3',
-  cropAlgorithmRevision: 'excel-print-area-v1',
-  dpi: env.straightMapTargetDpi,
-  tileSize: env.straightMapTileSize,
-  webpQuality: env.straightMapWebpQuality,
-  webpEffort: env.straightMapWebpEffort,
-  tileConcurrency: env.straightMapTileConcurrency,
+  excelRendererRevision: 'excel-com-vector-pdf-v3',
+  pdfExportRevision: 'pdf-viewport-v3',
+  pageLayoutRevision: 'tight-content-fit-one-page-v3',
+  coordinateParserRevision: 'pdf-point-top-left-v3-calibration-interior-v3',
+  cropAlgorithmRevision: 'actual-cell-shape-bounds-v3',
   uploadConcurrency: env.straightMapUploadConcurrency,
 });
 
 export const straightMapRendererProfileHash = () => {
-  const { tileConcurrency: _tileConcurrency, uploadConcurrency: _uploadConcurrency, ...artifactProfile } = straightMapRendererProfile();
+  const { uploadConcurrency: _uploadConcurrency, ...artifactProfile } = straightMapRendererProfile();
   return sha256(JSON.stringify(artifactProfile));
 };
 export const straightMapCacheKey = (sourceSha256: string, sheetName: string, profileHash: string) => (
   sha256(`${sourceSha256}:${sheetName.normalize('NFC')}:${profileHash}`)
 );
 
-const requireV2 = () => {
-  if (!env.straightMapPipelineV2Enabled) {
-    throw new ApiError(409, '신규 직선도 파이프라인 기능 플래그가 비활성화되어 있습니다.', 'STRAIGHT_MAP_V2_DISABLED');
+const requireV3 = () => {
+  if (!env.straightMapPipelineV3Enabled) {
+    throw new ApiError(409, 'PDF 직선도 파이프라인 기능 플래그가 비활성화되어 있습니다.', 'STRAIGHT_MAP_V3_DISABLED');
   }
 };
 
@@ -81,10 +76,9 @@ const localObjectHash = async (filePath: string) => {
 const localObjectHead = async (key: string) => {
   const filePath = resolveLocalStraightMapObject(key);
   const stat = await fs.promises.stat(filePath);
-  const sourceHash = /^line-diagrams\/sources\/([a-f0-9]{64})\.xlsx$/i.exec(key)?.[1]?.toLowerCase();
+  const sourceHash = /^line-diagrams\/v3\/sources\/([a-f0-9]{64})\.xlsx$/i.exec(key)?.[1]?.toLowerCase();
   return {
-    contentType: key.endsWith('.xlsx') ? STRAIGHT_MAP_XLSX_MIME : key.endsWith('.webp') ? 'image/webp'
-      : key.endsWith('.pdf') ? 'application/pdf' : 'application/json',
+    contentType: key.endsWith('.xlsx') ? STRAIGHT_MAP_XLSX_MIME : key.endsWith('.pdf') ? 'application/pdf' : 'application/json',
     size: stat.size,
     etag: null,
     metadata: { sha256: sourceHash || await localObjectHash(filePath) },
@@ -152,7 +146,7 @@ export const createStraightMapUpload = async (input: {
   stationName: string;
   requestedBy: string;
 }) => {
-  requireV2();
+  requireV3();
   const sourceSha256 = input.sourceSha256.toLowerCase();
   if (!sha256Pattern.test(sourceSha256)) throw new ApiError(400, 'XLSX SHA-256 형식이 올바르지 않습니다.', 'INVALID_SOURCE_HASH');
   const filename = input.filename.trim().normalize('NFC');
@@ -163,7 +157,7 @@ export const createStraightMapUpload = async (input: {
   const stationName = input.stationName.trim();
   const stationKey = normalizeStationName(stationName);
   if (!stationKey) throw new ApiError(400, '직선도 국사명을 확인해주세요.', 'INVALID_STATION');
-  const sourceKey = `line-diagrams/sources/${sourceSha256}.xlsx`;
+  const sourceKey = `line-diagrams/v3/sources/${sourceSha256}.xlsx`;
   const existing = await objectExists(sourceKey);
   if (existing && existing.size !== input.size) {
     throw new ApiError(409, '같은 해시의 R2 원본 크기가 일치하지 않습니다.', 'SOURCE_SIZE_CONFLICT');
@@ -230,7 +224,7 @@ export const storeLocalStraightMapUpload = async (
   body: Readable,
   declaredLength: number | null,
 ) => {
-  requireV2();
+  requireV3();
   const job = db.prepare(`
     SELECT source_key AS sourceKey, source_sha256 AS sourceSha256, source_size AS sourceSize,
            status, requested_by AS requestedBy
@@ -303,7 +297,7 @@ export const storeLocalStraightMapUpload = async (
 };
 
 export const completeStraightMapUpload = async (jobId: string, requestedBy: string) => {
-  requireV2();
+  requireV3();
   const job = db.prepare(`
     SELECT id, source_key AS sourceKey, source_sha256 AS sourceSha256, source_size AS sourceSize,
            status, requested_by AS requestedBy
@@ -430,14 +424,14 @@ export const claimStraightMapJob = (owner: string) => {
       UPDATE straight_map_jobs
          SET status = 'FAILED', error_code = 'MAX_ATTEMPTS_EXHAUSTED',
              error_message = 'Lease가 만료되었고 최대 시도 횟수에 도달했습니다.', lease_owner = NULL
-       WHERE status IN ('CLAIMED', 'DOWNLOADING', 'ANALYZING', 'EXCEL_RENDERING', 'TILE_GENERATING', 'PUBLISHING', 'VERIFYING')
+       WHERE status IN ('CLAIMED', 'DOWNLOADING', 'ANALYZING', 'EXCEL_RENDERING', 'PUBLISHING', 'VERIFYING')
          AND datetime(lease_expires_at) <= CURRENT_TIMESTAMP AND attempt >= max_attempts
     `).run();
     const job = db.prepare(`
       SELECT id FROM straight_map_jobs
        WHERE (
          status = 'WAITING_FOR_OFFICE_RENDERER'
-         OR (status IN ('CLAIMED', 'DOWNLOADING', 'ANALYZING', 'EXCEL_RENDERING', 'TILE_GENERATING', 'PUBLISHING', 'VERIFYING')
+         OR (status IN ('CLAIMED', 'DOWNLOADING', 'ANALYZING', 'EXCEL_RENDERING', 'PUBLISHING', 'VERIFYING')
              AND datetime(lease_expires_at) <= CURRENT_TIMESTAMP)
          OR (status = 'RETRY_WAIT' AND datetime(COALESCE(lease_expires_at, CURRENT_TIMESTAMP)) <= CURRENT_TIMESTAMP)
        )
@@ -535,7 +529,7 @@ export const heartbeatStraightMapJob = (jobId: string, owner: string) => {
   return { jobId, leaseExpiresAt, cancelRequested: job.status === 'CANCEL_REQUESTED' };
 };
 
-const rendererStates = new Set(['DOWNLOADING', 'ANALYZING', 'EXCEL_RENDERING', 'TILE_GENERATING', 'PUBLISHING', 'VERIFYING']);
+const rendererStates = new Set(['DOWNLOADING', 'ANALYZING', 'EXCEL_RENDERING', 'PUBLISHING', 'VERIFYING']);
 export const progressStraightMapJob = (jobId: string, owner: string, input: {
   status: string;
   progress: number;
@@ -600,9 +594,7 @@ export const registerStraightMapJobSheets = (jobId: string, owner: string, sheet
 };
 
 type UploadFile = { relativeKey: string; size: number; contentType: string; sha256: string };
-const artifactContentType = (relativeKey: string) => relativeKey.endsWith('.webp') ? 'image/webp'
-  : relativeKey.endsWith('.pdf') ? 'application/pdf'
-    : 'application/json';
+const artifactContentType = (relativeKey: string) => relativeKey.endsWith('.pdf') ? 'application/pdf' : 'application/json';
 const validateArtifactPart = (value: string) => value.split('/').every((part) => objectPartPattern.test(part));
 
 export const createArtifactUploadUrls = async (jobId: string, owner: string, input: {
@@ -622,7 +614,7 @@ export const createArtifactUploadUrls = async (jobId: string, owner: string, inp
     throw new ApiError(409, '이 시트에 이미 다른 artifact set이 할당되어 있습니다.', 'ARTIFACT_ID_CONFLICT');
   }
   if (!/^[a-f0-9-]{36}$/i.test(artifactSetId)) throw new ApiError(400, 'artifact set ID가 올바르지 않습니다.', 'INVALID_ARTIFACT_ID');
-  const prefix = `line-diagrams/artifacts/${artifactSetId}`;
+  const prefix = `line-diagrams/v3/documents/${artifactSetId}`;
   const manifestKey = `${prefix}/manifest.json`;
   db.prepare(`
     INSERT INTO straight_map_artifact_sets (
@@ -634,6 +626,9 @@ export const createArtifactUploadUrls = async (jobId: string, owner: string, inp
   db.prepare(`UPDATE straight_map_job_sheets SET artifact_set_id = ?, status = 'RENDERING', started_at = COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id = ?`)
     .run(artifactSetId, String(sheet.id));
   const uploads = await Promise.all(input.files.map(async (file) => {
+    if (!['map.pdf', 'coordinates.json', 'manifest.json'].includes(file.relativeKey)) {
+      throw new ApiError(400, 'PDF v3는 map.pdf, coordinates.json, manifest.json만 허용합니다.', 'UNEXPECTED_ARTIFACT_OBJECT');
+    }
     if (!validateArtifactPart(file.relativeKey) || file.relativeKey.startsWith('/') || file.relativeKey.includes('..')) {
       throw new ApiError(400, 'artifact 상대 경로가 올바르지 않습니다.', 'INVALID_ARTIFACT_PATH');
     }
@@ -700,7 +695,7 @@ export const storeLocalStraightMapArtifact = async (input: {
      WHERE job_id = ? AND artifact_set_id = ? AND status = 'RENDERING'
   `).get(input.jobId, input.artifactSetId);
   if (!assigned) throw new ApiError(409, '작업에 할당되지 않은 artifact set입니다.', 'ARTIFACT_NOT_ASSIGNED');
-  const objectKey = `line-diagrams/artifacts/${input.artifactSetId}/${input.relativeKey}`;
+  const objectKey = `line-diagrams/v3/documents/${input.artifactSetId}/${input.relativeKey}`;
   if (usesR2Storage) {
     const hash = createHash('sha256');
     let received = 0;
@@ -775,10 +770,15 @@ export const storeLocalStraightMapArtifact = async (input: {
 export type StraightMapCoordinate = {
   shapeId: string;
   label: string;
+  pageIndex: number;
+  pageXPoints: number;
+  pageYPoints: number;
+  worldXPoints: number;
+  worldYPoints: number;
   xRatio: number;
   yRatio: number;
-  width?: number;
-  height?: number;
+  widthPoints?: number;
+  heightPoints?: number;
 };
 
 export type StraightMapArtifactManifest = {
@@ -790,29 +790,20 @@ export type StraightMapArtifactManifest = {
   sheetName: string;
   rendererProfileHash: string;
   rendererEngine: string;
+  renderMode: 'pdf-viewport-v3';
   excelPrintArea: string;
   worksheetWidthPoints: number;
   worksheetHeightPoints: number;
-  pageColumns: number;
-  pageRows: number;
-  pdfPageBox: { widthPoints: number; heightPoints: number };
-  cropLeftPoints: number;
-  cropTopPoints: number;
-  canvasWidthPoints: number;
-  canvasHeightPoints: number;
-  dpi: number;
-  renderedWidth: number;
-  renderedHeight: number;
-  coordinateScaleX: number;
-  coordinateScaleY: number;
-  tileSize: number;
-  webpQuality: number;
-  webpEffort?: number;
-  maxLevel: number;
-  tileCount: number;
+  pageCount: number;
+  pagePlacements: Array<{ pageIndex: number; xPoints: number; yPoints: number; widthPoints: number; heightPoints: number }>;
+  contentBounds: { xPoints: number; yPoints: number; widthPoints: number; heightPoints: number };
+  worldWidthPoints: number;
+  worldHeightPoints: number;
+  coordinateSystem: { unit: 'pdf-point'; origin: 'top-left'; pointsPerInch: 72 };
+  coordinateCalibration?: 'pdf-text-anchors' | 'page-fit-fallback';
   coordinateCount: number;
   coordinateHash: string;
-  levels: Array<{ level: number; columns: number; rows: number; tileCount: number }>;
+  files: Record<'map.pdf' | 'coordinates.json', { sha256: string; size: number; contentType: string }>;
 };
 
 export type CompletedArtifact = {
@@ -826,33 +817,31 @@ export type CompletedArtifact = {
 const validPositive = (value: number) => Number.isFinite(value) && value > 0;
 const verifyManifestShape = (jobId: string, job: Record<string, unknown>, artifact: CompletedArtifact) => {
   const manifest = artifact.manifest;
-  if (manifest.schemaVersion !== 1 || !manifest.complete || manifest.jobId !== jobId
+  if (manifest.schemaVersion !== 3 || manifest.renderMode !== 'pdf-viewport-v3' || !manifest.complete || manifest.jobId !== jobId
     || manifest.artifactSetId !== artifact.artifactSetId || manifest.sheetName !== artifact.sheetName
     || manifest.sourceSha256 !== job.source_sha256 || manifest.rendererProfileHash !== job.renderer_profile_hash) {
     throw new ApiError(409, 'Manifest 작업/원본/렌더러 정보가 일치하지 않습니다.', 'MANIFEST_IDENTITY_MISMATCH');
   }
-  if (manifest.dpi !== env.straightMapTargetDpi || manifest.tileSize !== env.straightMapTileSize
-    || manifest.webpQuality !== env.straightMapWebpQuality
-    || (manifest.webpEffort !== undefined && manifest.webpEffort !== env.straightMapWebpEffort)) {
-    throw new ApiError(409, 'Manifest 렌더러 프로필 값이 서버 설정과 다릅니다.', 'MANIFEST_PROFILE_MISMATCH');
-  }
   for (const value of [manifest.worksheetWidthPoints, manifest.worksheetHeightPoints,
-    manifest.pdfPageBox?.widthPoints, manifest.pdfPageBox?.heightPoints, manifest.canvasWidthPoints,
-    manifest.canvasHeightPoints, manifest.renderedWidth, manifest.renderedHeight,
-    manifest.coordinateScaleX, manifest.coordinateScaleY]) {
+    manifest.worldWidthPoints, manifest.worldHeightPoints, manifest.contentBounds?.widthPoints,
+    manifest.contentBounds?.heightPoints]) {
     if (!validPositive(value)) throw new ApiError(409, 'Manifest 좌표 변환 값이 올바르지 않습니다.', 'INVALID_COORDINATE_TRANSFORM');
   }
-  const expectedWidth = Math.ceil(manifest.canvasWidthPoints * manifest.dpi / 72);
-  const expectedHeight = Math.ceil(manifest.canvasHeightPoints * manifest.dpi / 72);
-  if (manifest.renderedWidth !== expectedWidth || manifest.renderedHeight !== expectedHeight) {
-    throw new ApiError(409, 'Manifest 포인트-픽셀 변환 결과가 일치하지 않습니다.', 'RENDERED_SIZE_MISMATCH');
+  if (!Number.isSafeInteger(manifest.pageCount) || Number(manifest.pageCount) < 1 || manifest.pagePlacements?.length !== manifest.pageCount
+    || manifest.coordinateSystem?.unit !== 'pdf-point' || manifest.coordinateSystem?.origin !== 'top-left') {
+    throw new ApiError(409, 'PDF 페이지/좌표계 metadata가 올바르지 않습니다.', 'INVALID_COORDINATE_TRANSFORM');
   }
-  const expectedMaxLevel = Math.ceil(Math.log2(Math.max(manifest.renderedWidth, manifest.renderedHeight)));
-  if (manifest.maxLevel !== expectedMaxLevel) throw new ApiError(409, 'Deep Zoom maxLevel이 올바르지 않습니다.', 'INVALID_MAX_LEVEL');
+  if (manifest.pagePlacements?.some((page, index) => page.pageIndex !== index || !validPositive(page.widthPoints)
+    || !validPositive(page.heightPoints) || !Number.isFinite(page.xPoints) || !Number.isFinite(page.yPoints))) {
+    throw new ApiError(409, 'PDF 페이지 배치 metadata가 올바르지 않습니다.', 'INVALID_PAGE_PLACEMENT');
+  }
   if (!Array.isArray(artifact.coordinates) || artifact.coordinates.length !== manifest.coordinateCount) {
     throw new ApiError(409, '좌표 개수가 Manifest와 일치하지 않습니다.', 'COORDINATE_COUNT_MISMATCH');
   }
-  if (artifact.coordinates.some((item) => !item.label || !Number.isFinite(item.xRatio) || !Number.isFinite(item.yRatio)
+  if (artifact.coordinates.some((item) => !item.label || !Number.isSafeInteger(item.pageIndex)
+    || Number(item.pageIndex) < 0 || Number(item.pageIndex) >= Number(manifest.pageCount)
+    || !Number.isFinite(item.worldXPoints) || !Number.isFinite(item.worldYPoints)
+    || !Number.isFinite(item.xRatio) || !Number.isFinite(item.yRatio)
     || item.xRatio < 0 || item.xRatio > 1 || item.yRatio < 0 || item.yRatio > 1)) {
     throw new ApiError(409, '좌표 범위가 올바르지 않습니다.', 'INVALID_COORDINATES');
   }
@@ -864,56 +853,32 @@ const verifyManifestShape = (jobId: string, job: Record<string, unknown>, artifa
 
 const verifyArtifactObjects = async (artifact: CompletedArtifact) => {
   const manifest = artifact.manifest;
-  const prefix = `line-diagrams/artifacts/${artifact.artifactSetId}/`;
-  const required = new Set(['source-info.json', 'map.pdf', 'coordinates.json', 'checksums.json', 'manifest.json']);
-  let tileCount = 0;
+  const prefix = `line-diagrams/v3/documents/${artifact.artifactSetId}/`;
+  const required = new Set(['map.pdf', 'coordinates.json', 'manifest.json']);
   let newestNonManifest = 0;
   let manifestModified = 0;
-  const levelCounts = new Map<number, number>();
   const result = await inspectStoredPrefix(prefix, (object) => {
     const relative = object.key.slice(prefix.length);
-    if (required.has(relative)) {
-      required.delete(relative);
-      const modified = Date.parse(object.lastModified || '') || 0;
-      if (relative === 'manifest.json') manifestModified = modified;
-      else newestNonManifest = Math.max(newestNonManifest, modified);
-      return;
-    }
-    const match = /^tiles\/(\d+)\/(\d+)_(\d+)\.webp$/.exec(relative);
-    if (!match) throw new ApiError(409, `허용되지 않은 artifact 객체가 있습니다: ${relative}`, 'UNEXPECTED_ARTIFACT_OBJECT');
-    const level = Number(match[1]);
-    const column = Number(match[2]);
-    const row = Number(match[3]);
-    const divisor = 2 ** (manifest.maxLevel - level);
-    const levelWidth = Math.ceil(manifest.renderedWidth / divisor);
-    const levelHeight = Math.ceil(manifest.renderedHeight / divisor);
-    const columns = Math.ceil(levelWidth / manifest.tileSize);
-    const rows = Math.ceil(levelHeight / manifest.tileSize);
-    if (level < 0 || level > manifest.maxLevel || column >= columns || row >= rows) {
-      throw new ApiError(409, `Deep Zoom 타일 범위가 올바르지 않습니다: ${relative}`, 'INVALID_TILE_RANGE');
-    }
-    tileCount += 1;
-    levelCounts.set(level, (levelCounts.get(level) || 0) + 1);
-    newestNonManifest = Math.max(newestNonManifest, Date.parse(object.lastModified || '') || 0);
+    if (!required.has(relative)) throw new ApiError(409, `허용되지 않은 PDF v3 객체가 있습니다: ${relative}`, 'UNEXPECTED_ARTIFACT_OBJECT');
+    required.delete(relative);
+    const modified = Date.parse(object.lastModified || '') || 0;
+    if (relative === 'manifest.json') manifestModified = modified;
+    else newestNonManifest = Math.max(newestNonManifest, modified);
   });
   if (required.size) throw new ApiError(409, `필수 artifact가 누락되었습니다: ${[...required].join(', ')}`, 'MISSING_ARTIFACT');
-  if (tileCount !== manifest.tileCount || result.count !== manifest.tileCount + 5) {
-    throw new ApiError(409, '실제 R2 객체 수와 Manifest 타일 수가 일치하지 않습니다.', 'ARTIFACT_COUNT_MISMATCH');
-  }
-  for (const level of manifest.levels) {
-    if (level.tileCount !== level.columns * level.rows || levelCounts.get(level.level) !== level.tileCount) {
-      throw new ApiError(409, `Deep Zoom level ${level.level} 타일 수가 일치하지 않습니다.`, 'LEVEL_TILE_COUNT_MISMATCH');
-    }
-  }
+  if (result.count !== 3) throw new ApiError(409, 'PDF v3 artifact는 정확히 3개여야 합니다.', 'ARTIFACT_COUNT_MISMATCH');
   if (manifestModified && newestNonManifest && manifestModified < newestNonManifest) {
     throw new ApiError(409, 'manifest.json은 모든 산출물 뒤에 마지막으로 업로드해야 합니다.', 'MANIFEST_NOT_LAST');
   }
-  const [manifestHead, coordinateHead] = await Promise.all([
+  const [manifestHead, coordinateHead, pdfHead] = await Promise.all([
     storedObjectHead(`${prefix}manifest.json`),
     storedObjectHead(`${prefix}coordinates.json`),
+    storedObjectHead(`${prefix}map.pdf`),
   ]);
   if (String(manifestHead.metadata.sha256 || '') !== artifact.manifestSha256
-    || String(coordinateHead.metadata.sha256 || '') !== artifact.manifest.coordinateHash) {
+    || String(coordinateHead.metadata.sha256 || '') !== artifact.manifest.coordinateHash
+    || String(pdfHead.metadata.sha256 || '') !== artifact.manifest.files?.['map.pdf'].sha256
+    || pdfHead.size !== artifact.manifest.files?.['map.pdf'].size) {
     throw new ApiError(409, 'R2 artifact 해시 메타데이터가 완료 요청과 다릅니다.', 'ARTIFACT_HASH_MISMATCH');
   }
 };
@@ -968,30 +933,45 @@ const activateArtifacts = (jobId: string, artifacts: CompletedArtifact[], cached
           id, map_id, map_name, map_key, station_key, version, original_file_path, source_hash, sheet_name,
           map_width, map_height, rendered_width, rendered_height, tile_size, max_zoom, status,
           renderer_revision, artifact_set_id, source_object_key, renderer_engine, renderer_profile, cache_key,
-          manifest_object_key, coordinate_hash, rendered_dpi
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PREPARING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(versionId, mapId, artifact.sheetName, mapKey, String(job.station_key), version, `r2://${String(job.source_key)}`,
-        String(job.source_sha256), artifact.sheetName, Math.ceil(manifest.worksheetWidthPoints), Math.ceil(manifest.worksheetHeightPoints),
-        manifest.renderedWidth, manifest.renderedHeight, manifest.tileSize, manifest.maxLevel,
-        String(job.renderer_profile_hash), artifact.artifactSetId, String(job.source_key), manifest.rendererEngine,
-        String(job.renderer_profile_hash), straightMapCacheKey(String(job.source_sha256), artifact.sheetName, String(job.renderer_profile_hash)),
-        `line-diagrams/artifacts/${artifact.artifactSetId}/manifest.json`, manifest.coordinateHash, manifest.dpi);
+          manifest_object_key, coordinate_hash, rendered_dpi, render_mode, pdf_object_key, manifest_json,
+          world_width_points, world_height_points, page_count, content_bounds_json, pdf_sha256
+        ) VALUES (
+          @id, @mapId, @mapName, @mapKey, @stationKey, @version, @originalPath, @sourceHash, @sheetName,
+          @mapWidth, @mapHeight, @renderedWidth, @renderedHeight, 256, 0, 'PREPARING',
+          @rendererRevision, @artifactSetId, @sourceKey, @rendererEngine, @rendererProfile, @cacheKey,
+          @manifestKey, @coordinateHash, NULL, @renderMode, @pdfKey, @manifestJson,
+          @worldWidth, @worldHeight, @pageCount, @contentBounds, @pdfSha256
+        )
+      `).run({ id: versionId, mapId, mapName: artifact.sheetName, mapKey, stationKey: String(job.station_key), version,
+        originalPath: `r2://${String(job.source_key)}`, sourceHash: String(job.source_sha256), sheetName: artifact.sheetName,
+        mapWidth: Math.ceil(manifest.worksheetWidthPoints), mapHeight: Math.ceil(manifest.worksheetHeightPoints),
+        renderedWidth: Math.ceil(Number(manifest.worldWidthPoints)), renderedHeight: Math.ceil(Number(manifest.worldHeightPoints)),
+        rendererRevision: String(job.renderer_profile_hash), artifactSetId: artifact.artifactSetId, sourceKey: String(job.source_key),
+        rendererEngine: manifest.rendererEngine, rendererProfile: String(job.renderer_profile_hash),
+        cacheKey: straightMapCacheKey(String(job.source_sha256), artifact.sheetName, String(job.renderer_profile_hash)),
+        manifestKey: `line-diagrams/v3/documents/${artifact.artifactSetId}/manifest.json`, coordinateHash: manifest.coordinateHash,
+        renderMode: manifest.renderMode, pdfKey: `line-diagrams/v3/documents/${artifact.artifactSetId}/map.pdf`,
+        manifestJson: JSON.stringify(manifest), worldWidth: Number(manifest.worldWidthPoints), worldHeight: Number(manifest.worldHeightPoints),
+        pageCount: Number(manifest.pageCount), contentBounds: JSON.stringify(manifest.contentBounds), pdfSha256: manifest.files?.['map.pdf'].sha256 || '' });
       const insertObject = db.prepare(`
         INSERT INTO map_objects (
           id, map_id, version_id, shape_id, shape_name, object_type, original_text, normalized_text, compact_text,
-          x, y, width, height, center_x, center_y, x_ratio, y_ratio, rotation, shape_hash
-        ) VALUES (?, ?, ?, ?, '', 'excel-shape', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+          x, y, width, height, center_x, center_y, x_ratio, y_ratio, rotation, shape_hash,
+          page_index, page_x_points, page_y_points, world_x_points, world_y_points, width_points, height_points
+        ) VALUES (?, ?, ?, ?, '', 'excel-shape', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (let index = 0; index < artifact.coordinates.length; index += 1) {
         const coordinate = artifact.coordinates[index];
-        const x = Math.round(coordinate.xRatio * manifest.renderedWidth);
-        const y = Math.round(coordinate.yRatio * manifest.renderedHeight);
-        const width = Math.max(1, Math.round(coordinate.width || 1));
-        const height = Math.max(1, Math.round(coordinate.height || 1));
+        const x = Math.round(Number(coordinate.worldXPoints));
+        const y = Math.round(Number(coordinate.worldYPoints));
+        const width = Math.max(1, Math.round(coordinate.widthPoints || 1));
+        const height = Math.max(1, Math.round(coordinate.heightPoints || 1));
         const shapeId = coordinate.shapeId || `coordinate-${index + 1}`;
         insertObject.run(randomUUID(), mapId, versionId, shapeId, coordinate.label, coordinate.label,
           normalizeStraightMapCompactText(coordinate.label), x, y, width, height, x, y,
-          coordinate.xRatio, coordinate.yRatio, sha256(`${shapeId}:${coordinate.label}:${coordinate.xRatio}:${coordinate.yRatio}`));
+          coordinate.xRatio, coordinate.yRatio, sha256(`${shapeId}:${coordinate.label}:${coordinate.worldXPoints}:${coordinate.worldYPoints}`),
+          coordinate.pageIndex, coordinate.pageXPoints, coordinate.pageYPoints, coordinate.worldXPoints, coordinate.worldYPoints,
+          coordinate.widthPoints || 0, coordinate.heightPoints || 0);
       }
       db.prepare("UPDATE map_versions SET status = 'ARCHIVED', archived_at = CURRENT_TIMESTAMP WHERE map_id = ? AND status = 'ACTIVE'").run(mapId);
       db.prepare("UPDATE map_versions SET status = 'ACTIVE', activated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'PREPARING'").run(versionId);
@@ -1025,26 +1005,32 @@ const activateArtifacts = (jobId: string, artifacts: CompletedArtifact[], cached
           id, map_id, map_name, map_key, station_key, version, original_file_path, source_hash, sheet_name,
           map_width, map_height, rendered_width, rendered_height, tile_size, max_zoom, status,
           renderer_revision, artifact_set_id, source_object_key, renderer_engine, renderer_profile, cache_key,
-          manifest_object_key, coordinate_hash, rendered_dpi
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PREPARING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          manifest_object_key, coordinate_hash, rendered_dpi, render_mode, pdf_object_key, manifest_json,
+          world_width_points, world_height_points, page_count, content_bounds_json, pdf_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 256, 0, 'PREPARING', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(versionId, mapId, cachedSheet.sheetName, mapKey, String(job.station_key), Number(prior.version) + 1,
         `r2://${String(job.source_key)}`, String(job.source_sha256), cachedSheet.sheetName,
         Number(source.map_width), Number(source.map_height), Number(source.rendered_width), Number(source.rendered_height),
-        Number(source.tile_size), Number(source.max_zoom), String(job.renderer_profile_hash), cachedSheet.artifactSetId,
-        String(job.source_key), String(source.renderer_engine || 'windows-excel-pdf'), String(job.renderer_profile_hash),
+        String(job.renderer_profile_hash), cachedSheet.artifactSetId, String(job.source_key),
+        String(source.renderer_engine || 'windows-excel-pdf'), String(job.renderer_profile_hash),
         straightMapCacheKey(String(job.source_sha256), cachedSheet.sheetName, String(job.renderer_profile_hash)),
-        String(source.manifest_object_key), String(source.coordinate_hash), Number(source.rendered_dpi));
+        String(source.manifest_object_key), String(source.coordinate_hash), String(source.render_mode), String(source.pdf_object_key),
+        String(source.manifest_json), Number(source.world_width_points), Number(source.world_height_points), Number(source.page_count),
+        String(source.content_bounds_json), String(source.pdf_sha256));
       const sourceObjects = db.prepare('SELECT * FROM map_objects WHERE version_id = ?').all(String(source.id)) as Array<Record<string, unknown>>;
       const insertObject = db.prepare(`
         INSERT INTO map_objects (
           id, map_id, version_id, shape_id, shape_name, object_type, original_text, normalized_text, compact_text,
-          x, y, width, height, center_x, center_y, x_ratio, y_ratio, group_id, rotation, shape_hash
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          x, y, width, height, center_x, center_y, x_ratio, y_ratio, group_id, rotation, shape_hash,
+          page_index, page_x_points, page_y_points, world_x_points, world_y_points, width_points, height_points
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const item of sourceObjects) insertObject.run(randomUUID(), mapId, versionId, String(item.shape_id), String(item.shape_name),
         String(item.object_type), String(item.original_text), String(item.normalized_text), String(item.compact_text),
         Number(item.x), Number(item.y), Number(item.width), Number(item.height), Number(item.center_x), Number(item.center_y),
-        Number(item.x_ratio), Number(item.y_ratio), item.group_id === null ? null : String(item.group_id), Number(item.rotation), String(item.shape_hash));
+        Number(item.x_ratio), Number(item.y_ratio), item.group_id === null ? null : String(item.group_id), Number(item.rotation), String(item.shape_hash),
+        Number(item.page_index), Number(item.page_x_points), Number(item.page_y_points), Number(item.world_x_points), Number(item.world_y_points),
+        Number(item.width_points), Number(item.height_points));
       db.prepare("UPDATE map_versions SET status = 'ARCHIVED', archived_at = CURRENT_TIMESTAMP WHERE map_id = ? AND status = 'ACTIVE'").run(mapId);
       db.prepare("UPDATE map_versions SET status = 'ACTIVE', activated_at = CURRENT_TIMESTAMP WHERE id = ?").run(versionId);
       db.prepare('UPDATE straight_maps SET active_artifact_set_id = ?, updated_at = CURRENT_TIMESTAMP WHERE map_id = ?').run(cachedSheet.artifactSetId, mapId);
@@ -1087,11 +1073,8 @@ export const completeStraightMapJob = async (jobId: string, owner: string, artif
       const cached = db.prepare('SELECT * FROM straight_map_artifact_sets WHERE id = ? AND status = \'VERIFIED\'').get(sheet.artifactSetId) as Record<string, unknown> | undefined;
       if (!cached) throw new ApiError(409, '캐시 artifact가 더 이상 유효하지 않습니다.', 'CACHE_ARTIFACT_MISSING');
       const prefix = `${String(cached.r2_prefix).replace(/\/$/, '')}/`;
-      const requiredKeys = ['source-info.json', 'map.pdf', 'coordinates.json', 'checksums.json', 'manifest.json'];
+      const requiredKeys = ['map.pdf', 'coordinates.json', 'manifest.json'];
       await Promise.all(requiredKeys.map((key) => storedObjectHead(`${prefix}${key}`)));
-      let cachedTileCount = 0;
-      await inspectStoredPrefix(`${prefix}tiles/`, () => { cachedTileCount += 1; });
-      if (!cachedTileCount) throw new ApiError(409, '캐시 artifact 타일이 없습니다.', 'CACHE_TILES_MISSING');
       cachedToActivate.push({ sheetName: sheet.sheetName, artifactSetId: String(sheet.artifactSetId) });
       continue;
     }

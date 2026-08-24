@@ -436,8 +436,13 @@ export interface StraightMapSearchResult {
   objectType: string;
   xRatio: number;
   yRatio: number;
-  width: number;
-  height: number;
+  pageIndex: number;
+  pageXPoints: number;
+  pageYPoints: number;
+  worldXPoints: number;
+  worldYPoints: number;
+  widthPoints: number;
+  heightPoints: number;
   matchRank: number;
 }
 
@@ -446,11 +451,12 @@ export interface StraightMapMetadata {
   mapName: string;
   version: number;
   status: 'ACTIVE';
-  width: number;
-  height: number;
-  sourceWidth: number;
-  sourceHeight: number;
-  maxZoom: number;
-  tileSize: number;
-  tileUrl: string;
+  renderMode: 'pdf-viewport-v3';
+  worldWidthPoints: number;
+  worldHeightPoints: number;
+  pageCount: number;
+  contentBounds: { xPoints: number; yPoints: number; widthPoints: number; heightPoints: number };
+  pagePlacements: Array<{ pageIndex: number; xPoints: number; yPoints: number; widthPoints: number; heightPoints: number }>;
+  pdfUrl: string;
+  pdfRequiresCredentials: boolean;
 }

@@ -1,21 +1,21 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type OpenSeadragon from 'openseadragon';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowLeft, LocateFixed, Maximize2, Minimize2, RefreshCw, Search, ZoomIn, ZoomOut } from 'lucide-react';
 import type { StraightMapMetadata, StraightMapSearchResult } from '../../types';
 import { catvApi } from '../../features/cells/api';
 import { apiResourceUrl, ApiClientError } from '../../shared/api/client';
 
 type Props = {
-  searchKeys: Array<string | undefined>;
-  stationName?: string;
-  mapName?: string;
-  mapNames?: Array<string | undefined>;
-  matchLength?: 5 | 6;
-  title?: string;
-  onBack?: () => void;
+  searchKeys: Array<string | undefined>; stationName?: string; mapName?: string;
+  mapNames?: Array<string | undefined>; matchLength?: 5 | 6; title?: string; onBack?: () => void;
 };
+type View = { scale: number; x: number; y: number };
+type PdfLoadingTask = ReturnType<(typeof import('pdfjs-dist'))['getDocument']>;
+type PdfDocument = Awaited<PdfLoadingTask['promise']>;
+type LoadedPdf = { document: PdfDocument; loadingTask: PdfLoadingTask };
 
 const uniqueKeys = (keys: Array<string | undefined>) => [...new Set(keys.map((key) => key?.trim()).filter((key): key is string => Boolean(key)))];
+const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
 
 export const StraightMapViewer: React.FC<Props> = ({ searchKeys, stationName = '', mapName = '', mapNames = [], matchLength = 6, title = '직선도', onBack }) => {
   const effectiveMatchLength: 5 | 6 = matchLength === 5 ? 5 : 6;
@@ -30,181 +30,176 @@ export const StraightMapViewer: React.FC<Props> = ({ searchKeys, stationName = '
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
-  const [viewerReady, setViewerReady] = useState(false);
+  const [view, setView] = useState<View>({ scale: 1, x: 0, y: 0 });
+  const [canvasSize, setCanvasSize] = useState({ width: 1, height: 1 });
+  const [pdfReadyKey, setPdfReadyKey] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<OpenSeadragon.Viewer | null>(null);
-  const openSeadragonRef = useRef<typeof OpenSeadragon | null>(null);
-  const markerRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pdfRef = useRef<LoadedPdf | null>(null);
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null);
+
+  const homeView = useCallback((map: StraightMapMetadata, size = canvasSize): View => {
+    const scale = Math.max(0.01, Math.min(size.width / map.contentBounds.widthPoints, size.height / map.contentBounds.heightPoints) * 0.94);
+    return { scale, x: (size.width - map.contentBounds.widthPoints * scale) / 2 - map.contentBounds.xPoints * scale,
+      y: (size.height - map.contentBounds.heightPoints * scale) / 2 - map.contentBounds.yPoints * scale };
+  }, [canvasSize]);
+  const searchView = useCallback((map: StraightMapMetadata, result: StraightMapSearchResult, size = canvasSize): View => {
+    const targetScale = Math.max(homeView(map, size).scale * 7, 1.25);
+    return { scale: targetScale, x: size.width / 2 - result.worldXPoints * targetScale,
+      y: size.height / 2 - result.worldYPoints * targetScale };
+  }, [canvasSize, homeView]);
 
   const runSearch = async (queries: string[], keepInput = false) => {
-    setLoading(true);
-    setMessage('');
-    setResults([]);
-    setSelected(null);
-    setMetadata(null);
+    setLoading(true); setMessage(''); setResults([]); setSelected(null); setMetadata(null);
     try {
-      let found: StraightMapSearchResult[] = [];
-      let usedQuery = queries[0] || '';
-      const eligibleQueries = queries.filter((candidate) => Array.from(candidate.replace(/\s+/g, '')).length >= effectiveMatchLength);
-      for (const candidate of eligibleQueries) {
-        const scopedMaps = candidateMaps.length ? candidateMaps : [''];
-        const scopedResults = await Promise.all(scopedMaps.map((scope) => catvApi.searchStraightMap(candidate, stationName, scope, effectiveMatchLength)));
-        found = [...new Map<string, StraightMapSearchResult>(scopedResults.flat().map((result) => [result.id, result])).values()]
+      let found: StraightMapSearchResult[] = []; let usedQuery = queries[0] || '';
+      for (const candidate of queries.filter((value) => Array.from(value.replace(/\s+/g, '')).length >= effectiveMatchLength)) {
+        const scopedResults = await Promise.all((candidateMaps.length ? candidateMaps : ['']).map((scope) => catvApi.searchStraightMap(candidate, stationName, scope, effectiveMatchLength)));
+        found = [...new Map<string, StraightMapSearchResult>(scopedResults.flat().map((result) => [result.id, result] as const)).values()]
           .sort((left, right) => left.matchRank - right.matchRank || left.label.length - right.label.length);
         if (found.length) { usedQuery = candidate; break; }
       }
       if (!keepInput) setQuery(usedQuery);
-      if (!found.length) {
-        setMessage('직선도에서 해당 위치를 찾을 수 없습니다.');
-        return;
-      }
-      setResults(found);
-      setSelected(found[0]);
-    } catch {
-      setMessage('직선도 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
-    } finally {
-      setLoading(false);
-    }
+      if (!found.length) { setMessage('직선도에서 해당 위치를 찾을 수 없습니다.'); return; }
+      setResults(found); setSelected(found[0]);
+    } catch { setMessage('직선도 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => { void runSearch(initialKeys); }, [keySignature, stationName, mapSignature, effectiveMatchLength]);
-
   useEffect(() => {
     if (!selected) return;
-    let active = true;
-    setLoading(true);
-    setMessage('');
-    catvApi.getStraightMap(selected.mapId)
-      .then((value) => { if (active) setMetadata(value); })
-      .catch((error) => {
-        if (!active) return;
-        if (error instanceof ApiClientError && error.code === 'STRAIGHT_MAP_PROCESSING') setMessage('직선도 지도를 생성 중입니다. 기존 ACTIVE 지도가 준비되면 자동으로 제공됩니다.');
-        else if (error instanceof ApiClientError && error.code === 'STRAIGHT_MAP_NOT_FOUND') setMessage('등록된 직선도 지도가 없습니다.');
-        else setMessage('직선도 지도를 불러오지 못했습니다.');
-      })
-      .finally(() => { if (active) setLoading(false); });
+    let active = true; setLoading(true); setMessage('');
+    catvApi.getStraightMap(selected.mapId).then((value) => { if (active) setMetadata(value); }).catch((error) => {
+      if (!active) return;
+      if (error instanceof ApiClientError && error.code === 'STRAIGHT_MAP_PROCESSING') setMessage('직선도 지도를 생성 중입니다.');
+      else if (error instanceof ApiClientError && error.code === 'STRAIGHT_MAP_NOT_FOUND') setMessage('등록된 직선도 지도가 없습니다.');
+      else setMessage('직선도 지도를 불러오지 못했습니다.');
+    }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [selected?.mapId]);
 
   useEffect(() => {
-    if (!metadata || !containerRef.current) return;
-    setViewerReady(false);
-    viewerRef.current?.destroy();
-    const tileSource = {
-      width: metadata.width,
-      height: metadata.height,
-      tileSize: metadata.tileSize,
-      minLevel: 0,
-      maxLevel: metadata.maxZoom,
-      getTileUrl: (level: number, x: number, y: number) => apiResourceUrl(metadata.tileUrl)
-        .replace('{level}', String(level)).replace('{x}', String(x)).replace('{y}', String(y)),
-    };
-    let disposed = false;
-    let viewer: OpenSeadragon.Viewer | null = null;
-    void import('openseadragon').then(({ default: OpenSeadragonModule }) => {
-      if (disposed || !containerRef.current) return;
-      openSeadragonRef.current = OpenSeadragonModule;
-      viewer = OpenSeadragonModule({
-        element: containerRef.current,
-        tileSources: tileSource,
-        showNavigationControl: false,
-        gestureSettingsMouse: { scrollToZoom: true, clickToZoom: false, dblClickToZoom: true, pinchToZoom: true, flickEnabled: true },
-        gestureSettingsTouch: { scrollToZoom: false, clickToZoom: false, dblClickToZoom: true, pinchToZoom: true, flickEnabled: true },
-        animationTime: 0.5,
-        blendTime: 0.15,
-        // Limit blurry over-zoom while still allowing tiny Excel labels to
-        // reach a readable on-screen size from the high-DPI tile pyramid.
-        maxZoomPixelRatio: 2.25,
-        visibilityRatio: 0.15,
-        constrainDuringPan: true,
-        immediateRender: false,
-      });
-      viewerRef.current = viewer;
-      setViewerReady(true);
-    });
-    return () => {
-      disposed = true;
-      viewer?.destroy();
-      viewerRef.current = null;
-      markerRef.current = null;
-    };
-  }, [metadata]);
-
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer || !selected || !metadata) return;
-    const focus = () => {
-      if (!viewer.world.getItemCount()) return;
-      if (markerRef.current) viewer.removeOverlay(markerRef.current);
-      const marker = document.createElement('div');
-      marker.className = 'straight-map-marker';
-      marker.setAttribute('role', 'img');
-      marker.setAttribute('aria-label', `${selected.label} 검색 위치`);
-      marker.innerHTML = '<span class="straight-map-marker__pulse"></span><span class="straight-map-marker__dot"></span>';
-      markerRef.current = marker;
-      const point = viewer.viewport.imageToViewportCoordinates(selected.xRatio * metadata.width, selected.yRatio * metadata.height);
-      viewer.addOverlay({ element: marker, location: point, placement: openSeadragonRef.current?.Placement.CENTER });
-      const readableZoom = viewer.viewport.imageToViewportZoom(1.25);
-      const targetZoom = Math.min(viewer.viewport.getMaxZoom(), Math.max(viewer.viewport.getHomeZoom() * 8, readableZoom));
-      viewer.viewport.zoomTo(targetZoom, undefined, true);
-      viewer.viewport.panTo(point, true);
-      viewer.viewport.applyConstraints();
-    };
-    if (viewer.world.getItemCount()) focus(); else viewer.addOnceHandler('open', focus);
-  }, [metadata, selected, viewerReady]);
-
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    const timer = window.setTimeout(() => { viewer.viewport.resize(); viewer.viewport.applyConstraints(); }, 50);
-    return () => window.clearTimeout(timer);
+    const element = containerRef.current; if (!element) return;
+    const resize = () => setCanvasSize({ width: Math.max(1, element.clientWidth), height: Math.max(1, element.clientHeight) });
+    resize(); const observer = new ResizeObserver(resize); observer.observe(element); return () => observer.disconnect();
   }, [fullscreen]);
 
-  const zoom = (factor: number) => {
-    const viewport = viewerRef.current?.viewport;
-    if (!viewport) return;
-    viewport.zoomBy(factor);
-    viewport.applyConstraints();
-  };
+  useEffect(() => {
+    if (!fullscreen) return;
+    const previousOverflow = window.document.body.style.overflow;
+    window.document.body.style.overflow = 'hidden';
+    return () => { window.document.body.style.overflow = previousOverflow; };
+  }, [fullscreen]);
 
-  return (
+  useEffect(() => {
+    if (!metadata) return;
+    let disposed = false; setLoading(true);
+    void import('pdfjs-dist').then(async (pdfjs) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
+      const loadingTask = pdfjs.getDocument({
+        url: apiResourceUrl(metadata.pdfUrl),
+        withCredentials: metadata.pdfRequiresCredentials,
+        // R2 URLs are short-lived; download the compact vector PDF once so a
+        // later pan does not depend on an expired range-request signature.
+        disableRange: !metadata.pdfRequiresCredentials,
+      });
+      const document = await loadingTask.promise;
+      if (disposed) { await loadingTask.destroy(); return; }
+      pdfRef.current = { document, loadingTask };
+      setPdfReadyKey(`${metadata.mapId}:${metadata.version}`);
+      if (!selected) setView(homeView(metadata));
+      setLoading(false);
+    }).catch(() => { if (!disposed) { setMessage('벡터 PDF를 불러오지 못했습니다.'); setLoading(false); } });
+    return () => { disposed = true; setPdfReadyKey(''); const current = pdfRef.current; pdfRef.current = null; if (current) void current.loadingTask.destroy(); };
+  }, [metadata?.mapId, metadata?.version]);
+
+  useEffect(() => {
+    if (!metadata || !selected || !pdfReadyKey || !canvasSize.width) return;
+    setView(searchView(metadata, selected));
+  }, [metadata?.mapId, selected?.id, pdfReadyKey, canvasSize.width, canvasSize.height, searchView]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current; const loadedPdf = pdfRef.current;
+    if (!canvas || !loadedPdf || !metadata) return;
+    const document = loadedPdf.document;
+    let cancelled = false;
+    let activeTask: { promise: Promise<void>; cancel: () => void } | null = null;
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const pixelWidth = Math.ceil(canvasSize.width * dpr); const pixelHeight = Math.ceil(canvasSize.height * dpr);
+    // Build a complete frame off-screen and publish it atomically. A pan,
+    // zoom, resize, or search can cancel an older render without allowing
+    // that stale render to clear the visible canvas after the newer frame.
+    const frame = window.document.createElement('canvas'); frame.width = pixelWidth; frame.height = pixelHeight;
+    const frameContext = frame.getContext('2d', { alpha: false }); if (!frameContext) return;
+    frameContext.fillStyle = '#fff'; frameContext.fillRect(0, 0, pixelWidth, pixelHeight);
+    // PDF.js clears its target canvas at the start of every page render. Draw
+    // each visible page into a viewport-sized transparent scratch canvas and
+    // composite it onto the shared map canvas so later pages do not erase the
+    // earlier pages. The scratch canvas stays bounded to the visible viewport,
+    // even at maximum zoom.
+    const scratch = window.document.createElement('canvas'); scratch.width = pixelWidth; scratch.height = pixelHeight;
+    const scratchContext = scratch.getContext('2d', { alpha: false }); if (!scratchContext) return;
+    const visible = metadata.pagePlacements.filter((page) => {
+      const left = view.x + page.xPoints * view.scale; const top = view.y + page.yPoints * view.scale;
+      return left < canvasSize.width && top < canvasSize.height && left + page.widthPoints * view.scale > 0 && top + page.heightPoints * view.scale > 0;
+    });
+    void (async () => {
+      for (const placement of visible) {
+        if (cancelled) return;
+        const page = await document.getPage(placement.pageIndex + 1);
+        if (cancelled) { page.cleanup(); return; }
+        const viewport = page.getViewport({ scale: view.scale * dpr });
+        scratchContext.setTransform(1, 0, 0, 1, 0, 0); scratchContext.fillStyle = '#fff'; scratchContext.fillRect(0, 0, pixelWidth, pixelHeight);
+        const task = page.render({ canvas: scratch, canvasContext: scratchContext, viewport,
+          transform: [1, 0, 0, 1, (view.x + placement.xPoints * view.scale) * dpr, (view.y + placement.yPoints * view.scale) * dpr] });
+        activeTask = task;
+        try {
+          await task.promise;
+          if (cancelled) return;
+          frameContext.save(); frameContext.globalCompositeOperation = 'multiply'; frameContext.drawImage(scratch, 0, 0); frameContext.restore();
+        }
+        finally { page.cleanup(); if (activeTask === task) activeTask = null; }
+      }
+      if (cancelled) return;
+      canvas.width = pixelWidth; canvas.height = pixelHeight;
+      canvas.style.width = `${canvasSize.width}px`; canvas.style.height = `${canvasSize.height}px`;
+      const context = canvas.getContext('2d', { alpha: false }); if (!context) return;
+      context.setTransform(1, 0, 0, 1, 0, 0); context.drawImage(frame, 0, 0);
+    })().catch(() => { if (!cancelled) setMessage('현재 화면 영역을 렌더링하지 못했습니다.'); });
+    return () => { cancelled = true; activeTask?.cancel(); };
+  }, [metadata, view, canvasSize]);
+
+  const zoomAt = (factor: number, centerX = canvasSize.width / 2, centerY = canvasSize.height / 2) => setView((current) => {
+    const nextScale = clamp(current.scale * factor, 0.01, 30);
+    return { scale: nextScale, x: centerX - (centerX - current.x) * nextScale / current.scale,
+      y: centerY - (centerY - current.y) * nextScale / current.scale };
+  });
+  const markerStyle = selected ? { left: view.x + selected.worldXPoints * view.scale, top: view.y + selected.worldYPoints * view.scale } : undefined;
+
+  const viewer = (
     <div className={fullscreen ? 'fixed inset-0 z-[80] flex flex-col bg-slate-100 p-3 sm:p-5' : 'space-y-3'}>
       <div className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:flex-row sm:items-center">
-        <div className="flex items-center gap-2">
-          {onBack ? <button type="button" onClick={onBack} className="rounded-lg p-2 text-[#173B57] hover:bg-slate-100" aria-label="직선도 닫기"><ArrowLeft className="h-4 w-4" /></button> : null}
-          <div><h2 className="font-black text-[#173B57]">{title}</h2><p className="text-[11px] font-semibold text-slate-500">{stationName || metadata?.mapName || '고해상도 Excel 직선도'}</p></div>
-        </div>
-        <form className="flex min-w-0 flex-1 gap-2 sm:max-w-md" onSubmit={(event) => { event.preventDefault(); if (query.trim()) void runSearch([query.trim()], true); }}>
-          <label className="sr-only" htmlFor="straight-map-search">직선도 검색</label>
-          <input id="straight-map-search" value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 min-w-0 flex-1 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#2878B5] focus:ring-2 focus:ring-blue-100" placeholder="직선도 검색" />
-          <button type="submit" className="inline-flex h-10 items-center gap-1 rounded-xl bg-[#173B57] px-3 text-xs font-bold text-white"><Search className="h-4 w-4" />검색</button>
-        </form>
-        <div className="flex items-center gap-1.5">
-          <button type="button" onClick={() => zoom(0.75)} className="rounded-lg border border-slate-200 p-2 text-slate-600" aria-label="축소"><ZoomOut className="h-4 w-4" /></button>
-          <button type="button" onClick={() => zoom(1.35)} className="rounded-lg border border-slate-200 p-2 text-slate-600" aria-label="확대"><ZoomIn className="h-4 w-4" /></button>
-          <button type="button" onClick={() => viewerRef.current?.viewport.goHome()} className="rounded-lg border border-slate-200 p-2 text-slate-600" aria-label="전체 지도 맞춤"><RefreshCw className="h-4 w-4" /></button>
-          <button type="button" onClick={() => selected && setSelected({ ...selected })} className="rounded-lg border border-slate-200 p-2 text-orange-600" aria-label="검색 위치로 이동"><LocateFixed className="h-4 w-4" /></button>
-          <button type="button" onClick={() => setFullscreen((value) => !value)} className="rounded-lg bg-[#173B57] p-2 text-white" aria-label={fullscreen ? '전체화면 닫기' : '전체화면'}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
-        </div>
+        <div className="flex items-center gap-2">{onBack ? <button type="button" onClick={onBack} className="rounded-lg p-2 text-[#173B57] hover:bg-slate-100" aria-label="직선도 닫기"><ArrowLeft className="h-4 w-4" /></button> : null}<div><h2 className="font-black text-[#173B57]">{title}</h2><p className="text-[11px] font-semibold text-slate-500">{stationName || metadata?.mapName || '벡터 PDF 직선도'}</p></div></div>
+        <form className="flex min-w-0 flex-1 gap-2 sm:max-w-md" onSubmit={(event) => { event.preventDefault(); if (query.trim()) void runSearch([query.trim()], true); }}><label className="sr-only" htmlFor="straight-map-search">직선도 검색</label><input id="straight-map-search" value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 min-w-0 flex-1 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#2878B5]" placeholder="직선도 검색" /><button type="submit" className="inline-flex h-10 items-center gap-1 rounded-xl bg-[#173B57] px-3 text-xs font-bold text-white"><Search className="h-4 w-4" />검색</button></form>
+        <div className="flex items-center gap-1.5"><button type="button" onClick={() => zoomAt(0.75)} className="rounded-lg border border-slate-200 p-2" aria-label="축소"><ZoomOut className="h-4 w-4" /></button><button type="button" onClick={() => zoomAt(1.35)} className="rounded-lg border border-slate-200 p-2" aria-label="확대"><ZoomIn className="h-4 w-4" /></button><button type="button" onClick={() => metadata && setView(homeView(metadata))} className="rounded-lg border border-slate-200 p-2" aria-label="전체 지도 맞춤"><RefreshCw className="h-4 w-4" /></button><button type="button" onClick={() => metadata && selected && setView(searchView(metadata, selected))} className="rounded-lg border border-slate-200 p-2 text-orange-600" aria-label="검색 위치로 이동"><LocateFixed className="h-4 w-4" /></button><button type="button" onClick={() => setFullscreen((value) => !value)} className="rounded-lg bg-[#173B57] p-2 text-white" aria-label={fullscreen ? '전체화면 닫기' : '전체화면'}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button></div>
       </div>
-
-      {results.length > 1 ? (
-        <div className="rounded-xl border border-orange-200 bg-orange-50 p-3">
-          <p className="mb-2 text-xs font-extrabold text-orange-800">검색 결과 {results.length}개 · 이동할 위치를 선택하세요.</p>
-          <div className="max-h-44 space-y-1.5 overflow-y-auto">{results.map((result) => (
-            <button key={result.id} type="button" onClick={() => setSelected(result)} className={`flex w-full items-center justify-between rounded-lg border bg-white px-3 py-2 text-left text-xs hover:border-orange-300 ${selected?.id === result.id ? 'border-orange-400 ring-1 ring-orange-200' : 'border-orange-100'}`}>
-              <span><strong className="text-[#173B57]">{result.label}</strong><small className="ml-2 text-slate-500">{result.mapName}</small></span><span className="font-bold text-orange-600">이동</span>
-            </button>
-          ))}</div>
-        </div>
-      ) : null}
-
-      <div className={`relative overflow-hidden rounded-2xl border border-slate-200 bg-white ${fullscreen ? 'min-h-0 flex-1' : 'h-[min(68vh,720px)] min-h-[360px]'}`}>
-        <div ref={containerRef} className="h-full w-full touch-none bg-white" aria-label="직선도 지도" />
+      {results.length > 1 && !fullscreen ? <div className="max-h-36 overflow-y-auto rounded-xl border border-orange-200 bg-orange-50 p-2">{results.map((result) => <button key={result.id} type="button" onClick={() => setSelected(result)} className="m-1 rounded-lg border border-orange-100 bg-white px-3 py-2 text-xs"><strong>{result.label}</strong><span className="ml-2 text-slate-500">{result.mapName}</span></button>)}</div> : null}
+      <div ref={containerRef} className={`relative overflow-hidden rounded-2xl border border-slate-200 bg-white ${fullscreen ? 'min-h-0 flex-1' : 'h-[min(68vh,720px)] min-h-[360px]'}`}
+        onWheel={(event) => { event.preventDefault(); const bounds = event.currentTarget.getBoundingClientRect(); zoomAt(event.deltaY < 0 ? 1.18 : 0.84, event.clientX - bounds.left, event.clientY - bounds.top); }}
+        onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, originX: view.x, originY: view.y }; }}
+        onPointerMove={(event) => { const drag = dragRef.current; if (drag?.pointerId === event.pointerId) setView((current) => ({ ...current, x: drag.originX + event.clientX - drag.x, y: drag.originY + event.clientY - drag.y })); }}
+        onPointerUp={(event) => { if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null; }}>
+        <canvas ref={canvasRef} className="absolute inset-0 touch-none" aria-label="벡터 PDF 직선도 지도" />
+        {markerStyle ? <div className="straight-map-marker pointer-events-none absolute -translate-x-1/2 -translate-y-1/2" style={markerStyle}><span className="straight-map-marker__pulse"/><span className="straight-map-marker__dot"/></div> : null}
         {loading ? <div className="absolute inset-0 grid place-items-center bg-white/90 text-sm font-bold text-[#173B57]">직선도를 불러오는 중입니다.</div> : null}
         {!loading && message ? <div role="status" className="absolute inset-0 grid place-items-center bg-white p-6 text-center text-sm font-bold text-amber-700">{message}</div> : null}
       </div>
-      {selected && metadata ? <div className="rounded-xl border border-orange-200 bg-white px-3 py-2 text-xs shadow-sm"><strong className="text-orange-700">{selected.label}</strong><span className="ml-2 text-slate-500">{metadata.mapName} · 버전 {metadata.version}</span></div> : null}
+      {selected && metadata && !fullscreen ? <div className="rounded-xl border border-orange-200 bg-white px-3 py-2 text-xs"><strong className="text-orange-700">{selected.label}</strong><span className="ml-2 text-slate-500">{metadata.mapName} · PDF v3 · 버전 {metadata.version}</span></div> : null}
     </div>
   );
+  // Several application shells use transforms for mobile transitions, which
+  // turn position:fixed into an ancestor-relative box. Portalling the viewer
+  // to body makes fullscreen truly viewport-sized on desktop and mobile.
+  return fullscreen ? createPortal(viewer, window.document.body) : viewer;
 };

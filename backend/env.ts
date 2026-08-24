@@ -80,13 +80,14 @@ export const env = {
   r2SignedUrlTtlSeconds: numberValue('R2_SIGNED_URL_TTL_SECONDS', 300, 60, 3600),
   // Local development must be usable without an R2 account. Production keeps
   // the explicit feature flag so rollout can still be controlled safely.
-  straightMapPipelineV2Enabled: booleanValue('STRAIGHT_MAP_PIPELINE_V2_ENABLED', nodeEnv !== 'production'),
+  // During the production migration, existing Render services may still have
+  // only the former V2 flag. Treat that enabled flag as approval for the V3
+  // replacement until the Blueprint/environment is resynchronised.
+  straightMapPipelineV3Enabled: booleanValue(
+    'STRAIGHT_MAP_PIPELINE_V3_ENABLED',
+    booleanValue('STRAIGHT_MAP_PIPELINE_V2_ENABLED', nodeEnv !== 'production'),
+  ),
   straightMapRendererDeviceToken: process.env.STRAIGHT_MAP_RENDERER_DEVICE_TOKEN || localRendererToken(),
-  straightMapTargetDpi: numberValue('STRAIGHT_MAP_TARGET_DPI', 1100, 300, 1200),
-  straightMapTileSize: numberValue('STRAIGHT_MAP_TILE_SIZE', 512, 128, 512),
-  straightMapWebpQuality: numberValue('STRAIGHT_MAP_WEBP_QUALITY', 94, 80, 100),
-  straightMapWebpEffort: numberValue('STRAIGHT_MAP_WEBP_EFFORT', 2, 0, 6),
-  straightMapTileConcurrency: numberValue('STRAIGHT_MAP_TILE_CONCURRENCY', 2, 1, 4),
   straightMapUploadConcurrency: numberValue('STRAIGHT_MAP_UPLOAD_CONCURRENCY', 6, 1, 8),
   straightMapDirectR2UploadEnabled: booleanValue('STRAIGHT_MAP_DIRECT_R2_UPLOAD_ENABLED', true),
   straightMapLeaseSeconds: numberValue('STRAIGHT_MAP_LEASE_SECONDS', 600, 300, 900),

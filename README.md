@@ -4,11 +4,11 @@ Vite + React 화면을 유지하면서 Express API와 SQLite 데이터베이스�
 
 ## 직선도 지도 파이프라인
 
-- 관리자 B2C/직선도 XLSX 업로드 시 ZIP 내부의 worksheet, DrawingML, sharedStrings XML만 먼저 분석합니다.
-- 도형/그룹/셀 텍스트의 EMU 원본 좌표, 중심 좌표, 정규화 좌표와 검색 문자열을 `map_versions`, `map_objects`에 버전별 저장합니다.
-- 검색 좌표 등록 후 Windows Excel 원본 렌더링 → PDF → 페이지 스트리밍 → 512px WebP Deep Zoom 타일 생성을 백그라운드에서 수행합니다.
+- 브라우저가 XLSX SHA-256을 계산해 원본을 R2 `line-diagrams/v3/sources/`로 직접 업로드합니다.
+- Windows Excel Agent가 실제 값/수식 셀과 표시 도형만 찾아 18pt 여백의 벡터 PDF와 PDF point 좌표를 생성합니다.
+- 시트별 `map.pdf`, `coordinates.json`, `manifest.json` 3개만 R2에 올리며 타일 PUT은 발생하지 않습니다.
 - 새 버전이 완료되기 전에는 기존 `ACTIVE` 버전을 유지하고, 완료 시에만 이전 버전을 `ARCHIVED`로 전환합니다.
-- CELL/B2C의 기존 직선도 버튼은 OpenSeadragon 지도 뷰어로 연결되며 exact/normalized/prefix/partial 순서 검색, 다중 결과 선택, 자동 이동과 마커를 지원합니다.
+- CELL/B2C 직선도는 PDF.js 지도 뷰어로 연결되며 화면 교차 페이지만 확대 배율·DPR에 맞춰 렌더링하고 검색 위치로 자동 이동합니다.
 
 ## 1. 분석한 기존 프로젝트 구조
 
@@ -253,8 +253,8 @@ npm run build
 - B2C 검색 대상은 L~P열뿐입니다. 검색어와 저장값에서 공백을 제거하며, 공백 제외 5글자 이상을 입력하면 연속 5글자 일치 결과를 반환합니다. 전체 문자열 일치는 결과 상단에 정렬됩니다.
 - CELL 직선도는 조회된 국사의 OTX/ORX 노드 시트에서 CELL명 기준 공백 제외 연속 6글자를 검색합니다. B2C 직선도는 선번장 D열 노드 시트에서 L~P 검색값 기준 연속 5글자를 검색하고 첫 좌표를 즉시 표시합니다.
 - 선번장을 제외한 모든 시트는 각각 독립된 직선도로 등록됩니다. `국사 + 시트명`을 동일 지도 키로 사용하므로 다음 업로드에서 시트별 버전이 이어집니다.
-- 새 직선도 렌더링이 완료되기 전에는 기존 ACTIVE 버전을 계속 제공합니다. Excel 도형의 실제 끝점까지 인쇄 범위를 넓히고, 여러 PDF 페이지를 원래 지도 순서로 결합한 뒤 PNG → WebP Deep Zoom 타일을 순차 생성합니다. CELL은 PDF에 실제로 그려진 식별문자 중심, B2C는 가장 가까운 인쇄 표기 중심으로 좌표를 보정합니다.
-- 신규 렌더링 기본값은 `STRAIGHT_MAP_TARGET_DPI=1100`, `STRAIGHT_MAP_TILE_SIZE=512`, `STRAIGHT_MAP_WEBP_QUALITY=94`, `STRAIGHT_MAP_WEBP_EFFORT=2`입니다. 기존 버전은 각 Manifest의 DPI와 tileSize를 그대로 사용합니다.
+- 새 직선도 렌더링이 완료되기 전에는 기존 ACTIVE 버전을 계속 제공합니다. 서식 전용 UsedRange를 무시하고 실제 셀·표시 도형에 18pt 여백을 둔 벡터 PDF를 생성하며, PDF point 좌표와 Manifest를 합쳐 시트당 객체 3개만 업로드합니다.
+- 브라우저는 PDF.js로 현재 화면과 교차하는 페이지만 확대 배율·DPR에 맞춰 그립니다. 검색 좌표는 좌상단 원점 PDF point와 페이지 좌표를 함께 저장하고 PDF 내부 기준점으로 Excel→PDF scale/offset을 보정합니다.
 
 관련 검증 명령:
 

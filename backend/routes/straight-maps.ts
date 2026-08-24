@@ -5,7 +5,7 @@ import { normalizeStationName } from '../catv';
 import { ApiError, asyncRoute, success } from '../http';
 import { requireAuth } from '../security/session';
 import { straightMapContinuousTerms, type StraightMapMatchLength } from '../straight-map-search';
-import { resolveStraightMapArtifactTile, resolveStraightMapTile, signedStraightMapTileUrl } from '../straight-map-storage';
+import { resolveStraightMapPdf, signedStraightMapPdfUrl } from '../straight-map-storage';
 import { cachedStraightMapSearch } from '../straight-map-cache';
 import { usesR2Storage } from '../object-storage';
 
@@ -49,7 +49,9 @@ router.get('/search', (req, res) => {
              selected.version AS mapVersion, selected.status AS mapStatus,
              o.original_text AS label, o.object_type AS objectType,
              o.x_ratio AS xRatio, o.y_ratio AS yRatio,
-             o.width, o.height,
+             o.width_points AS widthPoints, o.height_points AS heightPoints,
+             o.page_index AS pageIndex, o.page_x_points AS pageXPoints, o.page_y_points AS pageYPoints,
+             o.world_x_points AS worldXPoints, o.world_y_points AS worldYPoints,
              CASE
                WHEN o.compact_text = ? THEN 1
                WHEN o.compact_text LIKE ? ESCAPE '\\' THEN 2
@@ -66,52 +68,49 @@ router.get('/search', (req, res) => {
   success(res, { count: rows.length, results: rows });
 });
 
-router.get('/:mapId', (req, res) => {
+router.get('/:mapId', asyncRoute(async (req, res) => {
   const version = db.prepare(`
-    SELECT map_id AS mapId, map_name AS mapName, version, status,
-           rendered_width AS width, rendered_height AS height,
-           map_width AS sourceWidth, map_height AS sourceHeight,
-           max_zoom AS maxZoom, tile_size AS tileSize, error_message AS errorMessage
+    SELECT map_id AS mapId, map_name AS mapName, version, status, artifact_set_id AS artifactSetId,
+           render_mode AS renderMode, world_width_points AS worldWidthPoints,
+           world_height_points AS worldHeightPoints, page_count AS pageCount,
+           content_bounds_json AS contentBoundsJson, manifest_json AS manifestJson,
+           error_message AS errorMessage
       FROM map_versions
      WHERE map_id = ? AND status IN ('ACTIVE', 'PROCESSING')
      ORDER BY CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END, version DESC LIMIT 1
   `).get(req.params.mapId) as Record<string, unknown> | undefined;
   if (!version) throw new ApiError(404, '등록된 직선도 지도가 없습니다.', 'STRAIGHT_MAP_NOT_FOUND');
   if (version.status === 'PROCESSING') throw new ApiError(409, '직선도 지도를 생성 중입니다.', 'STRAIGHT_MAP_PROCESSING');
-  success(res, {
-    ...version,
-    tileUrl: `/api/straight-maps/${encodeURIComponent(String(version.mapId))}/versions/${version.version}/tiles/{level}/{x}_{y}.webp`,
-  });
-});
+  const manifest = JSON.parse(String(version.manifestJson || '{}')) as { pagePlacements?: unknown[] };
+  const pdfUrl = usesR2Storage
+    ? await signedStraightMapPdfUrl(String(version.artifactSetId))
+    : `/api/straight-maps/${encodeURIComponent(String(version.mapId))}/versions/${version.version}/pdf`;
+  success(res, { ...version, artifactSetId: undefined, contentBounds: JSON.parse(String(version.contentBoundsJson || '{}')),
+    pagePlacements: manifest.pagePlacements || [],
+    pdfUrl, pdfRequiresCredentials: !usesR2Storage,
+    manifestJson: undefined, contentBoundsJson: undefined });
+}));
 
-router.get('/:mapId/versions/:version/tiles/:level/:tile', asyncRoute(async (req, res) => {
+router.get('/:mapId/versions/:version/pdf', asyncRoute(async (req, res) => {
   const version = Number(req.params.version);
-  const level = Number(req.params.level);
   const allowed = db.prepare(`
     SELECT artifact_set_id AS artifactSetId FROM map_versions
      WHERE map_id = ? AND version = ? AND status IN ('ACTIVE', 'ARCHIVED')
   `).get(req.params.mapId, version) as { artifactSetId: string | null } | undefined;
-  if (!allowed) throw new ApiError(404, '직선도 타일을 찾을 수 없습니다.', 'TILE_NOT_FOUND');
+  if (!allowed?.artifactSetId) throw new ApiError(404, '직선도 PDF를 찾을 수 없습니다.', 'PDF_NOT_FOUND');
   if (usesR2Storage) {
-    try { resolveStraightMapTile(req.params.mapId, version, level, req.params.tile); }
-    catch { throw new ApiError(400, '직선도 저장 경로가 올바르지 않습니다.', 'INVALID_TILE_PATH'); }
-    const url = await signedStraightMapTileUrl(req.params.mapId, version, level, req.params.tile, allowed.artifactSetId);
+    const url = await signedStraightMapPdfUrl(allowed.artifactSetId);
     res.setHeader('Cache-Control', 'private, max-age=60');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.redirect(302, url);
     return;
   }
-  let filePath: string;
-  try {
-    filePath = allowed.artifactSetId
-      ? resolveStraightMapArtifactTile(allowed.artifactSetId, level, req.params.tile)
-      : resolveStraightMapTile(req.params.mapId, version, level, req.params.tile);
-  }
-  catch { throw new ApiError(400, '직선도 타일 경로가 올바르지 않습니다.', 'INVALID_TILE_PATH'); }
-  if (!fs.existsSync(filePath)) throw new ApiError(404, '직선도 타일을 찾을 수 없습니다.', 'TILE_NOT_FOUND');
-  res.setHeader('Content-Type', 'image/webp');
+  const filePath = resolveStraightMapPdf(allowed.artifactSetId);
+  if (!fs.existsSync(filePath)) throw new ApiError(404, '직선도 PDF를 찾을 수 없습니다.', 'PDF_NOT_FOUND');
+  res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Accept-Ranges', 'bytes');
   res.sendFile(filePath);
 }));
 

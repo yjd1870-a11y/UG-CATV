@@ -1,13 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, openAsBlob, readFileSync } from 'node:fs';
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { promisify } from 'node:util';
-import sharp from 'sharp';
 import { sheetContentHashes } from './sheet-fingerprint';
 export { sheetContentHashes } from './sheet-fingerprint';
 
@@ -27,8 +26,6 @@ if (process.env.CATV_RENDERER_LIBRARY_MODE !== '1') {
   if (!apiBase || !/^https:\/\//i.test(apiBase) && !/^http:\/\/localhost(?::\d+)?$/i.test(apiBase)) throw new Error('CATV_RENDERER_API_URL에 HTTPS Render API 주소가 필요합니다.');
   if (deviceToken.length < 32) throw new Error('Windows Credential Manager 또는 보안 프롬프트로 renderer device token을 제공해주세요.');
 }
-
-sharp.cache({ memory: 192, files: 16, items: 64 });
 
 type Envelope<T> = { success: true; data: T } | { success: false; message: string; code?: string };
 const api = async <T>(endpoint: string, body: Record<string, unknown> = {}) => {
@@ -83,7 +80,7 @@ const downloadFile = async (url: string, filePath: string, expectedSha256: strin
 const repairMissingProductionSource = async (jobId: string, job: Record<string, unknown>) => {
   const sourceSha256 = String(job.sourceSha256);
   const sourceDirectory = path.resolve(process.env.CATV_RENDERER_SOURCE_DIR
-    || path.join(projectRoot, 'backend', 'data', 'straight-maps', 'sources'));
+    || path.join(projectRoot, 'backend', 'data', 'straight-maps', 'v3', 'sources'));
   const candidate = path.join(sourceDirectory, `${sourceSha256}.xlsx`);
   const candidateStat = await stat(candidate).catch(() => null);
   if (!candidateStat || await sha256File(candidate) !== sourceSha256) {
@@ -112,36 +109,60 @@ const powershell = async (script: string, args: string[]) => {
 
 type ExcelAnalysis = { hasExternalLinks: boolean; sheets: Array<{ name: string; visible: boolean; empty: boolean }> };
 type ExcelCoordinates = {
+  schemaVersion?: number;
   printArea: string;
-  printScale: number;
+  printScale?: number;
   pageOrder?: number;
+  printLeft?: number;
+  printTop?: number;
   printWidth: number;
   printHeight: number;
-  verticalStarts: number[];
-  horizontalStarts: number[];
-  cropLeftPoints: number;
-  cropTopPoints: number;
+  verticalStarts?: number[];
+  horizontalStarts?: number[];
+  cropLeftPoints?: number;
+  cropTopPoints?: number;
+  calibration?: Array<{ label: string; x: number; y: number }>;
   coordinates: Array<{ shapeId: string; label: string; left: number; top: number; width: number; height: number }>;
 };
 
 const jsonFile = async <T>(filePath: string) => JSON.parse((await readFile(filePath, 'utf8')).replace(/^\uFEFF/, '')) as T;
 
-const inspectPdf = async (pdfPath: string) => {
-  const { stdout } = await execFileAsync('pdfinfo.exe', [pdfPath], { windowsHide: true, maxBuffer: 1024 * 1024 });
-  const pages = Number(/^Pages:\s+(\d+)/mi.exec(stdout)?.[1]);
-  const size = /^Page size:\s+([\d.]+) x ([\d.]+) pts/mi.exec(stdout);
-  if (!pages || !size) throw new Error('pdfinfo에서 PDF 페이지 정보를 확인할 수 없습니다. Poppler를 PATH에 설치해주세요.');
-  return { pages, widthPoints: Number(size[1]), heightPoints: Number(size[2]) };
+type PdfInfo = { pages: number; widthPoints: number; heightPoints: number;
+  pageBoxes?: Array<{ pageIndex: number; widthPoints: number; heightPoints: number }>;
+  textAnchors?: Array<{ label: string; pageIndex: number; xPoints: number; yPoints: number }> };
+const inspectPdf = async (pdfPath: string): Promise<PdfInfo> => {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await readFile(pdfPath)) });
+  const document = await loadingTask.promise;
+  const pageBoxes: Array<{ pageIndex: number; widthPoints: number; heightPoints: number }> = [];
+  const textAnchors: Array<{ label: string; pageIndex: number; xPoints: number; yPoints: number }> = [];
+  try {
+    for (let pageIndex = 0; pageIndex < document.numPages; pageIndex += 1) {
+      const page = await document.getPage(pageIndex + 1);
+      const viewport = page.getViewport({ scale: 1 });
+      pageBoxes.push({ pageIndex, widthPoints: viewport.width, heightPoints: viewport.height });
+      const text = await page.getTextContent();
+      for (const item of text.items) {
+        if (!('str' in item) || !item.str.startsWith('__CATV_CAL_')) continue;
+        const [x, baselineY] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+        textAnchors.push({ label: item.str, pageIndex, xPoints: x + item.width / 2, yPoints: baselineY - item.height / 2 });
+      }
+      page.cleanup();
+    }
+  } finally { await loadingTask.destroy(); }
+  if (!pageBoxes.length) throw new Error('생성된 PDF에 페이지가 없습니다.');
+  return { pages: pageBoxes.length, widthPoints: pageBoxes[0].widthPoints, heightPoints: pageBoxes[0].heightPoints, pageBoxes, textAnchors };
 };
 
 const findPageIndex = (starts: number[], value: number) => {
   for (let index = starts.length - 1; index >= 0; index -= 1) if (value >= starts[index]) return index;
   return 0;
 };
+const clampIndex = (value: number, length: number) => Math.min(length - 1, Math.max(0, value));
 
 export const inferPdfPageGrid = (excel: ExcelCoordinates, pdf: Awaited<ReturnType<typeof inspectPdf>>) => {
-  const scaledWidth = Math.max(1, excel.printWidth * excel.printScale);
-  const scaledHeight = Math.max(1, excel.printHeight * excel.printScale);
+  const scaledWidth = Math.max(1, excel.printWidth);
+  const scaledHeight = Math.max(1, excel.printHeight);
   const estimatedColumns = Math.max(1, Math.ceil((scaledWidth - 0.01) / pdf.widthPoints));
   const estimatedRows = Math.max(1, Math.ceil((scaledHeight - 0.01) / pdf.heightPoints));
   if (estimatedColumns * estimatedRows === pdf.pages) return { columns: estimatedColumns, rows: estimatedRows };
@@ -162,32 +183,87 @@ export const inferPdfPageGrid = (excel: ExcelCoordinates, pdf: Awaited<ReturnTyp
 };
 
 export const normalizedCoordinates = (excel: ExcelCoordinates, pdf: Awaited<ReturnType<typeof inspectPdf>>) => {
-  const { columns, rows } = inferPdfPageGrid(excel, pdf);
-  const verticalStarts = excel.verticalStarts.length === columns
-    ? excel.verticalStarts
-    : Array.from({ length: columns }, (_, index) => index * pdf.widthPoints / excel.printScale);
-  const horizontalStarts = excel.horizontalStarts.length === rows
-    ? excel.horizontalStarts
-    : Array.from({ length: rows }, (_, index) => index * pdf.heightPoints / excel.printScale);
-  const canvasWidthPoints = pdf.widthPoints * columns;
-  const canvasHeightPoints = pdf.heightPoints * rows;
+  if (excel.schemaVersion !== 3) {
+    const { columns, rows } = inferPdfPageGrid(excel, pdf);
+    const scale = excel.printScale || 1;
+    const verticalStarts = excel.verticalStarts?.length === columns ? excel.verticalStarts : Array.from({ length: columns }, (_, index) => index * pdf.widthPoints / scale);
+    const horizontalStarts = excel.horizontalStarts?.length === rows ? excel.horizontalStarts : Array.from({ length: rows }, (_, index) => index * pdf.heightPoints / scale);
+    const canvasWidthPoints = pdf.widthPoints * columns;
+    const canvasHeightPoints = pdf.heightPoints * rows;
+    const coordinates = excel.coordinates.map((item) => {
+      const centerX = item.left + item.width / 2;
+      const centerY = item.top + item.height / 2;
+      const column = findPageIndex(verticalStarts, centerX);
+      const row = findPageIndex(horizontalStarts, centerY);
+      const worldXPoints = column * pdf.widthPoints + (centerX - verticalStarts[column]) * scale - (excel.cropLeftPoints || 0);
+      const worldYPoints = row * pdf.heightPoints + (centerY - horizontalStarts[row]) * scale - (excel.cropTopPoints || 0);
+      return { shapeId: item.shapeId, label: item.label, pageIndex: row * columns + column,
+        pageXPoints: worldXPoints - column * pdf.widthPoints, pageYPoints: worldYPoints - row * pdf.heightPoints,
+        worldXPoints, worldYPoints, xRatio: Math.min(1, Math.max(0, worldXPoints / canvasWidthPoints)),
+        yRatio: Math.min(1, Math.max(0, worldYPoints / canvasHeightPoints)), widthPoints: item.width * scale, heightPoints: item.height * scale };
+    });
+    const pagePlacements = Array.from({ length: pdf.pages }, (_, pageIndex) => ({ pageIndex,
+      xPoints: pageIndex % columns * pdf.widthPoints, yPoints: Math.floor(pageIndex / columns) * pdf.heightPoints,
+      widthPoints: pdf.widthPoints, heightPoints: pdf.heightPoints }));
+    return { coordinates, columns, rows, canvasWidthPoints, canvasHeightPoints, pagePlacements,
+      contentBounds: { xPoints: 0, yPoints: 0, widthPoints: canvasWidthPoints, heightPoints: canvasHeightPoints }, printScale: scale };
+  }
+  const grid = pdf.pages === 1 ? { columns: 1, rows: 1 } : inferPdfPageGrid(excel, pdf);
+  const { columns, rows } = grid;
+  const pageBoxes = pdf.pageBoxes || Array.from({ length: pdf.pages }, (_, pageIndex) => ({ pageIndex, widthPoints: pdf.widthPoints, heightPoints: pdf.heightPoints }));
+  const pagePlacements = pageBoxes.map((box, pageIndex) => {
+    const column = excel.pageOrder === 1 ? Math.floor(pageIndex / rows) : pageIndex % columns;
+    const row = excel.pageOrder === 1 ? pageIndex % rows : Math.floor(pageIndex / columns);
+    return { pageIndex, xPoints: column * pdf.widthPoints, yPoints: row * pdf.heightPoints,
+      widthPoints: box.widthPoints, heightPoints: box.heightPoints };
+  });
+  const canvasWidthPoints = Math.max(...pagePlacements.map((page) => page.xPoints + page.widthPoints));
+  const canvasHeightPoints = Math.max(...pagePlacements.map((page) => page.yPoints + page.heightPoints));
+  const fallbackScale = Math.min(canvasWidthPoints / excel.printWidth, canvasHeightPoints / excel.printHeight);
+  const fallbackScaleX = fallbackScale;
+  const fallbackScaleY = fallbackScale;
+  const sourceA = excel.calibration?.find((item) => item.label === '__CATV_CAL_A__');
+  const sourceB = excel.calibration?.find((item) => item.label === '__CATV_CAL_B__');
+  const pdfA = pdf.textAnchors?.find((item) => item.label === '__CATV_CAL_A__');
+  const pdfB = pdf.textAnchors?.find((item) => item.label === '__CATV_CAL_B__');
+  const pdfAPlacement = pdfA ? pagePlacements[pdfA.pageIndex] : undefined;
+  const pdfBPlacement = pdfB ? pagePlacements[pdfB.pageIndex] : undefined;
+  const pdfAWorld = pdfA && pdfAPlacement ? { x: pdfAPlacement.xPoints + pdfA.xPoints, y: pdfAPlacement.yPoints + pdfA.yPoints } : undefined;
+  const pdfBWorld = pdfB && pdfBPlacement ? { x: pdfBPlacement.xPoints + pdfB.xPoints, y: pdfBPlacement.yPoints + pdfB.yPoints } : undefined;
+  const validCalibration = sourceA && sourceB && pdfAWorld && pdfBWorld
+    && Math.abs(sourceB.x - sourceA.x) > 1 && Math.abs(sourceB.y - sourceA.y) > 1;
+  const scaleX = validCalibration ? (pdfBWorld.x - pdfAWorld.x) / (sourceB.x - sourceA.x) : fallbackScaleX;
+  const scaleY = validCalibration ? (pdfBWorld.y - pdfAWorld.y) / (sourceB.y - sourceA.y) : fallbackScaleY;
+  const contentX = validCalibration ? pdfAWorld.x - (sourceA.x - (excel.printLeft || 0)) * scaleX : 0;
+  const contentY = validCalibration ? pdfAWorld.y - (sourceA.y - (excel.printTop || 0)) * scaleY : 0;
+  const contentWidthPoints = excel.printWidth * scaleX;
+  const contentHeightPoints = excel.printHeight * scaleY;
+  const contentBounds = { xPoints: contentX, yPoints: contentY, widthPoints: contentWidthPoints, heightPoints: contentHeightPoints };
   const coordinates = excel.coordinates.map((item) => {
     const centerX = item.left + item.width / 2;
     const centerY = item.top + item.height / 2;
-    const column = findPageIndex(verticalStarts, centerX);
-    const row = findPageIndex(horizontalStarts, centerY);
-    const xPoints = column * pdf.widthPoints + (centerX - verticalStarts[column]) * excel.printScale - excel.cropLeftPoints;
-    const yPoints = row * pdf.heightPoints + (centerY - horizontalStarts[row]) * excel.printScale - excel.cropTopPoints;
+    const xPoints = contentX + (centerX - (excel.printLeft || 0)) * scaleX;
+    const yPoints = contentY + (centerY - (excel.printTop || 0)) * scaleY;
+    const column = clampIndex(Math.floor(xPoints / pdf.widthPoints), columns);
+    const row = clampIndex(Math.floor(yPoints / pdf.heightPoints), rows);
+    const pageIndex = excel.pageOrder === 1 ? column * rows + row : row * columns + column;
+    const placement = pagePlacements[Math.min(pagePlacements.length - 1, pageIndex)];
     return {
       shapeId: item.shapeId,
       label: item.label,
+      pageIndex: placement.pageIndex,
+      pageXPoints: xPoints - placement.xPoints,
+      pageYPoints: yPoints - placement.yPoints,
+      worldXPoints: xPoints,
+      worldYPoints: yPoints,
       xRatio: Math.min(1, Math.max(0, xPoints / canvasWidthPoints)),
       yRatio: Math.min(1, Math.max(0, yPoints / canvasHeightPoints)),
-      width: item.width * excel.printScale,
-      height: item.height * excel.printScale,
+      widthPoints: item.width * scaleX,
+      heightPoints: item.height * scaleY,
     };
   });
-  return { coordinates, columns, rows, canvasWidthPoints, canvasHeightPoints };
+  return { coordinates, columns, rows, canvasWidthPoints, canvasHeightPoints, pagePlacements, contentBounds,
+    printScale: (scaleX + scaleY) / 2, calibrationMode: validCalibration ? 'pdf-text-anchors' : 'page-fit-fallback' };
 };
 
 export const mapLimit = async <T, R>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<R>) => {
@@ -203,191 +279,7 @@ export const mapLimit = async <T, R>(items: T[], concurrency: number, worker: (i
   return results;
 };
 
-export const generateTiles = async (input: {
-  pdfPath: string;
-  outputRoot: string;
-  pdf: Awaited<ReturnType<typeof inspectPdf>>;
-  columns: number;
-  rows: number;
-  pageOrder?: number;
-  dpi: number;
-  tileSize: number;
-  quality: number;
-  effort: number;
-  concurrency: number;
-  onProgress?: (fraction: number, level: number, maxLevel: number) => Promise<void>;
-}) => {
-  const renderedWidth = Math.ceil(input.pdf.widthPoints * input.columns * input.dpi / 72);
-  const renderedHeight = Math.ceil(input.pdf.heightPoints * input.rows * input.dpi / 72);
-  const maxLevel = Math.ceil(Math.log2(Math.max(renderedWidth, renderedHeight)));
-  const levels: Array<{ level: number; columns: number; rows: number; tileCount: number }> = [];
-  const expectedTiles = Array.from({ length: maxLevel + 1 }, (_, level) => {
-    const divisor = 2 ** (maxLevel - level);
-    return Math.ceil(Math.ceil(renderedWidth / divisor) / input.tileSize)
-      * Math.ceil(Math.ceil(renderedHeight / divisor) / input.tileSize);
-  });
-  const expectedTileTotal = expectedTiles.reduce((sum, count) => sum + count, 0);
-  let completedTiles = 0;
-  let pdfRasterMs = 0;
-  let webpEncodeMs = 0;
-  const encodeWebp = async (action: () => Promise<unknown>) => {
-    const startedAt = Date.now();
-    try { await action(); }
-    finally { webpEncodeMs += Date.now() - startedAt; }
-  };
-  await mkdir(input.outputRoot, { recursive: true });
-  const topRoot = path.join(input.outputRoot, String(maxLevel));
-  await mkdir(topRoot, { recursive: true });
-  const topColumns = Math.ceil(renderedWidth / input.tileSize);
-  const topRows = Math.ceil(renderedHeight / input.tileSize);
-  const pageWidth = Math.max(1, Math.round(input.pdf.widthPoints * input.dpi / 72));
-  const pageHeight = Math.max(1, Math.round(input.pdf.heightPoints * input.dpi / 72));
-
-  // Rasterize every PDF page exactly once at the target DPI.  Tiles are built
-  // page-by-page so a multi-gigapixel worksheet is never assembled in memory.
-  for (let pageIndex = 0; pageIndex < input.pdf.pages; pageIndex += 1) {
-    const pageNumber = pageIndex + 1;
-    const pageBase = path.join(path.dirname(input.outputRoot), `page-top-${pageNumber}`);
-    const rasterStartedAt = Date.now();
-    try {
-      await execFileAsync('pdftoppm.exe', ['-f', String(pageNumber), '-l', String(pageNumber), '-singlefile', '-r', String(input.dpi), '-png', input.pdfPath, pageBase], {
-          windowsHide: true,
-          timeout: 60 * 60_000,
-          maxBuffer: 1024 * 1024,
-      });
-    } finally { pdfRasterMs += Date.now() - rasterStartedAt; }
-    const pagePath = `${pageBase}.png`;
-    const pageImage = sharp(pagePath, { limitInputPixels: false, sequentialRead: true }).resize(pageWidth, pageHeight, { fit: 'fill' });
-    const pageColumn = input.pageOrder === 1 ? Math.floor(pageIndex / input.rows) : pageIndex % input.columns;
-    const pageRow = input.pageOrder === 1 ? pageIndex % input.rows : Math.floor(pageIndex / input.columns);
-    const originX = pageColumn * pageWidth;
-    const originY = pageRow * pageHeight;
-    const firstColumn = Math.floor(originX / input.tileSize);
-    const lastColumn = Math.min(topColumns - 1, Math.floor((originX + pageWidth - 1) / input.tileSize));
-    const firstRow = Math.floor(originY / input.tileSize);
-    const lastRow = Math.min(topRows - 1, Math.floor((originY + pageHeight - 1) / input.tileSize));
-    const tasks: Array<{ row: number; column: number }> = [];
-    for (let row = firstRow; row <= lastRow; row += 1) {
-      for (let column = firstColumn; column <= lastColumn; column += 1) tasks.push({ row, column });
-    }
-    await mapLimit(tasks, input.concurrency, async ({ row, column }) => {
-          const tileLeft = column * input.tileSize;
-          const tileTop = row * input.tileSize;
-          const tileWidth = Math.min(input.tileSize, renderedWidth - tileLeft);
-          const tileHeight = Math.min(input.tileSize, renderedHeight - tileTop);
-          const sourceLeft = Math.max(0, tileLeft - originX);
-          const sourceTop = Math.max(0, tileTop - originY);
-          const pieceLeft = Math.max(0, originX - tileLeft);
-          const pieceTop = Math.max(0, originY - tileTop);
-          const pieceWidth = Math.min(pageWidth - sourceLeft, tileWidth - pieceLeft);
-          const pieceHeight = Math.min(pageHeight - sourceTop, tileHeight - pieceTop);
-          if (pieceWidth <= 0 || pieceHeight <= 0) return;
-          const piece = await pageImage.clone().extract({ left: sourceLeft, top: sourceTop, width: pieceWidth, height: pieceHeight }).png().toBuffer();
-          const tilePath = path.join(topRoot, `${column}_${row}.webp`);
-          let canvas = sharp({ create: { width: tileWidth, height: tileHeight, channels: 3, background: '#ffffff' } });
-          try {
-            const existingTile = await readFile(tilePath);
-            canvas = sharp(existingTile).flatten({ background: '#ffffff' });
-          } catch { /* first page touching this tile */ }
-          await encodeWebp(() => canvas.composite([{ input: piece, left: pieceLeft, top: pieceTop }])
-            .webp({ quality: input.quality, effort: input.effort }).toFile(`${tilePath}.next`));
-          canvas.destroy();
-          await rm(tilePath, { force: true });
-          await (await import('node:fs/promises')).rename(`${tilePath}.next`, tilePath);
-    });
-    pageImage.destroy();
-    await rm(pagePath, { force: true });
-  }
-
-  const topTasks = Array.from({ length: topRows * topColumns }, (_, index) => ({
-    row: Math.floor(index / topColumns), column: index % topColumns,
-  }));
-  await mapLimit(topTasks, input.concurrency, async ({ row, column }) => {
-        const tilePath = path.join(topRoot, `${column}_${row}.webp`);
-        try { await stat(tilePath); }
-        catch {
-          const width = Math.min(input.tileSize, renderedWidth - column * input.tileSize);
-          const height = Math.min(input.tileSize, renderedHeight - row * input.tileSize);
-          await encodeWebp(() => sharp({ create: { width, height, channels: 3, background: '#ffffff' } })
-            .webp({ quality: input.quality, effort: input.effort }).toFile(tilePath));
-        }
-  });
-  levels.push({ level: maxLevel, columns: topColumns, rows: topRows, tileCount: topColumns * topRows });
-  completedTiles += topColumns * topRows;
-  await input.onProgress?.(completedTiles / expectedTileTotal, maxLevel, maxLevel);
-
-  // Build each parent from at most four child tiles. Memory is bounded by a
-  // 2*tileSize square regardless of worksheet dimensions.
-  for (let level = maxLevel - 1; level >= 0; level -= 1) {
-    const divisor = 2 ** (maxLevel - level);
-    const levelWidth = Math.ceil(renderedWidth / divisor);
-    const levelHeight = Math.ceil(renderedHeight / divisor);
-    const childWidth = Math.ceil(renderedWidth / (divisor / 2));
-    const childHeight = Math.ceil(renderedHeight / (divisor / 2));
-    const levelColumns = Math.ceil(levelWidth / input.tileSize);
-    const levelRows = Math.ceil(levelHeight / input.tileSize);
-    const levelRoot = path.join(input.outputRoot, String(level));
-    const childRoot = path.join(input.outputRoot, String(level + 1));
-    await mkdir(levelRoot, { recursive: true });
-    const tasks = Array.from({ length: levelRows * levelColumns }, (_, index) => ({
-      row: Math.floor(index / levelColumns), column: index % levelColumns,
-    }));
-    await mapLimit(tasks, input.concurrency, async ({ row, column }) => {
-      const childOriginX = column * input.tileSize * 2;
-      const childOriginY = row * input.tileSize * 2;
-      const sourceWidth = Math.min(input.tileSize * 2, childWidth - childOriginX);
-      const sourceHeight = Math.min(input.tileSize * 2, childHeight - childOriginY);
-      const composites: Array<{ input: Buffer; left: number; top: number }> = [];
-      for (let dy = 0; dy < 2; dy += 1) for (let dx = 0; dx < 2; dx += 1) {
-        const childColumn = column * 2 + dx;
-        const childRow = row * 2 + dy;
-        const childPath = path.join(childRoot, `${childColumn}_${childRow}.webp`);
-        try {
-          const left = dx * input.tileSize;
-          const top = dy * input.tileSize;
-          if (left >= sourceWidth || top >= sourceHeight) continue;
-          const child = await readFile(childPath);
-          const metadata = await sharp(child).metadata();
-          const cropWidth = Math.min(metadata.width || input.tileSize, sourceWidth - left);
-          const cropHeight = Math.min(metadata.height || input.tileSize, sourceHeight - top);
-          const cropped = cropWidth === metadata.width && cropHeight === metadata.height
-            ? child
-            : await sharp(child).extract({ left: 0, top: 0, width: cropWidth, height: cropHeight }).toBuffer();
-          composites.push({ input: cropped, left, top });
-        } catch { /* an odd edge can have fewer than four children */ }
-      }
-      const width = Math.min(input.tileSize, levelWidth - column * input.tileSize);
-      const height = Math.min(input.tileSize, levelHeight - row * input.tileSize);
-      const parentSource = await sharp({ create: { width: sourceWidth, height: sourceHeight, channels: 3, background: '#ffffff' } })
-        .composite(composites).png().toBuffer();
-      await encodeWebp(() => sharp(parentSource).resize(width, height, { fit: 'fill', kernel: 'lanczos3' })
-        .webp({ quality: input.quality, effort: input.effort })
-        .toFile(path.join(levelRoot, `${column}_${row}.webp`)));
-    });
-    levels.push({ level, columns: levelColumns, rows: levelRows, tileCount: levelColumns * levelRows });
-    completedTiles += levelColumns * levelRows;
-    await input.onProgress?.(completedTiles / expectedTileTotal, level, maxLevel);
-  }
-  levels.sort((left, right) => left.level - right.level);
-  return {
-    renderedWidth, renderedHeight, maxLevel, levels,
-    tileCount: levels.reduce((sum, level) => sum + level.tileCount, 0),
-    pdfRasterMs, webpEncodeMs,
-  };
-};
-
-const filesBelow = async (directory: string): Promise<string[]> => {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(entries.map((entry) => {
-    const target = path.join(directory, entry.name);
-    return entry.isDirectory() ? filesBelow(target) : Promise.resolve([target]);
-  }));
-  return nested.flat();
-};
-
-const contentType = (relative: string) => relative.endsWith('.webp') ? 'image/webp'
-  : relative.endsWith('.pdf') ? 'application/pdf'
-    : 'application/json';
+const contentType = (relative: string) => relative.endsWith('.pdf') ? 'application/pdf' : 'application/json';
 
 type ArtifactFile = { filePath: string; relativeKey: string; size: number; contentType: string; sha256: string };
 class UploadHttpError extends Error {
@@ -464,7 +356,6 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
   let heartbeat: NodeJS.Timeout | undefined;
   const jobStartedAt = Date.now();
   const stageMetrics: Record<string, number> = {};
-  let totalTileCount = 0;
   let totalArtifactBytes = 0;
   let uploadRetryCount = 0;
   const measure = async <T>(name: string, action: () => Promise<T>) => {
@@ -473,7 +364,6 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
     finally { stageMetrics[name] = (stageMetrics[name] || 0) + Date.now() - startedAt; }
   };
   try {
-    sharp.concurrency(Math.max(1, Math.min(4, Math.round(profile.tileConcurrency || 2))));
     heartbeat = setInterval(() => void api(`/jobs/${jobId}/heartbeat`).catch((error) => console.error('[HEARTBEAT_FAILED]', error)), 30_000);
     await api(`/jobs/${jobId}/progress`, { status: 'DOWNLOADING', progress: 1, currentStep: '직선도 원본 다운로드 중' });
     const xlsxPath = path.join(temporaryRoot, 'source.xlsx');
@@ -538,79 +428,50 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
       const excelCoordinates = await jsonFile<ExcelCoordinates>(excelCoordinatesPath);
       const pdf = await inspectPdf(pdfPath);
       const transformed = normalizedCoordinates(excelCoordinates, pdf);
-      await api(`/jobs/${jobId}/progress`, { status: 'TILE_GENERATING', progress: progressBase + 2, currentSheet: sheet.sheetName, currentStep: 'PDF 페이지 기반 Deep Zoom 타일 생성 중' });
-      const tiled = await measure('tileGenerationMs', () => generateTiles({
-        pdfPath, outputRoot: path.join(artifactRoot, 'tiles'), pdf,
-        columns: transformed.columns, rows: transformed.rows, pageOrder: excelCoordinates.pageOrder,
-        dpi: profile.dpi, tileSize: profile.tileSize, quality: profile.webpQuality,
-        effort: profile.webpEffort || 2, concurrency: profile.tileConcurrency || 2,
-        onProgress: async (fraction, level, maxLevel) => {
-          await api(`/jobs/${jobId}/progress`, {
-            status: 'TILE_GENERATING', progress: progressBase + 2 + fraction * 5,
-            currentSheet: sheet.sheetName, currentStep: `Deep Zoom level ${level}/${maxLevel} 생성 완료`,
-          });
-        },
-      }));
-      stageMetrics.pdfRasterMs = (stageMetrics.pdfRasterMs || 0) + tiled.pdfRasterMs;
-      stageMetrics.webpEncodeMs = (stageMetrics.webpEncodeMs || 0) + tiled.webpEncodeMs;
+      await api(`/jobs/${jobId}/progress`, { status: 'PUBLISHING', progress: progressBase + 4, currentSheet: sheet.sheetName, currentStep: '벡터 PDF·좌표 metadata 준비 중' });
       const coordinateJson = JSON.stringify(transformed.coordinates);
       const coordinateHash = createHash('sha256').update(coordinateJson).digest('hex');
       const coordinatesPath = path.join(artifactRoot, 'coordinates.json');
       await writeFile(coordinatesPath, coordinateJson, 'utf8');
-      const sourceInfo = {
-        schemaVersion: 1, jobId, sourceSha256: job.sourceSha256, filename: job.filename,
-        sheetName: sheet.sheetName, hasExternalLinks: analysis.hasExternalLinks,
-      };
-      await writeFile(path.join(artifactRoot, 'source-info.json'), JSON.stringify(sourceInfo), 'utf8');
       const artifactSetId = sheet.artifactSetId || randomUUID();
+      const pdfSha256 = await sha256File(pdfPath);
       const manifest = {
-        schemaVersion: 1, complete: true, jobId, artifactSetId,
+        schemaVersion: 3, complete: true, renderMode: 'pdf-viewport-v3', jobId, artifactSetId,
         sourceSha256: job.sourceSha256, sheetName: sheet.sheetName,
         rendererProfileHash: job.rendererProfileHash, rendererEngine: 'windows-excel-pdf',
+        filename: job.filename, hasExternalLinks: analysis.hasExternalLinks,
         excelPrintArea: excelCoordinates.printArea,
         worksheetWidthPoints: excelCoordinates.printWidth, worksheetHeightPoints: excelCoordinates.printHeight,
-        pageColumns: transformed.columns, pageRows: transformed.rows,
-        pdfPageBox: { widthPoints: pdf.widthPoints, heightPoints: pdf.heightPoints },
-        cropLeftPoints: excelCoordinates.cropLeftPoints, cropTopPoints: excelCoordinates.cropTopPoints,
-        canvasWidthPoints: transformed.canvasWidthPoints, canvasHeightPoints: transformed.canvasHeightPoints,
-        dpi: profile.dpi, renderedWidth: tiled.renderedWidth, renderedHeight: tiled.renderedHeight,
-        coordinateScaleX: tiled.renderedWidth / transformed.canvasWidthPoints,
-        coordinateScaleY: tiled.renderedHeight / transformed.canvasHeightPoints,
-        tileSize: profile.tileSize, webpQuality: profile.webpQuality, webpEffort: profile.webpEffort || 2, maxLevel: tiled.maxLevel,
-        tileCount: tiled.tileCount, coordinateCount: transformed.coordinates.length, coordinateHash, levels: tiled.levels,
+        pageCount: pdf.pages, pagePlacements: transformed.pagePlacements,
+        contentBounds: transformed.contentBounds,
+        coordinateCalibration: transformed.calibrationMode,
+        worldWidthPoints: transformed.canvasWidthPoints, worldHeightPoints: transformed.canvasHeightPoints,
+        coordinateSystem: { unit: 'pdf-point', origin: 'top-left', pointsPerInch: 72 },
+        coordinateCount: transformed.coordinates.length, coordinateHash,
+        files: {
+          'map.pdf': { sha256: pdfSha256, size: (await stat(pdfPath)).size, contentType: 'application/pdf' },
+          'coordinates.json': { sha256: coordinateHash, size: (await stat(coordinatesPath)).size, contentType: 'application/json' },
+        },
       };
       const manifestJson = JSON.stringify(manifest);
       const manifestPath = path.join(artifactRoot, 'manifest.json');
       await writeFile(manifestPath, manifestJson, 'utf8');
       await rm(excelCoordinatesPath, { force: true });
-      const artifactFiles = await measure('checksumMs', async () => {
-        const paths = (await filesBelow(artifactRoot)).filter((file) => !file.endsWith('checksums.json'));
-        const descriptors = await mapLimit(paths, Math.max(1, Math.min(4, profile.tileConcurrency || 2)), async (filePath) => ({
+      const artifactFiles = await measure('checksumMs', async () => Promise.all(
+        [pdfPath, coordinatesPath, manifestPath].map(async (filePath) => ({
           filePath,
           relativeKey: path.relative(artifactRoot, filePath).split(path.sep).join('/'),
           size: (await stat(filePath)).size,
           contentType: contentType(filePath),
           sha256: await sha256File(filePath),
-        }));
-        const checksums = Object.fromEntries(descriptors.map((file) => [file.relativeKey, file.sha256]));
-        const checksumPath = path.join(artifactRoot, 'checksums.json');
-        await writeFile(checksumPath, JSON.stringify(checksums), 'utf8');
-        descriptors.push({
-          filePath: checksumPath,
-          relativeKey: 'checksums.json',
-          size: (await stat(checksumPath)).size,
-          contentType: 'application/json',
-          sha256: await sha256File(checksumPath),
-        });
-        return descriptors;
-      });
+        })),
+      ));
       const artifactBytes = artifactFiles.reduce((sum, file) => sum + file.size, 0);
-      totalTileCount += tiled.tileCount;
       totalArtifactBytes += artifactBytes;
       await api(`/jobs/${jobId}/progress`, {
         status: 'PUBLISHING', progress: progressBase + 8, currentSheet: sheet.sheetName,
-        currentStep: 'R2 immutable artifact 업로드 중', metrics: stageMetrics,
-        tileCount: totalTileCount, artifactBytes: totalArtifactBytes,
+        currentStep: 'R2 PDF v3 산출물 3개 업로드 중', metrics: stageMetrics,
+        tileCount: 0, artifactBytes: totalArtifactBytes,
       });
       await measure('uploadMs', () => uploadArtifact(
         jobId, sheet.sheetName, artifactSetId, artifactFiles, manifestPath, profile.uploadConcurrency || 6,
@@ -625,7 +486,7 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
       artifacts.push(completedArtifact);
       await rm(artifactRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
-    await api(`/jobs/${jobId}/progress`, { status: 'VERIFYING', progress: 95, currentStep: 'Manifest·타일·좌표 검증 요청 중', metrics: stageMetrics });
+    await api(`/jobs/${jobId}/progress`, { status: 'VERIFYING', progress: 95, currentStep: 'Manifest·PDF·좌표 검증 요청 중', metrics: stageMetrics });
     await api(`/jobs/${jobId}/complete`, { artifacts });
     stageMetrics.totalMs = Date.now() - jobStartedAt;
     console.log(`[COMPLETED] ${job.filename} (${jobId}) metrics=${JSON.stringify(stageMetrics)}`);

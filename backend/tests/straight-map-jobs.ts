@@ -25,11 +25,8 @@ import {
 } from '../straight-map-jobs';
 
 await initializeDatabase();
-assert.equal(straightMapRendererProfile().dpi, 1100);
-assert.equal(straightMapRendererProfile().tileSize, 512);
-assert.equal(straightMapRendererProfile().webpQuality, 94);
-assert.equal(straightMapRendererProfile().webpEffort, 2);
-assert.equal(straightMapRendererProfile().tileConcurrency, 2);
+assert.equal(straightMapRendererProfile().schemaVersion, 3);
+assert.equal(straightMapRendererProfile().pdfExportRevision, 'pdf-viewport-v3');
 assert.equal(straightMapRendererProfile().uploadConcurrency, 6);
 
 const insertJob = (id: string, status = 'WAITING_FOR_OFFICE_RENDERER') => db.prepare(`
@@ -37,7 +34,7 @@ const insertJob = (id: string, status = 'WAITING_FOR_OFFICE_RENDERER') => db.pre
     id, source_key, source_sha256, filename, station_name, station_key, status,
     source_size, source_content_type, renderer_profile_hash, max_attempts
   ) VALUES (?, ?, ?, 'test.xlsx', '송탄국사', '송탄', ?, 100, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ?, 3)
-`).run(id, `line-diagrams/sources/${'a'.repeat(64)}.xlsx`, 'a'.repeat(64), status, straightMapRendererProfileHash());
+`).run(id, `line-diagrams/v3/sources/${'a'.repeat(64)}.xlsx`, 'a'.repeat(64), status, straightMapRendererProfileHash());
 
 const leasedJobId = randomUUID();
 insertJob(leasedJobId);
@@ -60,7 +57,7 @@ db.prepare(`
     manifest_key, manifest_sha256, coordinate_hash, status, verified_at
   ) VALUES (?, ?, ?, '직선도1', ?, ?, ?, ?, ?, 'VERIFIED', CURRENT_TIMESTAMP)
 `).run(artifactSetId, cacheKey, 'a'.repeat(64), straightMapRendererProfileHash(),
-  `line-diagrams/artifacts/${artifactSetId}`, `line-diagrams/artifacts/${artifactSetId}/manifest.json`, 'b'.repeat(64), 'c'.repeat(64));
+  `line-diagrams/v3/documents/${artifactSetId}`, `line-diagrams/v3/documents/${artifactSetId}/manifest.json`, 'b'.repeat(64), 'c'.repeat(64));
 const sheets = registerStraightMapJobSheets(leasedJobId, 'office-pc-b', ['직선도1', '직선도2']) as Array<Record<string, unknown>>;
 assert.equal(sheets[0].status, 'CACHE_HIT');
 assert.equal(sheets[0].artifactSetId, artifactSetId);
@@ -133,13 +130,13 @@ assert.equal((await completeStraightMapUpload(localUpload.jobId, 'admin-test')).
 const localClaim = claimStraightMapJob('local-agent') as Record<string, unknown>;
 assert.equal(localClaim.id, localUpload.jobId);
 registerStraightMapJobSheets(localUpload.jobId, 'local-agent', ['직선도3']);
-const localArtifact = Buffer.from('{"schemaVersion":1}');
+const localArtifact = Buffer.from('[]');
 const localArtifactHash = createHash('sha256').update(localArtifact).digest('hex');
 const localArtifactSetId = randomUUID();
 const preparedArtifact = await createArtifactUploadUrls(localUpload.jobId, 'local-agent', {
   sheetName: '직선도3',
   artifactSetId: localArtifactSetId,
-  files: [{ relativeKey: 'source-info.json', size: localArtifact.length, contentType: 'application/json', sha256: localArtifactHash }],
+  files: [{ relativeKey: 'coordinates.json', size: localArtifact.length, contentType: 'application/json', sha256: localArtifactHash }],
 });
 assert.match(preparedArtifact.uploads[0].uploadUrl, /\/api\/renderer\/jobs\/.+\/artifacts\//);
 assert.equal(preparedArtifact.uploads[0].requiredHeaders['Content-Type'], 'application/octet-stream');
@@ -147,7 +144,7 @@ const storedArtifact = await storeLocalStraightMapArtifact({
   jobId: localUpload.jobId,
   owner: 'local-agent',
   artifactSetId: localArtifactSetId,
-  relativeKey: 'source-info.json',
+  relativeKey: 'coordinates.json',
   expectedSize: localArtifact.length,
   expectedSha256: localArtifactHash,
   declaredLength: localArtifact.length,
@@ -163,7 +160,7 @@ const replacementArtifactSetId = randomUUID();
 assert.equal((await createArtifactUploadUrls(localUpload.jobId, 'local-agent-retry', {
   sheetName: '직선도3',
   artifactSetId: replacementArtifactSetId,
-  files: [{ relativeKey: 'source-info.json', size: localArtifact.length, contentType: 'application/json', sha256: localArtifactHash }],
+  files: [{ relativeKey: 'coordinates.json', size: localArtifact.length, contentType: 'application/json', sha256: localArtifactHash }],
 })).artifactSetId, replacementArtifactSetId);
 
 const checkpointJobId = randomUUID();
@@ -171,26 +168,31 @@ insertJob(checkpointJobId);
 assert.equal((claimStraightMapJob('checkpoint-agent') as Record<string, unknown>).id, checkpointJobId);
 registerStraightMapJobSheets(checkpointJobId, 'checkpoint-agent', ['완료시트']);
 const checkpointArtifactSetId = randomUUID();
-const coordinates = [{ shapeId: 'shape-1', label: 'B2B', xRatio: 0.5, yRatio: 0.5, width: 1, height: 1 }];
+const coordinates = [{ shapeId: 'shape-1', label: 'B2B', pageIndex: 0, pageXPoints: 50, pageYPoints: 50,
+  worldXPoints: 50, worldYPoints: 50, xRatio: 0.5, yRatio: 0.5, widthPoints: 1, heightPoints: 1 }];
 const coordinateJson = JSON.stringify(coordinates);
 const coordinateHash = createHash('sha256').update(coordinateJson).digest('hex');
+const pdfBody = Buffer.from('%PDF-checkpoint');
+const pdfHash = createHash('sha256').update(pdfBody).digest('hex');
 const manifest: CompletedArtifact['manifest'] = {
-  schemaVersion: 1, complete: true, jobId: checkpointJobId, artifactSetId: checkpointArtifactSetId,
+  schemaVersion: 3, renderMode: 'pdf-viewport-v3', complete: true, jobId: checkpointJobId, artifactSetId: checkpointArtifactSetId,
   sourceSha256: 'a'.repeat(64), sheetName: '완료시트', rendererProfileHash: straightMapRendererProfileHash(),
   rendererEngine: 'windows-excel-pdf', excelPrintArea: '$A$1', worksheetWidthPoints: 1,
-  worksheetHeightPoints: 1, pageColumns: 1, pageRows: 1, pdfPageBox: { widthPoints: 1, heightPoints: 1 },
-  cropLeftPoints: 0, cropTopPoints: 0, canvasWidthPoints: 1, canvasHeightPoints: 1,
-  dpi: 1100, renderedWidth: 16, renderedHeight: 16, coordinateScaleX: 16, coordinateScaleY: 16,
-  tileSize: 512, webpQuality: 94, webpEffort: 2, maxLevel: 4, tileCount: 1,
-  coordinateCount: coordinates.length, coordinateHash, levels: [{ level: 4, columns: 1, rows: 1, tileCount: 1 }],
+  worksheetHeightPoints: 1, pageCount: 1,
+  pagePlacements: [{ pageIndex: 0, xPoints: 0, yPoints: 0, widthPoints: 100, heightPoints: 100 }],
+  contentBounds: { xPoints: 0, yPoints: 0, widthPoints: 100, heightPoints: 100 },
+  worldWidthPoints: 100, worldHeightPoints: 100,
+  coordinateSystem: { unit: 'pdf-point', origin: 'top-left', pointsPerInch: 72 },
+  coordinateCount: coordinates.length, coordinateHash,
+  files: {
+    'map.pdf': { sha256: pdfHash, size: pdfBody.length, contentType: 'application/pdf' },
+    'coordinates.json': { sha256: coordinateHash, size: Buffer.byteLength(coordinateJson), contentType: 'application/json' },
+  },
 };
 const manifestJson = JSON.stringify(manifest);
 const fixtureFiles = [
-  { relativeKey: 'source-info.json', contentType: 'application/json', body: Buffer.from('{}') },
-  { relativeKey: 'map.pdf', contentType: 'application/pdf', body: Buffer.from('%PDF-checkpoint') },
+  { relativeKey: 'map.pdf', contentType: 'application/pdf', body: pdfBody },
   { relativeKey: 'coordinates.json', contentType: 'application/json', body: Buffer.from(coordinateJson) },
-  { relativeKey: 'checksums.json', contentType: 'application/json', body: Buffer.from('{}') },
-  { relativeKey: 'tiles/4/0_0.webp', contentType: 'image/webp', body: Buffer.from('RIFF-checkpoint') },
   { relativeKey: 'manifest.json', contentType: 'application/json', body: Buffer.from(manifestJson) },
 ];
 await createArtifactUploadUrls(checkpointJobId, 'checkpoint-agent', {
@@ -240,4 +242,4 @@ const extendedRetry = db.prepare('SELECT attempt, max_attempts AS maxAttempts FR
   .get(exhaustedRetryJobId) as { attempt: number; maxAttempts: number };
 assert.equal(extendedRetry.maxAttempts, extendedRetry.attempt + 1, 'a fixed exhausted job must receive one controlled retry');
 
-console.log('Straight-map v2 job test passed: local source/artifact streaming, lease reclaim, heartbeat, cache hit, retry, cancel, and atomic rollback.');
+console.log('Straight-map PDF v3 job test passed: three-object streaming, lease reclaim, heartbeat, cache hit, retry, cancel, and atomic rollback.');
