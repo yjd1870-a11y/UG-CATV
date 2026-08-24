@@ -734,7 +734,7 @@ export const AdminUsersView: React.FC = () => {
   };
 
   const activeStraightMapFilenames = straightMapJobs
-    .filter((job) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status))
+    .filter((job) => !['UPLOADING', 'COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status))
     .map((job) => job.filename);
 
   return (
