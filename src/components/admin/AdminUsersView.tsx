@@ -736,6 +736,8 @@ export const AdminUsersView: React.FC = () => {
   const activeStraightMapFilenames = straightMapJobs
     .filter((job) => !['UPLOADING', 'COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status))
     .map((job) => job.filename);
+  const visibleStraightMapJobs = straightMapJobs
+    .filter((job) => !['UPLOADING', 'COMPLETED'].includes(job.status));
 
   return (
     <div className="space-y-4 pb-24 sm:pb-8">
@@ -843,9 +845,9 @@ export const AdminUsersView: React.FC = () => {
       <AssetSection type="b2c" title="B2C 선번장 / 직선도 DB" description="선번장 D/H/L~P열을 조회 DB로 교체하고, 직선도 시트는 실제 콘텐츠만 자른 벡터 PDF·정밀 좌표 지도로 생성합니다." accept=".xlsx,.xls,.csv" icon={<Cable className="h-5 w-5" />} assets={b2cAssets} activeStraightMapFilenames={activeStraightMapFilenames} onChanged={loadAdminData} />
 
       <section className={panelClass}>
-        <div className="flex items-center gap-2.5"><Cable className="h-5 w-5 text-[#2878B5]" /><div><h2 className="font-extrabold text-[#173B57]">직선도 렌더링 작업</h2><p className="text-xs text-slate-500">새 버전을 검증하는 동안 기존 ACTIVE 직선도는 계속 제공됩니다.</p></div></div>
+        <div className="flex items-center gap-2.5"><Cable className="h-5 w-5 text-[#2878B5]" /><div><h2 className="font-extrabold text-[#173B57]">직선도 렌더링 작업</h2><p className="text-xs text-slate-500">진행 중이거나 확인이 필요한 작업만 표시되며, 완료된 작업은 자동으로 사라집니다.</p></div></div>
         <div className="mt-4 space-y-2">
-          {straightMapJobs.length ? straightMapJobs.map((job) => {
+          {visibleStraightMapJobs.length ? visibleStraightMapJobs.map((job) => {
             const metrics = straightMapMetrics(job.metricsJson);
             const uploadRate = metrics.uploadMs > 0
               ? Number(job.totalArtifactBytes || 0) / (metrics.uploadMs / 1000)
