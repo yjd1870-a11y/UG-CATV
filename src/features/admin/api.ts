@@ -175,21 +175,26 @@ export const straightMapAdminApi = {
         stationName,
       }),
     });
-    if (prepared.uploadRequired) {
-      if (!prepared.uploadUrl) throw new Error('직선도 업로드 URL을 발급받지 못했습니다.');
-      const uploaded = await fetch(
-        prepared.uploadTarget === 'api' ? apiResourceUrl(prepared.uploadUrl) : prepared.uploadUrl,
-        {
-          method: 'PUT',
-          headers: prepared.requiredHeaders,
-          body: file,
-          ...(prepared.uploadTarget === 'api' ? { credentials: 'include' as const } : {}),
-        },
-      );
-      if (!uploaded.ok) {
-        const payload = await uploaded.json().catch(() => null) as { message?: string } | null;
-        throw new Error(payload?.message || `직선도 원본 업로드에 실패했습니다. (${uploaded.status})`);
+    try {
+      if (prepared.uploadRequired) {
+        if (!prepared.uploadUrl) throw new Error('직선도 업로드 URL을 발급받지 못했습니다.');
+        const uploaded = await fetch(
+          prepared.uploadTarget === 'api' ? apiResourceUrl(prepared.uploadUrl) : prepared.uploadUrl,
+          {
+            method: 'PUT',
+            headers: prepared.requiredHeaders,
+            body: file,
+            ...(prepared.uploadTarget === 'api' ? { credentials: 'include' as const } : {}),
+          },
+        );
+        if (!uploaded.ok) {
+          const payload = await uploaded.json().catch(() => null) as { message?: string } | null;
+          throw new Error(payload?.message || `직선도 원본 업로드에 실패했습니다. (${uploaded.status})`);
+        }
       }
+    } catch (uploadError) {
+      await request(`/admin/straight-maps/jobs/${encodeURIComponent(prepared.jobId)}/cancel`, { method: 'POST' }).catch(() => undefined);
+      throw uploadError;
     }
     return request<{ jobId: string; status: string }>(`/admin/straight-maps/uploads/${encodeURIComponent(prepared.jobId)}/complete`, { method: 'POST' });
   },

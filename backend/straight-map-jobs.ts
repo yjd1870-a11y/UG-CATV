@@ -163,34 +163,54 @@ export const createStraightMapUpload = async (input: {
     throw new ApiError(409, '같은 해시의 R2 원본 크기가 일치하지 않습니다.', 'SOURCE_SIZE_CONFLICT');
   }
   const jobId = randomUUID();
+  let reusedJobId: string | null = null;
   const contentType = STRAIGHT_MAP_XLSX_MIME;
   db.exec('BEGIN IMMEDIATE');
   try {
     const duplicate = db.prepare(`
-      SELECT id FROM straight_map_jobs
+      SELECT id, source_sha256 AS sourceSha256, source_size AS sourceSize,
+             station_key AS stationKey, requested_by AS requestedBy, status
+        FROM straight_map_jobs
        WHERE filename = ? COLLATE NOCASE
          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
        LIMIT 1
-    `).get(filename);
+    `).get(filename) as {
+      id: string;
+      sourceSha256: string;
+      sourceSize: number;
+      stationKey: string;
+      requestedBy: string;
+      status: string;
+    } | undefined;
     if (duplicate) {
-      throw new ApiError(409, '같은 이름의 직선도 파일이 이미 업로드 또는 렌더링 중입니다. 기존 작업이 끝난 뒤 다시 시도해주세요.', 'DUPLICATE_ACTIVE_FILENAME');
+      const resumableUpload = duplicate.status === 'UPLOADING'
+        && duplicate.sourceSha256 === sourceSha256
+        && duplicate.sourceSize === input.size
+        && duplicate.stationKey === stationKey
+        && duplicate.requestedBy === input.requestedBy;
+      if (!resumableUpload) {
+        throw new ApiError(409, '같은 이름의 직선도 파일이 이미 업로드 또는 렌더링 중입니다. 기존 작업이 끝난 뒤 다시 시도해주세요.', 'DUPLICATE_ACTIVE_FILENAME');
+      }
+      reusedJobId = duplicate.id;
+    } else {
+      db.prepare(`
+        INSERT INTO straight_map_jobs (
+          id, source_key, source_sha256, filename, station_name, station_key, requested_by,
+          status, source_size, source_content_type, renderer_profile_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPLOADING', ?, ?, ?)
+      `).run(jobId, sourceKey, sourceSha256, filename, stationName, stationKey, input.requestedBy,
+        input.size, contentType, straightMapRendererProfileHash());
     }
-    db.prepare(`
-      INSERT INTO straight_map_jobs (
-        id, source_key, source_sha256, filename, station_name, station_key, requested_by,
-        status, source_size, source_content_type, renderer_profile_hash
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPLOADING', ?, ?, ?)
-    `).run(jobId, sourceKey, sourceSha256, filename, stationName, stationKey, input.requestedBy,
-      input.size, contentType, straightMapRendererProfileHash());
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
+  const uploadJobId = reusedJobId || jobId;
   try {
     if (usesR2Storage && !existing) {
       return {
-        jobId,
+        jobId: uploadJobId,
         sourceKey,
         uploadRequired: true,
         uploadUrl: await signedR2UploadUrl(sourceKey, contentType, input.size, { sha256: sourceSha256 }),
@@ -204,16 +224,16 @@ export const createStraightMapUpload = async (input: {
       };
     }
     return {
-      jobId,
+      jobId: uploadJobId,
       sourceKey,
       uploadRequired: !existing,
-      uploadUrl: existing ? null : `/api/admin/straight-maps/local-uploads/${jobId}`,
+      uploadUrl: existing ? null : `/api/admin/straight-maps/local-uploads/${uploadJobId}`,
       uploadTarget: 'api' as const,
       requiredHeaders: existing ? {} : { 'Content-Type': contentType },
       expiresAt: null,
     };
   } catch (error) {
-    db.prepare("DELETE FROM straight_map_jobs WHERE id = ? AND status = 'UPLOADING'").run(jobId);
+    if (!reusedJobId) db.prepare("DELETE FROM straight_map_jobs WHERE id = ? AND status = 'UPLOADING'").run(jobId);
     throw error;
   }
 };

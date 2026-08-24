@@ -332,6 +332,7 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
       await onChanged();
     } catch (error) {
       showToast(error instanceof Error ? error.message : '파일을 등록하지 못했습니다.', 'error');
+      await onChanged().catch(() => undefined);
     } finally {
       setSaving(false);
     }

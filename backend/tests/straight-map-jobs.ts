@@ -107,6 +107,16 @@ const localUpload = await createStraightMapUpload({
   stationName: '송탄국사',
   requestedBy: 'admin-test',
 });
+const resumedLocalUpload = await createStraightMapUpload({
+  sourceSha256: localSourceHash,
+  filename: 'local-test.xlsx',
+  size: localSource.length,
+  contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  stationName: '송탄국사',
+  requestedBy: 'admin-test',
+});
+assert.equal(resumedLocalUpload.jobId, localUpload.jobId);
+assert.equal(resumedLocalUpload.uploadRequired, true);
 await assert.rejects(
   createStraightMapUpload({
     sourceSha256: 'f'.repeat(64), filename: 'local-test.xlsx', size: localSource.length,
