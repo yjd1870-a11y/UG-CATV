@@ -208,7 +208,7 @@ export const createStraightMapUpload = async (input: {
   }
   const uploadJobId = reusedJobId || jobId;
   try {
-    if (usesR2Storage && !existing) {
+    if (usesR2Storage && env.straightMapDirectR2UploadEnabled && !existing) {
       return {
         jobId: uploadJobId,
         sourceKey,

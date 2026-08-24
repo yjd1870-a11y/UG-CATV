@@ -6,6 +6,7 @@ process.env.R2_ENDPOINT = 'http://127.0.0.1:45678';
 process.env.R2_ACCESS_KEY_ID = 'test-access';
 process.env.R2_SECRET_ACCESS_KEY = 'test-secret';
 process.env.R2_BUCKET_NAME = 'test-bucket';
+process.env.STRAIGHT_MAP_DIRECT_R2_UPLOAD_ENABLED = 'true';
 process.env.STRAIGHT_MAP_PIPELINE_V3_ENABLED = 'true';
 process.env.STRAIGHT_MAP_RENDERER_DEVICE_TOKEN = 'test-renderer-device-token-at-least-32-bytes';
 
