@@ -1,7 +1,36 @@
 import assert from 'node:assert/strict';
 
 process.env.CATV_RENDERER_LIBRARY_MODE = '1';
-const { inferPdfPageGrid, mapLimit, normalizedCoordinates, retryUpload } = await import('../../renderer-agent/src/index');
+const {
+  canonicalSheetHashes,
+  inferPdfPageGrid,
+  mapLimit,
+  normalizedCoordinates,
+  retryUpload,
+  selectRendererSheets,
+} = await import('../../renderer-agent/src/index');
+
+const selectedSheets = selectRendererSheets([
+  { name: '선번장 (마평)', visible: true, empty: false },
+  { name: '유방간144C ', visible: true, empty: false },
+  { name: '고림간288C ', visible: true, empty: false },
+  { name: '숨김', visible: false, empty: false },
+]);
+assert.deepEqual(selectedSheets, [
+  { sheetName: '유방간144C', sourceSheetName: '유방간144C ', sourceSheetIndex: 2 },
+  { sheetName: '고림간288C', sourceSheetName: '고림간288C ', sourceSheetIndex: 3 },
+]);
+assert.deepEqual(canonicalSheetHashes(selectedSheets, {
+  '유방간144C ': 'a'.repeat(64),
+  '고림간288C ': 'b'.repeat(64),
+}), {
+  유방간144C: 'a'.repeat(64),
+  고림간288C: 'b'.repeat(64),
+});
+assert.throws(() => selectRendererSheets([
+  { name: '중복', visible: true, empty: false },
+  { name: '중복 ', visible: true, empty: false },
+]), /이름이 중복되는 직선도 시트/);
 
 let active = 0;
 let peak = 0;

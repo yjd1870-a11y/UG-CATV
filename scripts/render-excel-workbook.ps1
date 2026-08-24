@@ -42,7 +42,16 @@ function Export-Sheet($workbook, $entry) {
   $calibrationB = $null
   $coordinateItems = [Collections.ArrayList]::new()
   try {
-    $sheet = $workbook.Worksheets.Item([string]$entry.sheetName)
+    $sheetIndex = if ($entry.PSObject.Properties.Name -contains 'sheetIndex') { [int]$entry.sheetIndex } else { 0 }
+    try {
+      $sheet = if ($sheetIndex -gt 0) {
+        $workbook.Worksheets.Item($sheetIndex)
+      } else {
+        $workbook.Worksheets.Item([string]$entry.sheetName)
+      }
+    } catch {
+      throw "Excel 시트를 열 수 없습니다: $([string]$entry.sheetName) (index=$sheetIndex). $($_.Exception.Message)"
+    }
     # UsedRange is intentionally not used: formatting-only cells can make it
     # span an entire sheet and used to create enormous blank tile pyramids.
     $cells = $sheet.Cells
@@ -156,7 +165,7 @@ function Export-Sheet($workbook, $entry) {
     [void][Runtime.InteropServices.Marshal]::ReleaseComObject($rangeA)
     [void][Runtime.InteropServices.Marshal]::ReleaseComObject($rangeB)
     [ordered]@{
-      schemaVersion = 3; sheetName = [string]$sheet.Name; printArea = [string]$page.PrintArea
+      schemaVersion = 3; sheetName = [string]$entry.sheetName; printArea = [string]$page.PrintArea
       pageOrder = 2; paddingPoints = $paddingPoints
       printLeft = $printLeft; printTop = $printTop
       printWidth = [double]$printRange.Width; printHeight = [double]$printRange.Height

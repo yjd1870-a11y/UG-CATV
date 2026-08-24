@@ -8,7 +8,9 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { promisify } from 'node:util';
 import { sheetContentHashes } from './sheet-fingerprint';
+import { canonicalSheetHashes, selectRendererSheets } from './sheet-plan';
 export { sheetContentHashes } from './sheet-fingerprint';
+export { canonicalSheetHashes, selectRendererSheets } from './sheet-plan';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, '../..');
@@ -380,12 +382,18 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
     const analysisPath = path.join(temporaryRoot, 'workbook.json');
     await powershell(path.join(projectRoot, 'scripts', 'inspect-excel-workbook.ps1'), ['-InputXlsx', xlsxPath, '-OutputJson', analysisPath]);
     const analysis = await jsonFile<ExcelAnalysis>(analysisPath);
-    const sheetNames = analysis.sheets.filter((sheet) => sheet.visible && !sheet.empty && !sheet.name.includes('선번장')).map((sheet) => sheet.name);
+    const selectedSheets = selectRendererSheets(analysis.sheets);
+    const sheetNames = selectedSheets.map((sheet) => sheet.sheetName);
     if (!sheetNames.length) throw new Error('표시 가능한 직선도 시트를 찾지 못했습니다. 숨김·빈 시트 및 선번장 시트는 제외됩니다.');
-    const sheetHashes = await measure('sheetHashMs', () => sheetContentHashes(xlsxPath, sheetNames));
+    const sourceHashes = await measure('sheetHashMs', () => sheetContentHashes(
+      xlsxPath,
+      selectedSheets.map((sheet) => sheet.sourceSheetName),
+    ));
+    const sheetHashes = canonicalSheetHashes(selectedSheets, sourceHashes);
     const registered = await api<{ sheets: Array<{ sheetName: string; status: string; artifactSetId: string | null; checkpointJson?: string | null }> }>(`/jobs/${jobId}/sheets`, { sheetNames, sheetHashes });
+    const selectedSheetByName = new Map(selectedSheets.map((sheet) => [sheet.sheetName, sheet]));
     const artifacts: Array<Record<string, unknown>> = [];
-    const renderPlan = [] as Array<{ sheetName: string; outputPdf: string; outputCoordinates: string }>;
+    const renderPlan = [] as Array<{ sheetName: string; sheetIndex: number; outputPdf: string; outputCoordinates: string }>;
     for (let index = 0; index < registered.sheets.length; index += 1) {
       const sheet = registered.sheets[index];
       if (sheet.status === 'CACHE_HIT') continue;
@@ -395,8 +403,11 @@ const processJob = async (job: Record<string, unknown>, profile: Record<string, 
       }
       const artifactRoot = path.join(temporaryRoot, `artifact-${index}`);
       await mkdir(artifactRoot, { recursive: true });
+      const selectedSheet = selectedSheetByName.get(sheet.sheetName);
+      if (!selectedSheet) throw new Error(`Excel 원본에서 렌더링할 시트를 다시 찾지 못했습니다: ${sheet.sheetName}`);
       renderPlan.push({
         sheetName: sheet.sheetName,
+        sheetIndex: selectedSheet.sourceSheetIndex,
         outputPdf: path.join(artifactRoot, 'map.pdf'),
         outputCoordinates: path.join(artifactRoot, 'excel-coordinates.json'),
       });
