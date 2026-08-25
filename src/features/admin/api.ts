@@ -71,6 +71,9 @@ export type AdminDbAsset = {
   fileSize: number;
   recordCount: number;
   coordinatesJson: string;
+  floorPlanId?: string;
+  planOrder?: 1 | 2 | 3;
+  displayName?: string;
   imageUrl?: string | null;
   uploadedBy: string;
   uploadedAt: string;

@@ -40,6 +40,7 @@ let noticeId = '';
 let assetId = '';
 let archivedAssetId = '';
 let floorPlanAssetId = '';
+const additionalFloorPlanAssetIds: string[] = [];
 const uploadHistoryIds: string[] = [];
 const auditStart = (db.prepare('SELECT CURRENT_TIMESTAMP AS value').get() as { value: string }).value;
 const manpowerBefore = db.prepare('SELECT payload_json, version, updated_at, updated_by FROM catv_manpower_status WHERE id = 1').get() as {
@@ -264,6 +265,57 @@ try {
     '/floor-plans/search?station=오산국사&target=7&type=rack', { cookie: workerLogin.cookie }
   );
   assert.equal(rackPlan.payload.data?.target?.label, 'Rack 7');
+  const floorImageDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  for (const [index, rack] of ['Rack 22', 'Rack 33'].entries()) {
+    const extraPlan = await call<{ id: string }>('/admin/db/assets', {
+      method: 'POST',
+      cookie: adminLogin.cookie,
+      body: {
+        dbType: 'floor_plan', stationName: '오산국사', fileName: `OSAN_PLAN_${index + 2}.png`, fileSize: 68, mimeType: 'image/png',
+        records: [{ imageDataUrl: floorImageDataUrl }],
+        coordinates: { [rack]: { type: 'rack', xRatio: 0.2 + index * 0.1, yRatio: 0.4 + index * 0.1 } },
+      },
+    });
+    assert.equal(extraPlan.response.status, 201);
+    additionalFloorPlanAssetIds.push(extraPlan.payload.data?.id || '');
+  }
+  const multiPlanAssets = await call<Array<{ id: string; planOrder: number }>>('/admin/db/assets?type=floor_plan', { cookie: adminLogin.cookie });
+  assert.deepEqual(
+    multiPlanAssets.payload.data?.filter((asset) => [floorPlanAssetId, ...additionalFloorPlanAssetIds].includes(asset.id)).map((asset) => asset.planOrder),
+    [1, 2, 3],
+  );
+  const secondPlanSearch = await call<{ floorPlan: { planOrder: number }; target: { label: string } | null; plans: unknown[] }>(
+    '/floor-plans/search?station=오산국사&target=22&type=rack', { cookie: workerLogin.cookie }
+  );
+  assert.equal(secondPlanSearch.payload.data?.floorPlan.planOrder, 2);
+  assert.equal(secondPlanSearch.payload.data?.target?.label, 'Rack 22');
+  assert.equal(secondPlanSearch.payload.data?.plans.length, 3);
+  const fourthPlan = await call('/admin/db/assets', {
+    method: 'POST',
+    cookie: adminLogin.cookie,
+    body: {
+      dbType: 'floor_plan', stationName: '오산국사', fileName: 'OSAN_PLAN_4.png', fileSize: 68, mimeType: 'image/png',
+      records: [{ imageDataUrl: floorImageDataUrl }], coordinates: {},
+    },
+  });
+  assert.equal(fourthPlan.response.status, 409);
+  assert.equal(fourthPlan.payload.code, 'FLOOR_PLAN_LIMIT_EXCEEDED');
+  const removedSecondPlan = await call(`/admin/db/assets/${additionalFloorPlanAssetIds[0]}`, { method: 'DELETE', cookie: adminLogin.cookie });
+  assert.equal(removedSecondPlan.response.status, 200);
+  additionalFloorPlanAssetIds.shift();
+  const reusedPlan = await call<{ id: string }>('/admin/db/assets', {
+    method: 'POST',
+    cookie: adminLogin.cookie,
+    body: {
+      dbType: 'floor_plan', stationName: '오산국사', fileName: 'OSAN_PLAN_REUSED.png', fileSize: 68, mimeType: 'image/png',
+      records: [{ imageDataUrl: floorImageDataUrl }], coordinates: { 'Rack 24': { type: 'rack', xRatio: 0.5, yRatio: 0.5 } },
+    },
+  });
+  assert.equal(reusedPlan.response.status, 201);
+  additionalFloorPlanAssetIds.push(reusedPlan.payload.data?.id || '');
+  const reusedAsset = (await call<Array<{ id: string; planOrder: number }>>('/admin/db/assets?type=floor_plan', { cookie: adminLogin.cookie }))
+    .payload.data?.find((asset) => asset.id === reusedPlan.payload.data?.id);
+  assert.equal(reusedAsset?.planOrder, 2);
   const missingCoordinate = await call<{ target: null }>(
     '/floor-plans/search?station=오산국사&target=UNKNOWN&type=node', { cookie: workerLogin.cookie }
   );
@@ -273,6 +325,10 @@ try {
   assert.equal(missingPlan.response.status, 404);
   const deletedFloorAsset = await call(`/admin/db/assets/${floorPlanAssetId}`, { method: 'DELETE', cookie: adminLogin.cookie });
   assert.equal(deletedFloorAsset.response.status, 200);
+  for (const id of additionalFloorPlanAssetIds) {
+    const deleted = await call(`/admin/db/assets/${id}`, { method: 'DELETE', cookie: adminLogin.cookie });
+    assert.equal(deleted.response.status, 200);
+  }
   const history = await call<Array<{ id: string }>>('/admin/db/history', { cookie: adminLogin.cookie });
   assert.equal(history.response.status, 200);
   for (const entry of history.payload.data || []) uploadHistoryIds.push(entry.id);
@@ -437,6 +493,7 @@ try {
     if (assetId) db.prepare('DELETE FROM admin_db_assets WHERE id = ?').run(assetId);
     if (archivedAssetId) db.prepare('DELETE FROM admin_db_assets WHERE id = ?').run(archivedAssetId);
     if (floorPlanAssetId) db.prepare('DELETE FROM admin_db_assets WHERE id = ?').run(floorPlanAssetId);
+    for (const id of additionalFloorPlanAssetIds) if (id) db.prepare('DELETE FROM admin_db_assets WHERE id = ?').run(id);
     db.prepare("DELETE FROM catv_b2c_lines WHERE source_file = 'B2C_TEST.xlsx'").run();
     db.prepare("DELETE FROM catv_b2c_lines WHERE source_file = 'B2C_TEST_UPDATED.xlsx'").run();
     db.prepare("DELETE FROM catv_floor_plans WHERE station_key = '오산'").run();

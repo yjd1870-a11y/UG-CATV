@@ -234,6 +234,17 @@ const rackCoordinatesOnly = (input: Record<string, unknown>) => Object.fromEntri
   ])
 );
 
+const adminStationKey = (value: string) => {
+  let key = value.trim().toLowerCase()
+    .replace(/\.(xlsx|xls|png|jpe?g|webp)$/i, '')
+    .replace(/[()[\]{}]/g, '')
+    .replace(/평면도/g, '')
+    .replace(/\s+/g, '')
+    .replace(/[_/\\:>]+$/g, '');
+  if (key.endsWith('국사') && key.length > 2) key = key.slice(0, -2);
+  return key.split(/[_/\\:>]+/).filter(Boolean).at(-1) || key;
+};
+
 const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, accept, icon, assets, activeStraightMapFilenames = [], onChanged }) => {
   const { showToast } = useApp();
   const [stationName, setStationName] = useState('');
@@ -272,7 +283,7 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
     } catch {
       setCoordinateText('{}');
     }
-    showToast(`${asset.stationName} 평면도 수정 모드를 열었습니다.`, 'info');
+    showToast(`${asset.stationName} ${asset.displayName || '도면'} 수정 모드를 열었습니다.`, 'info');
   };
 
   const save = async () => {
@@ -355,6 +366,10 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
   const coordinatePoints = parseCoordinates(coordinateText);
   const duplicateStraightMapUpload = Boolean(file && type === 'b2c' && /\.xlsx$/i.test(file.name)
     && activeStraightMapFilenames.some((name) => name.localeCompare(file.name, undefined, { sensitivity: 'accent' }) === 0));
+  const stationPlanCount = type === 'floor_plan' && stationName.trim()
+    ? assets.filter((asset) => adminStationKey(asset.stationName) === adminStationKey(stationName)).length
+    : 0;
+  const floorPlanLimitReached = type === 'floor_plan' && !editingAsset && stationPlanCount >= 3;
   const removeCoordinate = (label: string) => {
     try {
       const current = coordinateText.trim() ? JSON.parse(coordinateText) as Record<string, unknown> : {};
@@ -380,15 +395,16 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
       </div>
       {editingAsset ? (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2.5 text-xs">
-          <span className="font-bold text-orange-700"><Pencil className="mr-1.5 inline h-4 w-4" />{editingAsset.stationName} 평면도 수정 중 · 파일을 바꾸지 않아도 Rack 좌표만 수정할 수 있습니다.</span>
+          <span className="font-bold text-orange-700"><Pencil className="mr-1.5 inline h-4 w-4" />{editingAsset.stationName} {editingAsset.displayName || '도면'} 수정 중 · 파일을 바꾸지 않아도 Rack 좌표만 수정할 수 있습니다.</span>
           <button type="button" className={secondaryButtonClass} onClick={resetEditor}><X className="h-3.5 w-3.5" /> 수정 취소</button>
         </div>
       ) : null}
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-xs font-bold text-slate-600">국사명<input className={`${inputClass} mt-1.5`} value={stationName} onChange={(event) => setStationName(event.target.value)} placeholder="예: 안성국사" /></label>
         <label className="text-xs font-bold text-slate-600 lg:col-span-2">{editingAsset ? '새 평면도 파일 (선택)' : '파일'}<input key={editingAsset?.id || 'new-asset'} className="mt-1.5 block h-10 w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs" type="file" accept={accept} onChange={(event) => setFile(event.target.files?.[0] || null)} /></label>
-        <button type="button" className={`${primaryButtonClass} self-end`} disabled={saving || duplicateStraightMapUpload} onClick={() => void save()}>{editingAsset ? <Save className="h-4 w-4" /> : <Upload className="h-4 w-4" />} {saving ? '저장 중...' : duplicateStraightMapUpload ? '동일 파일 업로드 중' : editingAsset ? '수정 저장' : '신규 등록'}</button>
+        <button type="button" className={`${primaryButtonClass} self-end`} disabled={saving || duplicateStraightMapUpload || floorPlanLimitReached} onClick={() => void save()}>{editingAsset ? <Save className="h-4 w-4" /> : <Upload className="h-4 w-4" />} {saving ? '저장 중...' : duplicateStraightMapUpload ? '동일 파일 업로드 중' : floorPlanLimitReached ? '도면 3장 등록 완료' : editingAsset ? '수정 저장' : '신규 등록'}</button>
       </div>
+      {floorPlanLimitReached ? <p className="mt-2 text-xs font-semibold text-amber-700">{stationName.trim()}에는 도면이 3장 등록되어 있습니다. 기존 도면을 수정하거나 삭제한 뒤 추가해주세요.</p> : null}
       {type === 'floor_plan' ? (
         <div className="mt-3 space-y-3">
           {previewUrl ? (
@@ -438,7 +454,7 @@ const AssetSection: React.FC<AssetSectionProps> = ({ type, title, description, a
           return (
             <div key={asset.id} className={`rounded-xl border p-3 text-xs ${editingAsset?.id === asset.id ? 'border-orange-300 bg-orange-50/50' : 'border-slate-100 bg-slate-50'}`}>
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                <div><strong className="text-[#173B57]">{asset.stationName}</strong><p className="mt-1 text-slate-500">{asset.fileName} · {formatBytes(asset.fileSize)} · Rack 좌표 {savedPoints.length}개 · {formatDate(asset.updatedAt || asset.uploadedAt)}</p></div>
+                <div><strong className="text-[#173B57]">{asset.stationName}{type === 'floor_plan' ? ` · ${asset.displayName || `도면 ${asset.planOrder || 1}`}` : ''}</strong><p className="mt-1 text-slate-500">{asset.fileName} · {formatBytes(asset.fileSize)} · Rack 좌표 {savedPoints.length}개 · {formatDate(asset.updatedAt || asset.uploadedAt)}</p></div>
                 <div className="flex gap-2">
                   {type === 'floor_plan' ? <button type="button" className={secondaryButtonClass} onClick={() => edit(asset)}><Pencil className="h-3.5 w-3.5" /> 수정</button> : null}
                   <button type="button" className={dangerButtonClass} onClick={() => void remove(asset.id)}><Trash2 className="h-3.5 w-3.5" /> 삭제</button>
@@ -841,7 +857,7 @@ export const AdminUsersView: React.FC = () => {
           </div>
         </div>      </section>
 
-      <AssetSection type="floor_plan" title="국사 평면도 DB" description="국사 평면도 이미지는 파일 저장소에, Rack 위치 비율 좌표는 DB에 관리합니다." accept=".png,.jpg,.jpeg,.webp" icon={<Building2 className="h-5 w-5" />} assets={floorPlans} onChanged={loadAdminData} />
+      <AssetSection type="floor_plan" title="국사 평면도 DB" description="국사별 도면을 최대 3장까지 등록하고, 각 도면의 Rack 위치 좌표를 독립적으로 관리합니다." accept=".png,.jpg,.jpeg,.webp" icon={<Building2 className="h-5 w-5" />} assets={floorPlans} onChanged={loadAdminData} />
       <AssetSection type="b2c" title="B2C 선번장 / 직선도 DB" description="선번장 D/H/L~P열을 조회 DB로 교체하고, 직선도 시트는 실제 콘텐츠만 자른 벡터 PDF·정밀 좌표 지도로 생성합니다." accept=".xlsx,.xls,.csv" icon={<Cable className="h-5 w-5" />} assets={b2cAssets} activeStraightMapFilenames={activeStraightMapFilenames} onChanged={loadAdminData} />
 
       <section className={panelClass}>

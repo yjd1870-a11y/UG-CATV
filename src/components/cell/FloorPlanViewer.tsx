@@ -25,6 +25,7 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
   const stationName = suppliedStation || cell?.stationDetails?.stationName || cell?.stationInfo || '';
   const [result, setResult] = useState<CatvFloorPlanResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [switchingPlanId, setSwitchingPlanId] = useState('');
   const [error, setError] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
   const [scale, setScale] = useState(1);
@@ -60,6 +61,19 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [stationName, target, targetType, equipment]);
+
+  const selectPlan = async (planId: string) => {
+    if (!result || planId === result.floorPlan.id || switchingPlanId) return;
+    setSwitchingPlanId(planId);
+    setError('');
+    try {
+      setResult(await catvApi.getFloorPlan(stationName, target, targetType as 'node' | 'rack', equipment, planId));
+    } catch {
+      setError('선택한 도면을 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setSwitchingPlanId('');
+    }
+  };
 
   useEffect(() => {
     const element = viewerRef.current;
@@ -186,7 +200,7 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
       <div className="flex flex-col justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center">
         <div>
           <h2 className="flex items-center gap-1.5 text-sm font-extrabold text-[#173B57]"><Building2 className="h-4 w-4" />{result.floorPlan.stationName} 국사 평면도</h2>
-          <p className="mt-0.5 text-xs text-slate-500">{result.floorPlan.fileName}</p>
+          <p className="mt-0.5 text-xs text-slate-500">{result.floorPlan.displayName} · {result.floorPlan.fileName}</p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <button type="button" className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600" onClick={() => applyView(zoomViewAt(viewRef.current, .86, { x: 0, y: 0 }, .5, 4))} aria-label="축소"><ZoomOut className="h-4 w-4" /></button>
@@ -196,6 +210,26 @@ export const FloorPlanViewer: React.FC<FloorPlanViewerProps> = ({
           <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-[#173B57] px-2.5 py-2 text-xs font-bold text-white" onClick={() => setFullscreen((current) => !current)}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}{fullscreen ? '닫기' : '전체화면'}</button>
         </div>
       </div>
+      {result.plans.length > 1 ? (
+        <div className="flex max-w-full gap-2 overflow-x-auto rounded-xl border border-slate-200 bg-white p-2" aria-label="국사 도면 선택">
+          {result.plans.map((plan) => (
+            <button
+              key={plan.id}
+              type="button"
+              disabled={Boolean(switchingPlanId)}
+              onClick={() => void selectPlan(plan.id)}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-extrabold transition ${plan.id === result.floorPlan.id ? 'bg-[#173B57] text-white shadow' : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+            >
+              {switchingPlanId === plan.id ? '불러오는 중...' : plan.displayName}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {result.matches.length > 1 ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+          “{target}” Rack이 여러 도면에 등록되어 있습니다. 위 도면 버튼을 눌러 위치를 확인해주세요.
+        </div>
+      ) : null}
       {viewer}
       {!result.target && target ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">

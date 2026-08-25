@@ -651,6 +651,27 @@ router.delete('/db/cells', (req, res) => {
 router.get('/db/assets', (req, res) => {
   const dbType = typeof req.query.type === 'string' ? req.query.type : '';
   if (!allowedAssetTypes.has(dbType)) throw new ApiError(400, 'DB 자산 종류를 확인해주세요.', 'VALIDATION_ERROR');
+  if (dbType === 'floor_plan') {
+    const rows = db.prepare(`
+      SELECT a.id, a.db_type AS dbType, a.station_name AS stationName, a.file_name AS fileName,
+             a.mime_type AS mimeType, a.file_size AS fileSize, a.record_count AS recordCount,
+             a.coordinates_json AS coordinatesJson, u.username AS uploadedBy,
+             a.uploaded_at AS uploadedAt, a.updated_at AS updatedAt,
+             p.id AS floorPlanId, p.plan_order AS planOrder
+        FROM admin_db_assets a
+        JOIN users u ON u.id = a.uploaded_by
+        JOIN catv_floor_plans p ON p.id = a.floor_plan_id
+       WHERE a.db_type = 'floor_plan' AND a.deleted_at IS NULL
+       ORDER BY p.station_name, p.plan_order
+    `).all() as Array<Record<string, unknown>>;
+    success(res, rows.map((row) => ({
+      ...row,
+      displayName: `도면 ${Number(row.planOrder)}`,
+      coordinatesJson: rackCoordinatesJson(row.coordinatesJson),
+      imageUrl: `/api/floor-plans/${encodeURIComponent(String(row.floorPlanId))}/image`,
+    })));
+    return;
+  }
   const rows = db.prepare(`
     SELECT a.id, a.db_type AS dbType, a.station_name AS stationName, a.file_name AS fileName,
            a.mime_type AS mimeType, a.file_size AS fileSize, a.record_count AS recordCount,
@@ -659,16 +680,7 @@ router.get('/db/assets', (req, res) => {
       FROM admin_db_assets a JOIN users u ON u.id = a.uploaded_by
      WHERE a.db_type = ? AND a.deleted_at IS NULL ORDER BY a.uploaded_at DESC
   `).all(dbType) as Array<Record<string, unknown>>;
-  success(res, rows.map((row) => {
-    if (dbType !== 'floor_plan') return row;
-    const plan = db.prepare('SELECT id FROM catv_floor_plans WHERE station_key = ? LIMIT 1')
-      .get(normalizeStationName(row.stationName)) as { id: string } | undefined;
-    return {
-      ...row,
-      coordinatesJson: rackCoordinatesJson(row.coordinatesJson),
-      imageUrl: plan ? `/api/floor-plans/${encodeURIComponent(plan.id)}/image` : null,
-    };
-  }));
+  success(res, rows);
 });
 
 router.post('/db/assets', asyncRoute(async (req, res) => {
@@ -678,12 +690,11 @@ router.post('/db/assets', asyncRoute(async (req, res) => {
   const fileName = asText(req.body?.fileName, '파일명', 255);
   const fileSize = Number(req.body?.fileSize || 0);
   if (!Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > 20 * 1024 * 1024) throw new ApiError(400, '파일 크기를 확인해주세요.', 'INVALID_FILE_SIZE');
-  const allowed = dbType === 'floor_plan' ? /\.(png|jpe?g|webp|xlsx|xls)$/i : /\.(xlsx|xls|csv)$/i;
+  const allowed = dbType === 'floor_plan' ? /\.(png|jpe?g|webp)$/i : /\.(xlsx|xls|csv)$/i;
   if (!allowed.test(fileName)) throw new ApiError(400, '지원하지 않는 파일 형식입니다.', 'INVALID_FILE');
   const records = Array.isArray(req.body?.records) ? req.body.records.slice(0, 50_000) : [];
   const coordinates = dbType === 'floor_plan' ? rackCoordinatesOnly(req.body?.coordinates) : {};
   const id = randomUUID();
-  let replacedFloorPlanObject: string | null = null;
   let savedFloorPlanObject: string | null = null;
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -691,19 +702,18 @@ router.post('/db/assets', asyncRoute(async (req, res) => {
       const imageDataUrl = textValue((records[0] as Record<string, unknown> | undefined)?.imageDataUrl);
       if (!imageDataUrl) throw new ApiError(400, '평면도 이미지 데이터가 없습니다.', 'INVALID_FILE');
       const stationKey = normalizeStationName(stationName);
-      const existing = db.prepare('SELECT id, object_key FROM catv_floor_plans WHERE station_key = ?').get(stationKey) as { id: string; object_key: string | null } | undefined;
-      const planId = existing?.id || id;
-      const stored = await saveFloorPlanDataUrl(planId, imageDataUrl);
-      replacedFloorPlanObject = existing?.object_key || null;
+      const usedOrders = new Set(
+        (db.prepare('SELECT plan_order FROM catv_floor_plans WHERE station_key = ?').all(stationKey) as Array<{ plan_order: number }>)
+          .map((entry) => Number(entry.plan_order))
+      );
+      const planOrder = [1, 2, 3].find((candidate) => !usedOrders.has(candidate));
+      if (!planOrder) throw new ApiError(409, '한 국사에는 평면도를 최대 3장까지 등록할 수 있습니다.', 'FLOOR_PLAN_LIMIT_EXCEEDED');
+      const stored = await saveFloorPlanDataUrl(id, imageDataUrl);
       savedFloorPlanObject = stored.objectKey;
       db.prepare(`
-        INSERT INTO catv_floor_plans (id, station_name, station_key, file_name, object_key)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(station_key) DO UPDATE SET station_name = excluded.station_name,
-          file_name = excluded.file_name, object_key = excluded.object_key,
-          image_url = NULL, updated_at = CURRENT_TIMESTAMP
-      `).run(planId, stationName, stationKey, fileName, stored.objectKey);
-      db.prepare('DELETE FROM catv_floor_plan_coordinates WHERE floor_plan_id = ?').run(planId);
+        INSERT INTO catv_floor_plans (id, station_name, station_key, plan_order, file_name, object_key)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(id, stationName, stationKey, planOrder, fileName, stored.objectKey);
       const insertCoordinate = db.prepare(`
         INSERT INTO catv_floor_plan_coordinates (
           id, floor_plan_id, label, node_name, rack_name, equipment_type, x_ratio, y_ratio
@@ -718,7 +728,7 @@ router.post('/db/assets', asyncRoute(async (req, res) => {
         if (yRatio > 1) yRatio /= 100;
         if (!Number.isFinite(xRatio) || !Number.isFinite(yRatio) || xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) continue;
         const rackName = textValue(point.rackName) || textValue(point.label) || label;
-        insertCoordinate.run(randomUUID(), planId, rackName, '', rackName, textValue(point.equipmentType), xRatio, yRatio);
+        insertCoordinate.run(randomUUID(), id, rackName, '', rackName, textValue(point.equipmentType), xRatio, yRatio);
       }
     }
 
@@ -762,22 +772,19 @@ router.post('/db/assets', asyncRoute(async (req, res) => {
 
     db.prepare(`
       INSERT INTO admin_db_assets (
-        id, db_type, station_name, file_name, mime_type, file_size,
+        id, db_type, floor_plan_id, station_name, file_name, mime_type, file_size,
         record_count, coordinates_json, data_json, uploaded_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)
-    `).run(id, dbType, stationName, fileName, optionalText(req.body?.mimeType, 100), fileSize, records.length, JSON.stringify(coordinates), authUser(req).id);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)
+    `).run(id, dbType, dbType === 'floor_plan' ? id : null, stationName, fileName, optionalText(req.body?.mimeType, 100), fileSize, records.length, JSON.stringify(coordinates), authUser(req).id);
     db.prepare(`
       INSERT INTO db_upload_history (id, db_type, file_name, file_size, record_count, uploaded_by, status)
       VALUES (?, ?, ?, ?, ?, ?, 'success')
     `).run(randomUUID(), dbType, fileName, fileSize, records.length, authUser(req).id);
     db.exec('COMMIT');
-    if (replacedFloorPlanObject && replacedFloorPlanObject !== savedFloorPlanObject) {
-      await removeFloorPlanObject(replacedFloorPlanObject);
-    }
     success(res, { id, dbType, stationName, fileName, recordCount: records.length }, 201);
   } catch (error) {
     db.exec('ROLLBACK');
-    if (savedFloorPlanObject && savedFloorPlanObject !== replacedFloorPlanObject) {
+    if (savedFloorPlanObject) {
       await removeFloorPlanObject(savedFloorPlanObject).catch(() => undefined);
     }
     throw error;
@@ -793,11 +800,18 @@ router.put('/db/assets/:id', asyncRoute(async (req, res) => {
 
   const stationName = optionalText(req.body?.stationName, 100) || String(asset.station_name);
   const stationKey = normalizeStationName(stationName);
-  const oldStationKey = normalizeStationName(asset.station_name);
-  const conflicting = db.prepare('SELECT id FROM catv_floor_plans WHERE station_key = ?').get(stationKey) as { id: string } | undefined;
-  const plan = db.prepare('SELECT * FROM catv_floor_plans WHERE station_key = ?').get(oldStationKey) as Record<string, unknown> | undefined;
+  const planId = String(asset.floor_plan_id || asset.id);
+  const plan = db.prepare('SELECT * FROM catv_floor_plans WHERE id = ?').get(planId) as Record<string, unknown> | undefined;
   if (!plan) throw new ApiError(404, '수정할 국사 평면도를 찾을 수 없습니다.', 'FLOOR_PLAN_NOT_FOUND');
-  if (conflicting && conflicting.id !== plan.id) throw new ApiError(409, '같은 국사명으로 등록된 평면도가 이미 있습니다.', 'DUPLICATE_STATION');
+  let planOrder = Number(plan.plan_order);
+  if (stationKey !== String(plan.station_key)) {
+    const usedOrders = new Set(
+      (db.prepare('SELECT plan_order FROM catv_floor_plans WHERE station_key = ? AND id <> ?').all(stationKey, planId) as Array<{ plan_order: number }>)
+        .map((entry) => Number(entry.plan_order))
+    );
+    planOrder = [planOrder, 1, 2, 3].find((candidate) => candidate >= 1 && candidate <= 3 && !usedOrders.has(candidate)) || 0;
+    if (!planOrder) throw new ApiError(409, '한 국사에는 평면도를 최대 3장까지 등록할 수 있습니다.', 'FLOOR_PLAN_LIMIT_EXCEEDED');
+  }
 
   const coordinates = rackCoordinatesOnly(req.body?.coordinates);
   const records = Array.isArray(req.body?.records) ? req.body.records : [];
@@ -812,7 +826,6 @@ router.put('/db/assets/:id', asyncRoute(async (req, res) => {
 
   db.exec('BEGIN IMMEDIATE');
   try {
-    const planId = String(plan.id);
     const previousObjectKey = String(plan.object_key || '');
     let objectKey = previousObjectKey;
     if (imageDataUrl) {
@@ -820,10 +833,10 @@ router.put('/db/assets/:id', asyncRoute(async (req, res) => {
     }
     db.prepare(`
       UPDATE catv_floor_plans
-         SET station_name = ?, station_key = ?, file_name = ?, object_key = ?, image_url = NULL,
+         SET station_name = ?, station_key = ?, plan_order = ?, file_name = ?, object_key = ?, image_url = NULL,
              updated_at = CURRENT_TIMESTAMP
        WHERE id = ?
-    `).run(stationName, stationKey, fileName, objectKey || null, planId);
+    `).run(stationName, stationKey, planOrder, fileName, objectKey || null, planId);
 
     db.prepare('DELETE FROM catv_floor_plan_coordinates WHERE floor_plan_id = ?').run(planId);
     const insertCoordinate = db.prepare(`
@@ -845,10 +858,11 @@ router.put('/db/assets/:id', asyncRoute(async (req, res) => {
 
     db.prepare(`
       UPDATE admin_db_assets
-         SET station_name = ?, file_name = ?, mime_type = ?, file_size = ?,
+         SET floor_plan_id = ?, station_name = ?, file_name = ?, mime_type = ?, file_size = ?,
              record_count = 1, coordinates_json = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?
     `).run(
+      planId,
       stationName,
       fileName,
       imageDataUrl ? optionalText(req.body?.mimeType, 100) : optionalText(asset.mime_type, 100),
@@ -870,11 +884,11 @@ router.put('/db/assets/:id', asyncRoute(async (req, res) => {
 }));
 
 router.delete('/db/assets/:id', asyncRoute(async (req, res) => {
-  const asset = db.prepare('SELECT db_type, station_name, file_name FROM admin_db_assets WHERE id = ? AND deleted_at IS NULL').get(req.params.id) as { db_type: string; station_name: string; file_name: string } | undefined;
+  const asset = db.prepare('SELECT db_type, floor_plan_id, station_name, file_name FROM admin_db_assets WHERE id = ? AND deleted_at IS NULL').get(req.params.id) as { db_type: string; floor_plan_id: string | null; station_name: string; file_name: string } | undefined;
   const result = db.prepare('UPDATE admin_db_assets SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL').run(req.params.id);
   if (result.changes === 0) throw new ApiError(404, '등록 DB를 찾을 수 없습니다.', 'NOT_FOUND');
   if (asset?.db_type === 'floor_plan') {
-    const plan = db.prepare('SELECT id, object_key FROM catv_floor_plans WHERE station_key = ?').get(normalizeStationName(asset.station_name)) as { id: string; object_key: string | null } | undefined;
+    const plan = db.prepare('SELECT id, object_key FROM catv_floor_plans WHERE id = ?').get(asset.floor_plan_id || req.params.id) as { id: string; object_key: string | null } | undefined;
     if (plan) {
       await removeFloorPlanObject(plan.object_key);
       db.prepare('DELETE FROM catv_floor_plans WHERE id = ?').run(plan.id);

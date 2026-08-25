@@ -412,6 +412,8 @@ export interface CatvFloorPlanResult {
   floorPlan: {
     id: string;
     stationName: string;
+    planOrder: 1 | 2 | 3;
+    displayName: string;
     fileName: string;
     imageUrl: string;
     width: number | null;
@@ -424,6 +426,22 @@ export interface CatvFloorPlanResult {
     equipmentType: string;
   } | null;
   requestedTarget: string;
+  plans: Array<{
+    id: string;
+    planOrder: 1 | 2 | 3;
+    displayName: string;
+    fileName: string;
+    imageUrl: string;
+  }>;
+  matches: Array<{
+    floorPlanId: string;
+    planOrder: 1 | 2 | 3;
+    displayName: string;
+    label: string;
+    xRatio: number;
+    yRatio: number;
+    equipmentType: string;
+  }>;
 }
 
 export interface StraightMapSearchResult {

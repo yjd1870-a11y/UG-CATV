@@ -78,9 +78,9 @@ export const catvApi = {
     await request<{ items: CatvB2CLine[]; total: number }>(`/b2c/search?q=${encodeURIComponent(query)}`)
   ).items,
   getB2C: (id: string) => request<CatvB2CLine>(`/b2c/${encodeURIComponent(id)}`),
-  getFloorPlan: (stationName: string, target: string, type: 'node' | 'rack' = 'node', equipment = '') =>
+  getFloorPlan: (stationName: string, target: string, type: 'node' | 'rack' = 'node', equipment = '', planId = '') =>
     request<CatvFloorPlanResult>(
-      `/floor-plans/search?station=${encodeURIComponent(stationName)}&target=${encodeURIComponent(target)}&type=${encodeURIComponent(type)}&equipment=${encodeURIComponent(equipment)}`
+      `/floor-plans/search?station=${encodeURIComponent(stationName)}&target=${encodeURIComponent(target)}&type=${encodeURIComponent(type)}&equipment=${encodeURIComponent(equipment)}${planId ? `&planId=${encodeURIComponent(planId)}` : ''}`
     ),
   searchStraightMap: async (query: string, stationName = '', mapName = '', matchLength: 5 | 6 = 6) => (
     await request<{ count: number; results: StraightMapSearchResult[] }>(

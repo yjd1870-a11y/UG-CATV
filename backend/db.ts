@@ -332,6 +332,7 @@ CREATE INDEX IF NOT EXISTS idx_db_upload_history_date ON db_upload_history(uploa
 CREATE TABLE IF NOT EXISTS admin_db_assets (
   id TEXT PRIMARY KEY,
   db_type TEXT NOT NULL CHECK (db_type IN ('floor_plan', 'b2c')),
+  floor_plan_id TEXT,
   station_name TEXT NOT NULL,
   file_name TEXT NOT NULL,
   mime_type TEXT,
@@ -542,14 +543,16 @@ CREATE INDEX IF NOT EXISTS idx_map_objects_search ON map_objects(normalized_text
 CREATE TABLE IF NOT EXISTS catv_floor_plans (
   id TEXT PRIMARY KEY,
   station_name TEXT NOT NULL,
-  station_key TEXT NOT NULL UNIQUE,
+  station_key TEXT NOT NULL,
+  plan_order INTEGER NOT NULL DEFAULT 1 CHECK (plan_order BETWEEN 1 AND 3),
   file_name TEXT NOT NULL,
   image_url TEXT,
   object_key TEXT,
   width INTEGER,
   height INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(station_key, plan_order)
 );
 CREATE INDEX IF NOT EXISTS idx_catv_floor_plans_station ON catv_floor_plans(station_name);
 
@@ -577,8 +580,56 @@ const ensureColumn = (table: string, column: string, definition: string) => {
   }
 };
 
+const migrateFloorPlansForMultipleDrawings = () => {
+  const columns = db.prepare('PRAGMA table_info(catv_floor_plans)').all() as Array<{ name: string }>;
+  if (columns.some((entry) => entry.name === 'plan_order')) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE catv_floor_plans_new (
+        id TEXT PRIMARY KEY,
+        station_name TEXT NOT NULL,
+        station_key TEXT NOT NULL,
+        plan_order INTEGER NOT NULL DEFAULT 1 CHECK (plan_order BETWEEN 1 AND 3),
+        file_name TEXT NOT NULL,
+        image_url TEXT,
+        object_key TEXT,
+        width INTEGER,
+        height INTEGER,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(station_key, plan_order)
+      );
+      INSERT INTO catv_floor_plans_new (
+        id, station_name, station_key, plan_order, file_name, image_url, object_key,
+        width, height, created_at, updated_at
+      )
+      SELECT id, station_name, station_key, 1, file_name, image_url, object_key,
+             width, height, created_at, updated_at
+        FROM catv_floor_plans;
+      DROP TABLE catv_floor_plans;
+      ALTER TABLE catv_floor_plans_new RENAME TO catv_floor_plans;
+      CREATE INDEX idx_catv_floor_plans_station ON catv_floor_plans(station_name, plan_order);
+      COMMIT;
+    `);
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* transaction may already be closed */ }
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+};
+
 export const createSchema = () => {
   db.exec(schema);
+  migrateFloorPlansForMultipleDrawings();
+  db.exec(`
+    DROP INDEX IF EXISTS idx_catv_floor_plans_station;
+    CREATE INDEX idx_catv_floor_plans_station ON catv_floor_plans(station_name, plan_order);
+  `);
+  ensureColumn('admin_db_assets', 'floor_plan_id', 'TEXT');
   ensureColumn('users', 'zone', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('users', 'region_id', 'TEXT');
   ensureColumn('users', 'access_role', 'TEXT');
@@ -1116,7 +1167,7 @@ const migrateLegacyAdminAssets = async () => {
       try {
         const planId = textValue(asset.id) || randomUUID();
         const stored = await saveFloorPlanDataUrl(planId, imageDataUrl);
-        db.prepare(`INSERT INTO catv_floor_plans (id, station_name, station_key, file_name, object_key) VALUES (?, ?, ?, ?, ?)`)
+        db.prepare(`INSERT INTO catv_floor_plans (id, station_name, station_key, plan_order, file_name, object_key) VALUES (?, ?, ?, 1, ?, ?)`)
           .run(planId, stationName, normalizeStationName(stationName), fileName, stored.objectKey);
         const insertCoordinate = db.prepare(`
           INSERT INTO catv_floor_plan_coordinates (id, floor_plan_id, label, node_name, rack_name, equipment_type, x_ratio, y_ratio)
@@ -1137,6 +1188,31 @@ const migrateLegacyAdminAssets = async () => {
         console.warn('기존 평면도 자산 마이그레이션을 건너뜁니다.', fileName, error);
       }
     }
+  }
+};
+
+const linkLegacyFloorPlanAssets = () => {
+  const assets = db.prepare(`
+    SELECT id, floor_plan_id, station_name, uploaded_at
+      FROM admin_db_assets
+     WHERE db_type = 'floor_plan' AND deleted_at IS NULL
+     ORDER BY uploaded_at DESC, id DESC
+  `).all() as Array<{ id: string; floor_plan_id: string | null; station_name: string; uploaded_at: string }>;
+  const plans = db.prepare('SELECT id, station_key FROM catv_floor_plans ORDER BY plan_order')
+    .all() as Array<{ id: string; station_key: string }>;
+  const claimedAssets = new Set<string>();
+  const update = db.prepare('UPDATE admin_db_assets SET floor_plan_id = ? WHERE id = ?');
+  for (const plan of plans) {
+    const alreadyLinked = assets.find((entry) => !claimedAssets.has(entry.id) && entry.floor_plan_id === plan.id);
+    if (alreadyLinked) {
+      claimedAssets.add(alreadyLinked.id);
+      continue;
+    }
+    const asset = assets.find((entry) => !claimedAssets.has(entry.id) && !entry.floor_plan_id && normalizeStationName(entry.station_name) === plan.station_key)
+      || assets.find((entry) => !claimedAssets.has(entry.id) && !entry.floor_plan_id && entry.id === plan.id);
+    if (!asset) continue;
+    update.run(plan.id, asset.id);
+    claimedAssets.add(asset.id);
   }
 };
 
@@ -1162,5 +1238,6 @@ export const initializeDatabase = async () => {
   await seedDatabase();
   syncCatvCellsFromLegacy();
   await migrateLegacyAdminAssets();
+  linkLegacyFloorPlanAssets();
   removeLegacyFloorPlanNodeCoordinates();
 };
