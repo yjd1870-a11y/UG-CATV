@@ -1,6 +1,13 @@
-param([switch]$Once)
+param(
+  [switch]$Once,
+  [string]$ApiUrl = ''
+)
 
 $ErrorActionPreference = 'Stop'
+
+if (-not [string]::IsNullOrWhiteSpace($ApiUrl)) {
+  $env:CATV_RENDERER_API_URL = $ApiUrl.TrimEnd('/')
+}
 
 function Get-WindowsGenericCredentialPassword([string]$TargetName) {
   if (-not ('Catv.WindowsCredential' -as [type])) {

@@ -10,6 +10,20 @@
 4. `CATV_RENDERER_API_URL`을 Render 서비스의 HTTPS URL로 설정합니다.
 5. `renderer-agent\start-renderer.cmd` 또는 `npm run renderer:agent -- --once`를 실행합니다.
 
+## Windows 로그인 자동 시작
+
+Excel COM은 로그인된 사용자 세션이 필요하므로 Windows 서비스가 아니라 로그온 예약 작업으로 실행합니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\renderer-agent\install-autostart.ps1
+```
+
+예약 작업은 로그인 후 렌더러를 숨김 상태로 실행하고, 비정상 종료 시 1분 간격으로 최대 10회 재시작합니다. 같은 작업이 이미 실행 중이면 중복 실행하지 않습니다. 제거할 때는 다음 명령을 사용합니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\renderer-agent\uninstall-autostart.ps1
+```
+
 로컬 `http://localhost:3000`은 서버가 `backend/data/straight-map-renderer.token`을 자동 생성하고 Agent가 같은 파일을 읽으므로 별도 token 입력이 필요 없습니다.
 
 Agent는 한 번에 한 Job만 처리합니다. 매크로, 이벤트, 외부 링크 갱신을 차단하고, XLSX를 로컬 임시 폴더로 스트리밍 다운로드한 뒤 SHA-256을 검증합니다. 시트별 벡터 PDF와 PDF point 좌표를 만들며 `map.pdf`, `coordinates.json`, `manifest.json`만 R2 immutable prefix에 직접 업로드합니다. Manifest는 항상 마지막에 업로드됩니다.
