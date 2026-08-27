@@ -86,7 +86,7 @@ export const CatvManpowerStatusCard: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-[#E5E7EB]">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-black bg-[#173B57] text-white tracking-wide">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-base font-black bg-[#173B57] text-white tracking-wide">
               <Users className="w-3.5 h-3.5 text-[#F28C28]" />
               CATV 인력현황
             </span>

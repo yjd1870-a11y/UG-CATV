@@ -119,7 +119,7 @@ export const HomeDashboard: React.FC = () => {
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-blue-50 font-bold text-[#2878B5]">
               <Zap className="h-4 w-4" />
             </div>
-            <h2 className="text-sm font-bold text-[#173B57]">현장 유지보수 전달사항 &amp; 안전수칙</h2>
+            <h2 className="text-base font-bold text-[#173B57]">현장 유지보수 전달사항 &amp; 안전수칙</h2>
           </div>
           <div className="flex items-center gap-2">
             <span className="hidden shrink-0 text-[11px] font-medium text-[#6B7280] sm:inline">전송망사업팀</span>

@@ -209,10 +209,23 @@ export const StraightMapViewer: React.FC<Props> = ({ searchKeys, stationName = '
     return () => { cancelled = true; activeTask?.cancel(); };
   }, [metadata, renderView, canvasSize]);
 
-  const zoomAt = (factor: number, centerX = canvasSize.width / 2, centerY = canvasSize.height / 2, smooth = true) => {
+  const zoomAt = useCallback((factor: number, centerX = canvasSize.width / 2, centerY = canvasSize.height / 2, smooth = true) => {
     const next = zoomViewAt(viewRef.current, factor, { x: centerX, y: centerY }, 0.01, 30);
     if (smooth) animateView(next); else applyView(next);
-  };
+  }, [animateView, applyView, canvasSize.height, canvasSize.width]);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const bounds = element.getBoundingClientRect();
+      zoomAt(event.deltaY < 0 ? 1.18 : 0.84, event.clientX - bounds.left, event.clientY - bounds.top);
+    };
+    element.addEventListener('wheel', handleWheel, { passive: false });
+    return () => element.removeEventListener('wheel', handleWheel);
+  }, [fullscreen, zoomAt]);
   const beginGesture = (event: React.PointerEvent<HTMLDivElement>) => {
     if (animationRef.current !== null) cancelAnimationFrame(animationRef.current);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -261,8 +274,7 @@ export const StraightMapViewer: React.FC<Props> = ({ searchKeys, stationName = '
         <div className="flex items-center gap-1.5"><button type="button" onClick={() => zoomAt(0.84)} className="rounded-lg border border-slate-200 p-2" aria-label="축소"><ZoomOut className="h-4 w-4" /></button><button type="button" onClick={() => zoomAt(1.18)} className="rounded-lg border border-slate-200 p-2" aria-label="확대"><ZoomIn className="h-4 w-4" /></button><button type="button" onClick={() => metadata && animateView(homeView(metadata))} className="rounded-lg border border-slate-200 p-2" aria-label="전체 지도 맞춤"><RefreshCw className="h-4 w-4" /></button><button type="button" onClick={() => metadata && selected && animateView(searchView(metadata, selected))} className="rounded-lg border border-slate-200 p-2 text-orange-600" aria-label="검색 위치로 이동"><LocateFixed className="h-4 w-4" /></button><button type="button" onClick={() => setFullscreen((value) => !value)} className="rounded-lg bg-[#173B57] p-2 text-white" aria-label={fullscreen ? '전체화면 닫기' : '전체화면'}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button></div>
       </div>
       {results.length > 1 && !fullscreen ? <div className="max-h-36 overflow-y-auto rounded-xl border border-orange-200 bg-orange-50 p-2">{results.map((result) => <button key={result.id} type="button" onClick={() => setSelected(result)} className="m-1 rounded-lg border border-orange-100 bg-white px-3 py-2 text-xs"><strong>{result.label}</strong><span className="ml-2 text-slate-500">{result.mapName}</span></button>)}</div> : null}
-      <div ref={containerRef} className={`relative touch-none overflow-hidden rounded-2xl border border-slate-200 bg-white ${fullscreen ? 'min-h-0 flex-1' : 'h-[min(68vh,720px)] min-h-[360px]'}`}
-        onWheel={(event) => { event.preventDefault(); const bounds = event.currentTarget.getBoundingClientRect(); zoomAt(event.deltaY < 0 ? 1.18 : 0.84, event.clientX - bounds.left, event.clientY - bounds.top); }}
+      <div ref={containerRef} className={`relative touch-none overscroll-contain overflow-hidden rounded-2xl border border-slate-200 bg-white ${fullscreen ? 'min-h-0 flex-1' : 'h-[min(68vh,720px)] min-h-[360px]'}`}
         onPointerDown={beginGesture}
         onPointerMove={moveGesture}
         onPointerUp={endGesture}
