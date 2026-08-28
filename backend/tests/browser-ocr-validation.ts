@@ -136,4 +136,39 @@ assert.equal(
 );
 assert.equal(actualPhotoShape.preActionNotes.value, '옥상탭 점검');
 
+const deployedPhotoShape = parseAndValidateOcrText(`
+HNS평택지점
+고객주소
+경기 평택시 포승읍 서동대로 784 101동 905호(56친오애아파트) [만호리,646-]
+이관사유
+신호점검
+매체구분 CABLE
+
+[주소 영역 재검사]
+경기 평택시 포승읍 서동대로 784 101동 905호(56친오애아파트) [만호리,646-1]
+신호점검
+
+[사전조치 영역 재검사]
+.라인전체 하향신호불량 점검요정합니다
+셋업박스 일부채널시청 불가
+*축정주파수:
+2 삼/하향 러빌:
+
+[점검요청 영역 재검사]
+*축정주파수:
+2 삼/하향 레벨 :
+`);
+assert.equal(
+  deployedPhotoShape.customerAddress.value,
+  '경기 평택시 포승읍 서동대로 784 101동 905호(SR친오애아파트) [만호리,646-1]',
+);
+assert.equal(
+  deployedPhotoShape.preActionNotes.value,
+  '라인전체 하향신호불량 점검요청합니다\n셋업박스 일부채널시청불가',
+);
+assert.equal(
+  deployedPhotoShape.inspectionRequestDetails.value,
+  '1. 측정주파수:\n2. 상/하향 레벨:\n3. MER:',
+);
+
 console.log('Browser OCR validation test passed: HNS normalization, kor+eng terms, date and structured fields');

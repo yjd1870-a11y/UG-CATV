@@ -152,13 +152,13 @@ export const prepareOcrCanvas = (bitmap: ImageBitmap) => {
 };
 
 export const prepareOcrPreActionCanvas = (bitmap: ImageBitmap) => {
-  // 좌측 라벨을 함께 읽어야 값의 소속을 구분할 수 있다. 기존 10% 시작점은
-  // 세로형 촬영 사진에서 '사전조치내용' 라벨을 잘라내는 원인이었다.
-  const sourceX = Math.round(bitmap.width * 0.01);
-  const sourceY = Math.round(bitmap.height * 0.66);
-  const sourceWidth = Math.round(bitmap.width * 0.98);
-  const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(bitmap.height * 0.29));
-  const scale = Math.min(3, 2400 / Math.max(sourceWidth, sourceHeight));
+  // 표의 라벨 열을 제외하고 값 열만 확대한다. 라벨과 아래 점검요청 행까지
+  // 함께 읽으면 Tesseract가 열 순서를 섞어 사전조치 값에 다른 문구를 합친다.
+  const sourceX = Math.round(bitmap.width * 0.17);
+  const sourceY = Math.round(bitmap.height * 0.68);
+  const sourceWidth = Math.round(bitmap.width * 0.82);
+  const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(bitmap.height * 0.2));
+  const scale = Math.min(3.4, 3000 / Math.max(sourceWidth, sourceHeight));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(sourceWidth * scale));
   canvas.height = Math.max(1, Math.round(sourceHeight * scale));
@@ -166,7 +166,27 @@ export const prepareOcrPreActionCanvas = (bitmap: ImageBitmap) => {
   if (!context) throw new Error('사전조치 영역 전처리를 실행할 수 없습니다.');
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  context.filter = 'grayscale(1) contrast(1.32)';
+  context.filter = 'grayscale(1) contrast(1.26)';
+  context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  context.filter = 'none';
+  return canvas;
+};
+
+export const prepareOcrRequestDetailsCanvas = (bitmap: ImageBitmap) => {
+  // 하단 점검요청 값 열만 분리해 번호와 기술용어의 읽기 순서를 보존한다.
+  const sourceX = Math.round(bitmap.width * 0.17);
+  const sourceY = Math.round(bitmap.height * 0.79);
+  const sourceWidth = Math.round(bitmap.width * 0.82);
+  const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(bitmap.height * 0.19));
+  const scale = Math.min(3.5, 3000 / Math.max(sourceWidth, sourceHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('점검요청내용 영역 전처리를 실행할 수 없습니다.');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.filter = 'grayscale(1) contrast(1.3)';
   context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
   context.filter = 'none';
   return canvas;
