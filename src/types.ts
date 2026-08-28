@@ -20,6 +20,8 @@ export interface User {
   team: string;
   phone: string;
   company: string;
+  regionId?: string;
+  regionName?: string;
   status?: 'pending' | 'active' | 'disabled';
 }
 
@@ -139,8 +141,10 @@ export interface CellInfo {
   history: CellWorkHistory[];
 }
 
-export type TransferStatus = '대기' | '작업중' | '업무이관' | '완료';
-export type MediaType = 'HFC' | 'FTTH' | 'RF' | '광복합';
+export type TransferStatus = '미완료' | '현장처리' | '완료' | '대기' | '작업중' | '업무이관';
+export type TransferWorkflowStatus = 'registered' | 'field_processed' | 'completed';
+export type TransferOcrStatus = 'pending' | 'processing' | 'succeeded' | 'failed';
+export type MediaType = 'HFC' | 'FTTH' | 'RF' | '광복합' | 'CABLE';
 
 export interface TransferLog {
   timestamp: string;
@@ -164,9 +168,53 @@ export interface WorkTransfer {
   preActionNotes: string;
   requestDetails: string;
   requesterName: string;
+  branchName?: string;
+  inspectionCompany?: string;
+  inspectionRequestedDate?: string;
+  customerAddress?: string;
+  handoverReason?: string;
+  tapRnLocation?: string;
+  poleNumber?: string;
+  leadInLength?: string;
+  inspectionRequestDetails?: string;
+  fieldActionSummary?: string;
+  createdAt?: string;
+  workflowStatus?: TransferWorkflowStatus;
+  regionId?: string;
+  regionName?: string;
+  isUrgent?: boolean;
+  ocrStatus?: TransferOcrStatus;
+  ocrText?: string;
+  fieldProcessedAt?: string;
+  fieldProcessedBy?: string;
+  fieldProcessedByName?: string;
+  finalCompletedBy?: string;
+  finalCompletedByName?: string;
+  attachments?: WorkTransferAttachment[];
+  fieldActions?: WorkTransferFieldAction[];
   workerName?: string;
   completedDate?: string;
   logs: TransferLog[];
+}
+
+export interface WorkTransferAttachment {
+  id: string;
+  attachmentType: 'request_photo' | 'field_photo';
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  uploadedBy?: string;
+  createdAt: string;
+  url: string;
+}
+
+export interface WorkTransferFieldAction {
+  id: string;
+  actionText: string;
+  processedBy?: string;
+  processedByName: string;
+  processedAt: string;
+  createdAt: string;
 }
 
 export type DailyWorkCategory =
@@ -307,6 +355,7 @@ export type AppView =
   | 'cell_list'
   | 'cell_detail'
   | 'transfer_list'
+  | 'transfer_analytics'
   | 'transfer_detail'
   | 'daily_work'
   | 'daily_lookup'

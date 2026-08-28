@@ -20,10 +20,12 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   // Transfer Statuses: 대기 (Gray), 작업중 (Blue), 업무이관 (Orange), 완료 (Green)
   // Cell Statuses: 정상 (Green), 점검필요 (Orange), 노이즈발생 (Amber), 장애 (Red)
   switch (status) {
+    case '미완료':
     case '대기':
       bgClass = 'bg-slate-100 text-slate-700 border-slate-300';
       dotClass = 'bg-slate-500';
       break;
+    case '현장처리':
     case '작업중':
       bgClass = 'bg-blue-50 text-[#2878B5] border-blue-200';
       dotClass = 'bg-[#2878B5] animate-pulse';

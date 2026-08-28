@@ -200,6 +200,46 @@ CREATE TABLE IF NOT EXISTS work_transfer_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_work_transfer_logs_transfer ON work_transfer_logs(transfer_id);
 
+CREATE TABLE IF NOT EXISTS work_transfer_attachments (
+  id TEXT PRIMARY KEY,
+  transfer_id TEXT NOT NULL REFERENCES work_transfers(id) ON DELETE CASCADE,
+  attachment_type TEXT NOT NULL CHECK (attachment_type IN ('request_photo', 'field_photo')),
+  file_name TEXT NOT NULL,
+  file_url TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_work_transfer_attachments_transfer ON work_transfer_attachments(transfer_id, attachment_type, created_at);
+
+CREATE TABLE IF NOT EXISTS work_transfer_field_actions (
+  id TEXT PRIMARY KEY,
+  transfer_id TEXT NOT NULL REFERENCES work_transfers(id) ON DELETE CASCADE,
+  action_text TEXT NOT NULL,
+  processed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  processed_by_name TEXT NOT NULL,
+  processed_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_work_transfer_field_actions_transfer ON work_transfer_field_actions(transfer_id, processed_at DESC);
+
+CREATE TABLE IF NOT EXISTS work_transfer_ocr_runs (
+  id TEXT PRIMARY KEY,
+  transfer_id TEXT NOT NULL REFERENCES work_transfers(id) ON DELETE CASCADE,
+  attachment_id TEXT REFERENCES work_transfer_attachments(id) ON DELETE SET NULL,
+  engine TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('processing', 'succeeded', 'failed')),
+  extracted_text TEXT NOT NULL DEFAULT '',
+  error_message TEXT,
+  requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_work_transfer_ocr_runs_transfer ON work_transfer_ocr_runs(transfer_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS daily_work (
   id TEXT PRIMARY KEY,
   work_date TEXT NOT NULL,
@@ -622,6 +662,50 @@ const migrateFloorPlansForMultipleDrawings = () => {
   }
 };
 
+const syncRegionAssignments = () => {
+  const departments = db.prepare(`
+    SELECT DISTINCT department FROM users
+     WHERE department <> '' AND deleted_at IS NULL ORDER BY department
+  `).all() as Array<{ department: string }>;
+  const insertRegion = db.prepare(`
+    INSERT INTO regions (id, region_name, sort_order)
+    VALUES (?, ?, ?)
+    ON CONFLICT(region_name) DO NOTHING
+  `);
+  departments.forEach((entry, index) => insertRegion.run(randomUUID(), entry.department, index + 1));
+  const cellRegions = db.prepare(`
+    SELECT DISTINCT region FROM cells
+     WHERE region <> '' ORDER BY region
+  `).all() as Array<{ region: string }>;
+  cellRegions.forEach((entry, index) => insertRegion.run(randomUUID(), entry.region, departments.length + index + 1));
+  db.prepare(`
+    UPDATE users
+       SET region_id = (SELECT id FROM regions WHERE region_name = users.department)
+     WHERE region_id IS NULL OR region_id = ''
+  `).run();
+  db.prepare(`
+    UPDATE work_transfers
+       SET region_id = (
+         SELECT r.id FROM cells c JOIN regions r ON r.region_name = c.region
+          WHERE c.id = work_transfers.cell_id
+       )
+     WHERE region_id IS NULL OR region_id = ''
+  `).run();
+  db.prepare(`
+    UPDATE work_transfers
+       SET workflow_status = CASE status
+         WHEN 'completed' THEN 'completed'
+         WHEN 'working' THEN 'field_processed'
+         WHEN 'transferred' THEN 'field_processed'
+         ELSE 'registered'
+       END,
+       is_urgent = CASE WHEN priority = 'urgent' THEN 1 ELSE is_urgent END
+     WHERE workflow_status IS NULL
+        OR workflow_status = ''
+        OR (workflow_status = 'registered' AND status IN ('working', 'transferred', 'completed'))
+  `).run();
+};
+
 export const createSchema = () => {
   db.exec(schema);
   migrateFloorPlansForMultipleDrawings();
@@ -637,6 +721,30 @@ export const createSchema = () => {
   ensureColumn('daily_work', 'region_id', 'TEXT');
   ensureColumn('daily_work', 'created_by', 'TEXT');
   ensureColumn('daily_work', 'updated_by', 'TEXT');
+  ensureColumn('work_transfers', 'region_id', 'TEXT');
+  ensureColumn('work_transfers', 'workflow_status', "TEXT NOT NULL DEFAULT 'registered'");
+  ensureColumn('work_transfers', 'is_urgent', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('work_transfers', 'ocr_status', "TEXT NOT NULL DEFAULT 'pending'");
+  ensureColumn('work_transfers', 'ocr_text', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'field_processed_at', 'TEXT');
+  ensureColumn('work_transfers', 'field_processed_by', 'TEXT');
+  ensureColumn('work_transfers', 'final_completed_by', 'TEXT');
+  ensureColumn('work_transfers', 'reopened_at', 'TEXT');
+  ensureColumn('work_transfers', 'reopened_by', 'TEXT');
+  ensureColumn('work_transfers', 'branch_name', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'requester_name', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'inspection_company', "TEXT NOT NULL DEFAULT '유지텔레컴'");
+  ensureColumn('work_transfers', 'inspection_requested_date', 'TEXT');
+  ensureColumn('work_transfers', 'customer_address', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'handover_reason', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'media_type', "TEXT NOT NULL DEFAULT 'CABLE'");
+  ensureColumn('work_transfers', 'tap_rn_location', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'pole_number', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'lead_in_length', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'pre_action_notes', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'inspection_request_details', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'deleted_by', 'TEXT');
+  ensureColumn('work_transfers', 'delete_reason', 'TEXT');
   ensureColumn('catv_b2c_lines', 'station_key', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('catv_b2c_lines', 'core', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('catv_b2c_lines', 'service_line_number', "TEXT NOT NULL DEFAULT ''");
@@ -686,6 +794,16 @@ export const createSchema = () => {
     CREATE INDEX IF NOT EXISTS idx_daily_work_region ON daily_work(region_id);
     CREATE INDEX IF NOT EXISTS idx_daily_work_date_user ON daily_work(work_date, user_id);
     CREATE INDEX IF NOT EXISTS idx_daily_work_date_region ON daily_work(work_date, region_id);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_region_workflow_date ON work_transfers(region_id, workflow_status, transfer_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_workflow_completed ON work_transfers(workflow_status, completed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_urgent_workflow_date ON work_transfers(is_urgent, workflow_status, transfer_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_inspection_date ON work_transfers(inspection_requested_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_region_inspection_date ON work_transfers(region_id, inspection_requested_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_processor_inspection_date ON work_transfers(field_processed_by, inspection_requested_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_workflow_inspection_date ON work_transfers(workflow_status, inspection_requested_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_completed_at ON work_transfers(completed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_urgent_inspection_date ON work_transfers(is_urgent, inspection_requested_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_transfers_branch ON work_transfers(branch_name);
   `);
   db.prepare(`
     UPDATE users
@@ -727,21 +845,7 @@ export const createSchema = () => {
   `);
   categorySeeds.forEach(([code, name], index) => insertCategory.run(`category-${code}`, code, name, index + 1));
 
-  const departments = db.prepare(`
-    SELECT DISTINCT department FROM users
-     WHERE department <> '' AND deleted_at IS NULL ORDER BY department
-  `).all() as Array<{ department: string }>;
-  const insertRegion = db.prepare(`
-    INSERT INTO regions (id, region_name, sort_order)
-    VALUES (?, ?, ?)
-    ON CONFLICT(region_name) DO NOTHING
-  `);
-  departments.forEach((entry, index) => insertRegion.run(randomUUID(), entry.department, index + 1));
-  db.prepare(`
-    UPDATE users
-       SET region_id = (SELECT id FROM regions WHERE region_name = users.department)
-     WHERE region_id IS NULL OR region_id = ''
-  `).run();
+  syncRegionAssignments();
   db.prepare(`
     UPDATE daily_work
        SET work_date = replace(work_date, '.', '-')
@@ -1236,7 +1340,9 @@ const removeLegacyFloorPlanNodeCoordinates = () => {
 export const initializeDatabase = async () => {
   createSchema();
   await seedDatabase();
+  syncRegionAssignments();
   syncCatvCellsFromLegacy();
+  syncRegionAssignments();
   await migrateLegacyAdminAssets();
   linkLegacyFloorPlanAssets();
   removeLegacyFloorPlanNodeCoordinates();

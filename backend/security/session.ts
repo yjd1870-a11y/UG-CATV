@@ -16,6 +16,8 @@ export interface AuthUser {
   phone: string | null;
   company: string;
   role: DbRole;
+  regionId: string | null;
+  regionName: string | null;
   status: 'pending' | 'active' | 'disabled';
 }
 
@@ -28,6 +30,8 @@ type UserRow = {
   phone: string | null;
   company: string;
   role: DbRole;
+  region_id: string | null;
+  region_name: string | null;
   status: AuthUser['status'];
 };
 
@@ -66,6 +70,8 @@ export const toAuthUser = (row: UserRow): AuthUser => ({
   phone: row.phone,
   company: row.company,
   role: row.role,
+  regionId: row.region_id,
+  regionName: row.region_name,
   status: row.status,
 });
 
@@ -101,9 +107,11 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
     SELECT u.id, u.username, u.name, u.employee_number, u.department, u.phone,
            u.company,
            COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) AS role,
+           u.region_id, r.region_name,
            u.status
       FROM auth_sessions s
       JOIN users u ON u.id = s.user_id
+      LEFT JOIN regions r ON r.id = u.region_id
      WHERE s.token_hash = ?
        AND datetime(s.expires_at) > CURRENT_TIMESTAMP
        AND u.deleted_at IS NULL

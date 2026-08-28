@@ -10,6 +10,8 @@ export type ApiUser = {
   phone: string | null;
   company: string;
   role: 'manager' | 'public_official' | 'team_leader' | 'admin';
+  regionId: string | null;
+  regionName: string | null;
   status: 'pending' | 'active' | 'disabled';
 };
 
@@ -31,6 +33,8 @@ const toUiUser = (user: ApiUser): User => ({
   team: user.department,
   phone: user.phone || '',
   company: user.company,
+  regionId: user.regionId || undefined,
+  regionName: user.regionName || undefined,
   status: user.status,
 });
 

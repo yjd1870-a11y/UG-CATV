@@ -89,12 +89,14 @@ router.post('/login', asyncRoute(async (req, res) => {
   }
 
   const row = db.prepare(`
-    SELECT id, username, password_hash, name, employee_number, department, phone,
-           company,
+    SELECT u.id, u.username, u.password_hash, u.name, u.employee_number, u.department, u.phone,
+           u.company,
            COALESCE(access_role, CASE role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) AS role,
-           status
-      FROM users
-     WHERE lower(username) = ? AND deleted_at IS NULL
+           u.region_id, r.region_name,
+           u.status
+      FROM users u
+      LEFT JOIN regions r ON r.id = u.region_id
+     WHERE lower(u.username) = ? AND u.deleted_at IS NULL
   `).get(normalizedUsername) as LoginRow | undefined;
 
   if (!row || !(await verifyPassword(password, row.password_hash))) {

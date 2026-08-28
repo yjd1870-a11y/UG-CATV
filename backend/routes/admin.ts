@@ -115,6 +115,15 @@ type PendingCellUpload = {
 const pendingCellUploads = new Map<string, PendingCellUpload>();
 const allowedRoles = new Set<DbRole>(['manager', 'public_official', 'team_leader', 'admin']);
 
+const ensureRegion = (regionName: string) => {
+  const existing = db.prepare('SELECT id FROM regions WHERE region_name = ? AND active = 1').get(regionName) as { id: string } | undefined;
+  if (existing) return existing.id;
+  const id = randomUUID();
+  const nextOrder = Number((db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 AS value FROM regions').get() as { value: number }).value);
+  db.prepare('INSERT INTO regions (id, region_name, sort_order) VALUES (?, ?, ?)').run(id, regionName, nextOrder);
+  return id;
+};
+
 const legacyRoleValue = (role: DbRole) => role === 'admin' ? 'admin' : role === 'team_leader' ? 'manager' : 'worker';
 const allowedAssetTypes = new Set(['floor_plan', 'b2c']);
 
@@ -179,15 +188,17 @@ const usernameValue = (value: unknown) => {
 const publicUsers = (status?: string) => {
   const where = status ? 'AND status = ?' : '';
   return db.prepare(`
-    SELECT id, username, zone, name, employee_number AS employeeNumber, department,
+    SELECT u.id, u.username, u.zone, u.name, u.employee_number AS employeeNumber, u.department,
            phone, company,
            COALESCE(access_role, CASE role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) AS role,
-           status, created_at AS createdAt, updated_at AS updatedAt,
-           last_login_at AS lastLoginAt, password_updated_at AS passwordUpdatedAt,
+           u.region_id AS regionId, r.region_name AS regionName,
+           u.status, u.created_at AS createdAt, u.updated_at AS updatedAt,
+           u.last_login_at AS lastLoginAt, u.password_updated_at AS passwordUpdatedAt,
            CASE WHEN length(password_hash) > 0 THEN 1 ELSE 0 END AS passwordConfigured
-      FROM users
-     WHERE deleted_at IS NULL ${where}
-     ORDER BY created_at DESC
+      FROM users u
+      LEFT JOIN regions r ON r.id = u.region_id
+     WHERE u.deleted_at IS NULL ${where}
+     ORDER BY u.created_at DESC
   `).all(...(status ? [status] : []));
 };
 
@@ -206,6 +217,7 @@ router.post('/users', asyncRoute(async (req, res) => {
   const name = asText(req.body?.name, '이름', 100);
   const role = roleValue(req.body?.role);
   const password = passwordValue(req.body?.password);
+  const regionId = ensureRegion(zone);
   const existing = db.prepare('SELECT id, deleted_at AS deletedAt FROM users WHERE lower(username) = lower(?)').get(username) as { id: string; deletedAt: string | null } | undefined;
   if (existing && !existing.deletedAt) throw new ApiError(409, '이미 사용 중인 아이디입니다.', 'DUPLICATE_USERNAME');
   const employeeOwner = db.prepare('SELECT id, deleted_at AS deletedAt FROM users WHERE employee_number = ? AND id <> ?').get(username, existing?.id || '') as { id: string; deletedAt: string | null } | undefined;
@@ -219,27 +231,30 @@ router.post('/users', asyncRoute(async (req, res) => {
     db.prepare(`
       UPDATE users SET
         username = ?, password_hash = ?, name = ?, zone = ?, employee_number = ?, department = ?,
-        phone = NULL, company = '유지텔레컴', role = ?, access_role = ?, status = 'active',
+        phone = NULL, company = '유지텔레컴', role = ?, access_role = ?, region_id = ?, status = 'active',
         last_login_at = NULL, password_updated_at = CURRENT_TIMESTAMP,
         deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(username, passwordHash, name, zone, username, zone, legacyRoleValue(role), role, id);
+    `).run(username, passwordHash, name, zone, username, zone, legacyRoleValue(role), role, regionId, id);
   } else {
     db.prepare(`
       INSERT INTO users (
         id, username, password_hash, name, zone, employee_number, department,
-        company, role, access_role, status, password_updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, '유지텔레컴', ?, ?, 'active', CURRENT_TIMESTAMP)
-    `).run(id, username, passwordHash, name, zone, username, zone, legacyRoleValue(role), role);
+        company, role, access_role, region_id, status, password_updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '유지텔레컴', ?, ?, ?, 'active', CURRENT_TIMESTAMP)
+    `).run(id, username, passwordHash, name, zone, username, zone, legacyRoleValue(role), role, regionId);
   }
   success(res, { id, username, zone, name, role, status: 'active' }, 201);
 }));
 
 router.put('/users/:id/approve', asyncRoute(async (req, res) => {
+  const pending = db.prepare('SELECT department FROM users WHERE id = ? AND deleted_at IS NULL').get(req.params.id) as { department: string } | undefined;
+  if (!pending) throw new ApiError(404, '사용자를 찾을 수 없습니다.', 'NOT_FOUND');
+  const regionId = ensureRegion(pending.department);
   const result = db.prepare(`
-    UPDATE users SET status = 'active', updated_at = CURRENT_TIMESTAMP
+    UPDATE users SET status = 'active', region_id = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND deleted_at IS NULL
-  `).run(req.params.id);
+  `).run(regionId, req.params.id);
   if (result.changes === 0) throw new ApiError(404, '사용자를 찾을 수 없습니다.', 'NOT_FOUND');
   success(res, { id: req.params.id, status: 'active' });
 }));

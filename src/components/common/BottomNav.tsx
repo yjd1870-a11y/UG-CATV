@@ -35,7 +35,7 @@ export const BottomNav: React.FC = () => {
     },
     {
       key: 'transfer_list',
-      matchViews: ['transfer_list', 'transfer_detail'],
+      matchViews: ['transfer_list', 'transfer_analytics', 'transfer_detail'],
       label: '업무이관',
       icon: ArrowRightLeft,
       badgeCount: notificationCount,

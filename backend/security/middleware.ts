@@ -53,7 +53,11 @@ export const csrfProtection: RequestHandler = (req, _res, next) => {
 export const securityHeaders: RequestHandler = (_req, res, next) => {
   // Vite의 개발용 React Refresh는 index.html에 짧은 초기화 스크립트를 삽입합니다.
   // 로컬 개발에서만 이를 허용하고, 운영 환경에서는 기존의 엄격한 정책을 유지합니다.
-  const scriptPolicy = env.isProduction ? "script-src 'self'" : "script-src 'self' 'unsafe-inline'";
+  // Browser-only OCR compiles the self-hosted Tesseract WebAssembly module.
+  // `wasm-unsafe-eval` permits WASM compilation without enabling general JS eval.
+  const scriptPolicy = env.isProduction
+    ? "script-src 'self' 'wasm-unsafe-eval'"
+    : "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'";
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');

@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext';
 const CellList = lazy(() => import('../features/cells/views').then((module) => ({ default: module.CellList })));
 const CellDetail = lazy(() => import('../features/cells/views').then((module) => ({ default: module.CellDetail })));
 const TransferList = lazy(() => import('../features/transfers/views').then((module) => ({ default: module.TransferList })));
+const TransferAnalytics = lazy(() => import('../features/transfers/views').then((module) => ({ default: module.TransferAnalytics })));
 const TransferDetail = lazy(() => import('../features/transfers/views').then((module) => ({ default: module.TransferDetail })));
 const DailyWorkView = lazy(() => import('../features/daily-work/view').then((module) => ({ default: module.DailyWorkView })));
 const MaterialView = lazy(() => import('../features/materials/view').then((module) => ({ default: module.MaterialView })));
@@ -29,6 +30,8 @@ export const ActiveView: React.FC = () => {
         return <CellDetail />;
       case 'transfer_list':
         return <TransferList />;
+      case 'transfer_analytics':
+        return <TransferAnalytics />;
       case 'transfer_detail':
         return <TransferDetail />;
       case 'daily_work':

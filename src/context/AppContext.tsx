@@ -6,7 +6,6 @@ import { dailyWorkApi } from '../features/daily-work/api';
 import { loadBusinessData } from '../features/home/load-business-data';
 import { materialsApi } from '../features/materials/api';
 import { manpowerApi, type ManpowerEnvelope } from '../features/manpower/api';
-import { transfersApi } from '../features/transfers/api';
 import { ApiClientError } from '../shared/api/client';
 import { canEditCatvManpower } from '../shared/auth/permissions';
 import {
@@ -21,7 +20,6 @@ import {
   DailyWorkRecord,
   MaterialUsageRecord,
   ToastMessage,
-  TransferStatus,
   User,
   WorkTransfer,
 } from '../types';
@@ -51,7 +49,6 @@ interface AppContextType {
   navigateTo: (view: AppView, params?: { cellId?: string; transferId?: string }) => void;
   selectCell: (cellId: string) => void;
   selectTransfer: (transferId: string) => void;
-  updateTransferStatus: (transferId: string, toStatus: TransferStatus, comment: string) => void;
   saveDailyWork: (
     date: string,
     workerName: string,
@@ -64,7 +61,6 @@ interface AppContextType {
   addCellHistory: (cellId: string, history: Omit<CellWorkHistory, 'id'>) => void;
   updateCellHistory: (cellId: string, historyId: string, updates: Partial<CellWorkHistory>) => void;
   deleteCellHistory: (cellId: string, historyId: string) => void;
-  addTransferTicket: (ticket: Omit<WorkTransfer, 'id' | 'logs'>) => void;
   updateCatvManpower: (newStatus: CatvManpowerStatus) => Promise<boolean>;
   updateCatvRegion: (regionId: string, updates: Partial<CatvRegionManpower>) => void;
   updateCatvManagement: (updates: Partial<CatvManagementStaff>) => void;
@@ -293,15 +289,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const selectTransfer = (transferId: string) => navigateTo('transfer_detail', { transferId });
 
-  const updateTransferStatus = (transferId: string, toStatus: TransferStatus, comment: string) => {
-    void transfersApi.update(transferId, { status: toStatus, comment })
-      .then((updated) => {
-        setTransfers((previous) => previous.map((transfer) => (transfer.id === transferId ? updated : transfer)));
-        showToast(`업무이관 상태가 [${toStatus}](으)로 변경되었습니다.`, 'success');
-      })
-      .catch((error) => showToast(error instanceof Error ? error.message : genericLoadError, 'error'));
-  };
-
   const saveDailyWork = (
     date: string,
     _workerName: string,
@@ -373,15 +360,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .catch((error) => showToast(error instanceof Error ? error.message : genericLoadError, 'error'));
   };
 
-  const addTransferTicket = (ticket: Omit<WorkTransfer, 'id' | 'logs'>) => {
-    void transfersApi.create(ticket)
-      .then((created) => {
-        setTransfers((previous) => [created, ...previous]);
-        showToast(`업무이관 [${ticket.serviceNo}] DB 등록 완료`, 'success');
-      })
-      .catch((error) => showToast(error instanceof Error ? error.message : genericLoadError, 'error'));
-  };
-
   const updateCatvManpower = async (newStatus: CatvManpowerStatus) => {
     if (!canEditCatvManpower(currentUser?.role)) {
       showToast('매니져는 CATV 인력현황을 수정할 수 없습니다.', 'error');
@@ -424,7 +402,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void updateCatvManpower(next);
   };
 
-  const notificationCount = transfers.filter((transfer) => transfer.status === '대기' || transfer.status === '작업중').length;
+  const notificationCount = transfers.filter((transfer) => transfer.workflowStatus === 'registered' || transfer.workflowStatus === 'field_processed').length;
 
   return (
     <AppContext.Provider value={{
@@ -452,14 +430,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       navigateTo,
       selectCell,
       selectTransfer,
-      updateTransferStatus,
       saveDailyWork,
       addMaterialUsage,
       addCellPhoto,
       addCellHistory,
       updateCellHistory,
       deleteCellHistory,
-      addTransferTicket,
       updateCatvManpower,
       updateCatvRegion,
       updateCatvManagement,

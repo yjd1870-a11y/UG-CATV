@@ -451,14 +451,24 @@ try {
   usageId = usage.payload.data?.id || '';
 
   const managerLogin = await call('/auth/login', { method: 'POST', body: { username: 'user-4', password: '1234' } });
+  const managerRegion = db.prepare('SELECT region_id AS regionId FROM users WHERE id = ?').get('user-4') as { regionId: string };
   const transfer = await call<{ id: string }>('/work-transfers', {
     method: 'POST',
     cookie: managerLogin.cookie,
-    body: { serviceNo: `TEST-${suffix}`, cellName: legacyCellName, transferReason: 'API 통합 테스트', requestDetails: '업무이관 저장 확인', status: '대기' },
+    body: {
+      serviceNo: `TEST-${suffix}`, cellName: legacyCellName, regionId: managerRegion.regionId,
+      branchName: 'HNS평택지점', inspectionRequestedDate: '2099-12-31',
+      location: '통합테스트 현장 주소', transferReason: 'API 통합 테스트',
+      requestDetails: '업무이관 저장 확인', ocrText: '통합테스트 수기 OCR 원문',
+    },
   });
   assert.equal(transfer.response.status, 201);
   transferId = transfer.payload.data?.id || '';
-  const completed = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: workerLogin.cookie, body: { status: '완료', comment: '통합 테스트 완료' } });
+  const fieldProcessed = await call(`/work-transfers/${transferId}/field-actions`, {
+    method: 'POST', cookie: managerLogin.cookie, body: { actionText: '통합 테스트 현장처리 완료' },
+  });
+  assert.equal(fieldProcessed.response.status, 201);
+  const completed = await call(`/work-transfers/${transferId}/complete`, { method: 'POST', cookie: managerLogin.cookie, body: { comment: '통합 테스트 완료' } });
   assert.equal(completed.response.status, 200);
 
   const deleteSignupUser = await call(`/admin/users/${testUserId}`, { method: 'DELETE', cookie: adminLogin.cookie });

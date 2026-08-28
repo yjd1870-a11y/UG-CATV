@@ -15,6 +15,11 @@
     "db:init": "tsx backend/init-db.ts",
     "test:api": "tsx backend/tests/run-isolated.ts backend/tests/api.integration.ts",
     "test:api-resource-url": "tsx backend/tests/api-resource-url.ts",
+    "test:work-transfers": "tsx backend/tests/run-isolated.ts backend/tests/work-transfers.ts",
+    "test:work-transfer-analytics": "tsx backend/tests/run-isolated.ts backend/tests/work-transfer-analytics.ts",
+    "test:cell-history": "tsx backend/tests/run-isolated.ts backend/tests/cell-history.ts",
+    "test:ocr-validation": "tsx backend/tests/browser-ocr-validation.ts",
+    "test:ocr-policy": "tsx backend/tests/browser-ocr-policy.ts",
     "test:pan-zoom": "tsx backend/tests/pan-zoom.ts",
     "test:security": "tsx backend/tests/run-isolated.ts backend/tests/security.integration.ts",
     "test:database-restart": "tsx backend/tests/run-isolated.ts backend/tests/database-restart.ts",
@@ -43,6 +48,8 @@
     "@aws-sdk/s3-request-presigner": "^3.1109.0",
     "@e965/xlsx": "^0.20.3",
     "@tailwindcss/vite": "^4.1.14",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/kor": "^1.0.0",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.2",
     "dotenv": "^17.2.3",
@@ -52,6 +59,7 @@
     "pdfjs-dist": "^6.2.108",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "tesseract.js": "^7.0.0",
     "vite": "^6.2.3"
   },
   "devDependencies": {

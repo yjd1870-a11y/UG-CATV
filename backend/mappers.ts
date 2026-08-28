@@ -2,13 +2,13 @@ import { db } from './db';
 
 export const fromDbTransferStatus = (status: string) => {
   const mapping: Record<string, string> = {
-    pending: '대기',
-    received: '대기',
-    working: '작업중',
-    transferred: '업무이관',
+    pending: '미완료',
+    received: '미완료',
+    working: '현장처리',
+    transferred: '현장처리',
     completed: '완료',
   };
-  return mapping[status] || '대기';
+  return mapping[status] || '미완료';
 };
 
 export const mapCellRow = (row: Record<string, unknown>): Record<string, any> => {
@@ -34,16 +34,73 @@ export const mapTransferRow = (row: Record<string, unknown>) => {
       FROM work_transfer_logs
      WHERE transfer_id = ? ORDER BY created_at DESC, id DESC
   `).all(String(row.id)) as Array<Record<string, unknown>>;
+  const attachments = db.prepare(`
+    SELECT id, attachment_type, file_name, file_type, file_size, uploaded_by, created_at
+      FROM work_transfer_attachments
+     WHERE transfer_id = ? AND deleted_at IS NULL ORDER BY created_at, id
+  `).all(String(row.id)) as Array<Record<string, unknown>>;
+  const fieldActions = db.prepare(`
+    SELECT id, action_text, processed_by, processed_by_name, processed_at, created_at
+      FROM work_transfer_field_actions
+     WHERE transfer_id = ? ORDER BY processed_at DESC, created_at DESC
+  `).all(String(row.id)) as Array<Record<string, unknown>>;
+  const workflowStatus = String(row.workflow_status || (String(row.status) === 'completed' ? 'completed' : 'registered'));
+  const status = workflowStatus === 'completed' ? '완료' : workflowStatus === 'field_processed' ? '현장처리' : '미완료';
 
   return {
     ...saved,
     id: row.id,
     cellName: row.cell_name || saved.cellName || '',
-    transferReason: row.title,
-    requestDetails: row.description,
-    requestDate: row.transfer_date,
-    status: fromDbTransferStatus(String(row.status)),
+    branchName: row.branch_name || saved.branchName || '',
+    requesterName: row.requester_name || saved.requesterName || '',
+    inspectionCompany: row.inspection_company || saved.inspectionCompany || saved.contractor || '유지텔레컴',
+    contractor: row.inspection_company || saved.contractor || '유지텔레컴',
+    inspectionRequestedDate: row.inspection_requested_date || saved.inspectionRequestedDate || row.transfer_date,
+    requestDate: row.inspection_requested_date || row.transfer_date,
+    customerAddress: row.customer_address || saved.customerAddress || saved.location || '',
+    location: row.customer_address || saved.location || '',
+    handoverReason: row.handover_reason || saved.handoverReason || row.title,
+    transferReason: row.handover_reason || row.title,
+    mediaType: row.media_type || saved.mediaType || 'CABLE',
+    tapRnLocation: row.tap_rn_location || saved.tapRnLocation || '',
+    poleNumber: row.pole_number || saved.poleNumber || '',
+    leadInLength: row.lead_in_length || saved.leadInLength || '',
+    preActionNotes: row.pre_action_notes || saved.preActionNotes || '',
+    inspectionRequestDetails: row.inspection_request_details || saved.inspectionRequestDetails || row.description,
+    requestDetails: row.inspection_request_details || row.description,
+    createdAt: row.created_at,
+    status,
+    workflowStatus,
+    regionId: row.region_id || saved.regionId || '',
+    regionName: row.region_name || saved.regionName || '',
+    isUrgent: Boolean(row.is_urgent),
+    ocrStatus: row.ocr_status || 'pending',
+    ocrText: row.ocr_text || '',
+    fieldProcessedAt: row.field_processed_at || undefined,
+    fieldProcessedBy: row.field_processed_by || undefined,
+    fieldProcessedByName: row.field_processed_by_name || undefined,
+    finalCompletedBy: row.final_completed_by || undefined,
+    finalCompletedByName: row.final_completed_by_name || undefined,
     completedDate: row.completed_at || undefined,
+    attachments: attachments.map((attachment) => ({
+      id: attachment.id,
+      attachmentType: attachment.attachment_type,
+      fileName: attachment.file_name,
+      fileType: attachment.file_type,
+      fileSize: Number(attachment.file_size),
+      uploadedBy: attachment.uploaded_by || undefined,
+      createdAt: attachment.created_at,
+      url: `/work-transfers/${row.id}/attachments/${attachment.id}/file`,
+    })),
+    fieldActions: fieldActions.map((action) => ({
+      id: action.id,
+      actionText: action.action_text,
+      processedBy: action.processed_by || undefined,
+      processedByName: action.processed_by_name,
+      processedAt: action.processed_at,
+      createdAt: action.created_at,
+    })),
+    fieldActionSummary: fieldActions[0]?.action_text || '',
     logs: logs.map((log) => ({
       timestamp: log.created_at,
       author: log.author_name,
