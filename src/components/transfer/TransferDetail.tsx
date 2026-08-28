@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -10,10 +10,8 @@ import {
   MapPin,
   Pencil,
   Radio,
-  RefreshCw,
   RotateCcw,
   Save,
-  Sparkles,
   Trash2,
   User,
   Wrench,
@@ -21,7 +19,6 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { transfersApi } from '../../features/transfers/api';
-import { recognizeWorkTransferPhotoInBrowser } from '../../features/transfers/browser-ocr/engine';
 import { HNS_BRANCHES } from '../../features/transfers/browser-ocr/validation';
 import { apiResourceUrl } from '../../shared/api/client';
 import type { WorkTransfer } from '../../types';
@@ -66,12 +63,10 @@ export const TransferDetail: React.FC = () => {
   const [editUrgent, setEditUrgent] = useState(false);
   const [pendingAction, setPendingAction] = useState<'delete' | 'reopen' | null>(null);
   const [actionReason, setActionReason] = useState('');
-  const ocrAbortController = useRef<AbortController | null>(null);
 
   const canManage = currentUser?.role === 'admin' || currentUser?.role === 'public_official' || currentUser?.role === 'team_leader';
   const canReopen = currentUser?.role === 'admin' || currentUser?.role === 'public_official';
   const canDelete = currentUser?.role === 'admin' || currentUser?.role === 'public_official';
-  const requestPhotos = useMemo(() => transfer?.attachments?.filter((item) => item.attachmentType === 'request_photo') || [], [transfer?.attachments]);
   const actionPhotos = useMemo(() => transfer?.attachments?.filter((item) => item.attachmentType === 'field_photo') || [], [transfer?.attachments]);
 
   const loadDetail = async () => {
@@ -92,8 +87,6 @@ export const TransferDetail: React.FC = () => {
   };
 
   useEffect(() => { void loadDetail(); }, [selectedTransferId]);
-
-  useEffect(() => () => ocrAbortController.current?.abort(), []);
 
   useEffect(() => {
     if (!transfer) return;
@@ -212,43 +205,6 @@ export const TransferDetail: React.FC = () => {
     }
   };
 
-  const handleRetryOcr = async (photo: { url: string; fileName: string }) => {
-    if (!transfer) return;
-    ocrAbortController.current?.abort();
-    const controller = new AbortController();
-    ocrAbortController.current = controller;
-    setBusy(true);
-    try {
-      const response = await fetch(apiResourceUrl(photo.url), { credentials: 'include', signal: controller.signal });
-      if (!response.ok) throw new Error('저장된 증빙사진을 불러오지 못했습니다.');
-      const blob = await response.blob();
-      const result = await recognizeWorkTransferPhotoInBrowser(
-        new File([blob], photo.fileName, { type: blob.type || 'image/jpeg' }),
-        { signal: controller.signal },
-      );
-      if (result.status === 'succeeded') {
-        setEditOcrText(result.text);
-        setEditBranchName((current) => result.fields.branchName.value || current);
-        setEditRequesterName((current) => result.fields.requesterName.value || current);
-        if (result.fields.inspectionRequestedDate.validationStatus === 'valid') setEditInspectionDate(result.fields.inspectionRequestedDate.value);
-        setEditLocation((current) => result.fields.customerAddress.value || current);
-        setEditHandoverReason((current) => result.fields.handoverReason.value || current);
-        setEditTapRnLocation((current) => result.fields.tapRnLocation.value || current);
-        setEditPoleNumber((current) => result.fields.poleNumber.value || current);
-        setEditLeadInLength((current) => result.fields.leadInLength.value || current);
-        setEditPreActionNotes((current) => result.fields.preActionNotes.value || current);
-        setEditDetails((current) => result.fields.inspectionRequestDetails.value || current);
-        setEditing(true);
-        showToast('브라우저 OCR이 완료되었습니다. 결과를 확인한 뒤 저장해 주세요.', 'success');
-      } else showToast(result.errorMessage || 'OCR 재처리에 실패했습니다.', 'warning');
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return;
-      showToast(error instanceof Error ? error.message : 'OCR 재처리에 실패했습니다.', 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (loading && !transfer) return <div className="p-10 text-center bg-white rounded-2xl border border-slate-200 text-sm text-slate-500">업무이관 상세를 불러오는 중입니다.</div>;
   if (!transfer) return (
     <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
@@ -317,12 +273,6 @@ export const TransferDetail: React.FC = () => {
           <dt className="font-bold text-slate-500">사전조치내용</dt><dd className="font-medium whitespace-pre-wrap">{transfer.preActionNotes || '-'}</dd>
           <dt className="font-bold text-slate-500">점검요청내용</dt><dd className="font-medium whitespace-pre-wrap">{transfer.inspectionRequestDetails || transfer.requestDetails}</dd>
         </dl>
-      </section>
-
-      <section className="bg-white rounded-2xl p-4 sm:p-5 border border-[#E5E7EB] shadow-sm space-y-3">
-        <div className="flex items-center justify-between"><h2 className="text-sm font-extrabold text-[#173B57] flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-[#F28C28]" />접수 사진 및 OCR 원문</h2><span className="text-[11px] text-slate-500">{transfer.ocrStatus === 'succeeded' ? '추출 완료' : transfer.ocrStatus === 'failed' ? '추출 실패' : '대기'}</span></div>
-        {requestPhotos.length > 0 ? <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{requestPhotos.map((photo) => <div key={photo.id} className="space-y-1"><img src={apiResourceUrl(photo.url)} alt={photo.fileName} className="w-full aspect-video object-cover rounded-xl border border-slate-200" />{canManage ? <button type="button" disabled={busy} onClick={() => void handleRetryOcr(photo)} className="w-full h-8 inline-flex items-center justify-center gap-1 text-[11px] font-bold bg-blue-50 text-blue-700 rounded-lg"><RefreshCw className="w-3 h-3" />브라우저 OCR 재검사</button> : null}</div>)}</div> : <p className="text-xs text-slate-400">접수 증빙사진이 없습니다.</p>}
-        <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs whitespace-pre-wrap text-slate-700">{transfer.ocrText || '저장된 OCR 원문이 없습니다.'}</div>
       </section>
 
       <section className="bg-white rounded-2xl p-4 sm:p-5 border border-[#E5E7EB] shadow-sm space-y-3">
