@@ -14,6 +14,7 @@ import {
 import { authUser, type AuthUser, requireAuth, requireRoles } from '../security/session';
 import { writeAuditLog } from '../security/audit';
 import { usesR2Storage } from '../object-storage';
+import { workTransferRegionParams, workTransferRegionPlaceholders } from '../work-transfer-policy';
 
 const router = Router();
 router.use(requireAuth);
@@ -73,8 +74,11 @@ const assertRegionPermission = (user: AuthUser, regionId: string) => {
 };
 
 const regionById = (regionId: string) => {
-  const region = db.prepare('SELECT id, region_name FROM regions WHERE id = ? AND active = 1').get(regionId) as { id: string; region_name: string } | undefined;
-  if (!region) throw new ApiError(400, '선택한 지역을 찾을 수 없습니다.', 'INVALID_REGION');
+  const region = db.prepare(`
+    SELECT id, region_name FROM regions
+     WHERE id = ? AND active = 1 AND region_name IN (${workTransferRegionPlaceholders})
+  `).get(regionId, ...workTransferRegionParams) as { id: string; region_name: string } | undefined;
+  if (!region) throw new ApiError(400, '업무이관 지역은 평택안성, 용인, 수원, 오산화성만 선택할 수 있습니다.', 'INVALID_REGION');
   return region;
 };
 
@@ -153,8 +157,15 @@ const listFilters = (req: Request, user: AuthUser) => {
 router.get('/meta', (req, res) => {
   const user = authUser(req);
   const rows = globalRoles.has(user.role)
-    ? db.prepare('SELECT id, region_name AS name FROM regions WHERE active = 1 ORDER BY sort_order, region_name').all()
-    : db.prepare('SELECT id, region_name AS name FROM regions WHERE id = ? AND active = 1').all(requireRegion(user));
+    ? db.prepare(`
+      SELECT id, region_name AS name FROM regions
+       WHERE active = 1 AND region_name IN (${workTransferRegionPlaceholders})
+       ORDER BY CASE region_name WHEN '평택안성' THEN 1 WHEN '용인' THEN 2 WHEN '수원' THEN 3 WHEN '오산화성' THEN 4 END
+    `).all(...workTransferRegionParams)
+    : db.prepare(`
+      SELECT id, region_name AS name FROM regions
+       WHERE id = ? AND active = 1 AND region_name IN (${workTransferRegionPlaceholders})
+    `).all(requireRegion(user), ...workTransferRegionParams);
   success(res, { regions: rows, currentRegionId: user.regionId, currentRegionName: user.regionName });
 });
 

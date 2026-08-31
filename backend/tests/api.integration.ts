@@ -450,6 +450,8 @@ try {
   assert.equal(usage.response.status, 201);
   usageId = usage.payload.data?.id || '';
 
+  const managedTransferRegion = db.prepare("SELECT id FROM regions WHERE region_name = '평택안성'").get() as { id: string };
+  db.prepare("UPDATE users SET region_id = ? WHERE id = 'user-4'").run(managedTransferRegion.id);
   const managerLogin = await call('/auth/login', { method: 'POST', body: { username: 'user-4', password: '1234' } });
   const managerRegion = db.prepare('SELECT region_id AS regionId FROM users WHERE id = ?').get('user-4') as { regionId: string };
   const transfer = await call<{ id: string }>('/work-transfers', {

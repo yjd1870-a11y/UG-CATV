@@ -37,6 +37,16 @@ const login = async (username: string) => {
 
 let transferId = '';
 try {
+  for (const [index, name] of ['평택안성', '용인', '수원', '오산화성'].entries()) {
+    db.prepare(`
+      INSERT INTO regions (id, region_name, sort_order, active)
+      VALUES (?, ?, ?, 1) ON CONFLICT(region_name) DO UPDATE SET active = 1
+    `).run(`test-transfer-region-${index + 1}`, name, index + 1);
+  }
+  const managedSuwon = db.prepare("SELECT id FROM regions WHERE region_name = '수원'").get() as { id: string };
+  const managedYongin = db.prepare("SELECT id FROM regions WHERE region_name = '용인'").get() as { id: string };
+  db.prepare("UPDATE users SET region_id = ? WHERE id IN ('user-1', 'user-4')").run(managedSuwon.id);
+  db.prepare("UPDATE users SET region_id = ? WHERE id = 'user-3'").run(managedYongin.id);
   const [adminCookie, teamCookie, managerCookie, otherManagerCookie] = await Promise.all([
     login('user-5'), login('user-4'), login('user-1'), login('user-3'),
   ]);
@@ -44,6 +54,8 @@ try {
   const otherRegion = db.prepare('SELECT region_id AS regionId FROM users WHERE id = ?').get('user-3') as { regionId: string };
   assert.ok(teamRegion.regionId);
   assert.notEqual(teamRegion.regionId, otherRegion.regionId);
+  const meta = await call<{ regions: Array<{ name: string }> }>('/work-transfers/meta', { cookie: adminCookie });
+  assert.deepEqual(meta.payload.data?.regions.map((region) => region.name), ['평택안성', '용인', '수원', '오산화성']);
   const photoDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
   const ocrPreview = await call('/work-transfers/ocr-preview', {
     method: 'POST', cookie: teamCookie, body: { imageDataUrl: photoDataUrl },
@@ -67,7 +79,7 @@ try {
       ocrText: '오산 테스트 현장 케이블 현장 조치 요청', isUrgent: true,
       ocrStatus: 'succeeded', ocrEngine: 'browser-tesseract-kor-eng',
       inspectionCompany: '유지텔레컴', mediaType: 'CABLE',
-      requestPhotos: [1, 2, 3].map((number) => ({ fileName: `evidence-${number}.png`, dataUrl: photoDataUrl })),
+      requestPhotos: [1, 2].map((number) => ({ fileName: `evidence-${number}.png`, dataUrl: photoDataUrl })),
     },
   });
   assert.equal(created.response.status, 201);
@@ -79,8 +91,8 @@ try {
     preActionNotes: string; evidencePhotoCount: number; evidencePhotosDeletedAt?: string; ocrText?: string;
     fieldActions: unknown[];
   }>(`/work-transfers/${transferId}`, { cookie: teamCookie });
-  assert.equal(detail.payload.data?.attachments.length, 3);
-  assert.equal(detail.payload.data?.evidencePhotoCount, 3);
+  assert.equal(detail.payload.data?.attachments.length, 2);
+  assert.equal(detail.payload.data?.evidencePhotoCount, 2);
   assert.equal(detail.payload.data?.branchName, 'HNS화성지점');
   assert.equal(detail.payload.data?.inspectionRequestedDate, '2026-08-25');
   assert.equal(detail.payload.data?.inspectionCompany, '유지텔레컴');
@@ -94,11 +106,6 @@ try {
   assert.equal(ocrRun.attachment_id, null);
   assert.equal(ocrRun.engine, 'browser-tesseract-kor-eng');
   assert.equal(ocrRun.status, 'succeeded');
-  const storedPhotoRows = db.prepare(`
-    SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ? ORDER BY created_at, id
-  `).all(transferId) as Array<{ file_url: string }>;
-  assert.equal(storedPhotoRows.length, 3);
-  for (const photo of storedPhotoRows) assert.equal(fs.existsSync(resolvePrivatePhoto(photo.file_url)), true);
   const photoResponse = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: teamCookie } });
   assert.equal(photoResponse.status, 200);
   assert.equal(photoResponse.headers.get('content-type'), 'image/png');
@@ -109,6 +116,22 @@ try {
   );
   assert.equal(photoAccess.response.status, 200);
   assert.equal(photoAccess.payload.data?.url, detail.payload.data?.attachments[0].url);
+
+  const addedAfterRegistration = await call(`/work-transfers/${transferId}/attachments`, {
+    method: 'POST', cookie: teamCookie,
+    body: { attachmentType: 'request_photo', fileName: 'evidence-3.png', dataUrl: photoDataUrl },
+  });
+  assert.equal(addedAfterRegistration.response.status, 201);
+  const detailAfterPhotoEdit = await call<{ attachments: unknown[]; evidencePhotoCount: number }>(
+    `/work-transfers/${transferId}`, { cookie: teamCookie },
+  );
+  assert.equal(detailAfterPhotoEdit.payload.data?.attachments.length, 3);
+  assert.equal(detailAfterPhotoEdit.payload.data?.evidencePhotoCount, 3);
+  const storedPhotoRows = db.prepare(`
+    SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ? ORDER BY created_at, id
+  `).all(transferId) as Array<{ file_url: string }>;
+  assert.equal(storedPhotoRows.length, 3);
+  for (const photo of storedPhotoRows) assert.equal(fs.existsSync(resolvePrivatePhoto(photo.file_url)), true);
 
   const fourthPhoto = await call(`/work-transfers/${transferId}/attachments`, {
     method: 'POST', cookie: teamCookie,

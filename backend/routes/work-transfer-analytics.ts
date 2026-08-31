@@ -2,6 +2,7 @@ import { Router, type Request } from 'express';
 import { db } from '../db';
 import { ApiError, success } from '../http';
 import { authUser, requireAuth, requireRoles, type AuthUser } from '../security/session';
+import { workTransferRegionParams, workTransferRegionPlaceholders } from '../work-transfer-policy';
 
 const router = Router();
 router.use(requireAuth, requireRoles('admin', 'public_official', 'team_leader'));
@@ -66,8 +67,11 @@ const assertRegion = (user: AuthUser, regionId: string) => {
   if (!analyticsRoles.has(user.role) && user.regionId !== regionId) {
     throw new ApiError(404, '지역 정보를 찾을 수 없습니다.', 'NOT_FOUND');
   }
-  const found = db.prepare('SELECT 1 FROM regions WHERE id = ? AND active = 1').get(regionId);
-  if (!found) throw new ApiError(400, '선택한 지역을 찾을 수 없습니다.', 'INVALID_REGION');
+  const found = db.prepare(`
+    SELECT 1 FROM regions WHERE id = ? AND active = 1
+      AND region_name IN (${workTransferRegionPlaceholders})
+  `).get(regionId, ...workTransferRegionParams);
+  if (!found) throw new ApiError(400, '업무이관 지역은 평택안성, 용인, 수원, 오산화성만 선택할 수 있습니다.', 'INVALID_REGION');
 };
 
 const analyticsFilter = (req: Request, user: AuthUser): SqlFilter => {
@@ -316,8 +320,15 @@ const queryAnalytics = (req: Request, user: AuthUser) => {
 router.get('/meta', (req, res) => {
   const user = authUser(req);
   const regions = analyticsRoles.has(user.role)
-    ? db.prepare('SELECT id, region_name AS name FROM regions WHERE active = 1 ORDER BY sort_order, region_name').all()
-    : db.prepare('SELECT id, region_name AS name FROM regions WHERE id = ? AND active = 1').all(user.regionId);
+    ? db.prepare(`
+      SELECT id, region_name AS name FROM regions
+       WHERE active = 1 AND region_name IN (${workTransferRegionPlaceholders})
+       ORDER BY CASE region_name WHEN '평택안성' THEN 1 WHEN '용인' THEN 2 WHEN '수원' THEN 3 WHEN '오산화성' THEN 4 END
+    `).all(...workTransferRegionParams)
+    : db.prepare(`
+      SELECT id, region_name AS name FROM regions
+       WHERE id = ? AND active = 1 AND region_name IN (${workTransferRegionPlaceholders})
+    `).all(user.regionId, ...workTransferRegionParams);
   const processorScope = analyticsRoles.has(user.role) ? '' : ' AND u.region_id = ?';
   const processors = db.prepare(`
     SELECT u.id, u.name, u.region_id AS regionId, COALESCE(r.region_name, '') AS regionName

@@ -16,6 +16,7 @@ import { normalizeStationName, textValue } from './catv';
 import { saveFloorPlanDataUrl } from './floor-plan-storage';
 import { buildB2CSearchValue } from './b2c-search';
 import { normalizeStraightMapCompactText } from './straight-map-search';
+import { WORK_TRANSFER_REGION_NAMES } from './work-transfer-policy';
 
 fs.mkdirSync(path.dirname(env.databasePath), { recursive: true });
 
@@ -674,12 +675,13 @@ const syncRegionAssignments = () => {
     VALUES (?, ?, ?)
     ON CONFLICT(region_name) DO NOTHING
   `);
-  departments.forEach((entry, index) => insertRegion.run(randomUUID(), entry.department, index + 1));
+  WORK_TRANSFER_REGION_NAMES.forEach((regionName, index) => insertRegion.run(randomUUID(), regionName, index + 1));
+  departments.forEach((entry, index) => insertRegion.run(randomUUID(), entry.department, index + 101));
   const cellRegions = db.prepare(`
     SELECT DISTINCT region FROM cells
      WHERE region <> '' ORDER BY region
   `).all() as Array<{ region: string }>;
-  cellRegions.forEach((entry, index) => insertRegion.run(randomUUID(), entry.region, departments.length + index + 1));
+  cellRegions.forEach((entry, index) => insertRegion.run(randomUUID(), entry.region, departments.length + index + 201));
   db.prepare(`
     UPDATE users
        SET region_id = (SELECT id FROM regions WHERE region_name = users.department)

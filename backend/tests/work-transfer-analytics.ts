@@ -40,6 +40,16 @@ type Analytics = {
 
 const prefix = 'analytics-test-';
 try {
+  for (const [index, name] of ['평택안성', '용인', '수원', '오산화성'].entries()) {
+    db.prepare(`
+      INSERT INTO regions (id, region_name, sort_order, active)
+      VALUES (?, ?, ?, 1) ON CONFLICT(region_name) DO UPDATE SET active = 1
+    `).run(`${prefix}region-${index + 1}`, name, index + 1);
+  }
+  const managedSuwon = db.prepare("SELECT id FROM regions WHERE region_name = '수원'").get() as { id: string };
+  const managedYongin = db.prepare("SELECT id FROM regions WHERE region_name = '용인'").get() as { id: string };
+  db.prepare("UPDATE users SET region_id = ? WHERE id IN ('user-1', 'user-4')").run(managedSuwon.id);
+  db.prepare("UPDATE users SET region_id = ? WHERE id = 'user-3'").run(managedYongin.id);
   const [adminCookie, teamCookie, managerCookie] = await Promise.all([login('user-5'), login('user-4'), login('user-1')]);
   const teamRegion = db.prepare('SELECT region_id AS id FROM users WHERE id = ?').get('user-4') as { id: string };
   const otherRegion = db.prepare('SELECT region_id AS id FROM users WHERE id = ?').get('user-3') as { id: string };

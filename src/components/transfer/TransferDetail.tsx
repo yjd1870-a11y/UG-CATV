@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   FileText,
   History,
+  ImagePlus,
   Images,
   MapPin,
   Pencil,
@@ -30,6 +31,26 @@ const localDateTime = () => {
   return date.toISOString().slice(0, 16);
 };
 
+type PendingEditPhoto = { id: string; fileName: string; dataUrl: string };
+const PHOTO_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const PHOTO_MIME_BY_EXTENSION: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+};
+
+const supportedPhotoMime = (file: File) => {
+  const declared = file.type.toLowerCase();
+  if (PHOTO_MIME_TYPES.has(declared)) return declared;
+  const extension = file.name.split('.').pop()?.toLowerCase() || '';
+  return PHOTO_MIME_BY_EXTENSION[extension] || '';
+};
+
+const readPhoto = (file: File, mimeType: string) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || '').replace(/^data:[^;,]*;/i, `data:${mimeType};`));
+  reader.onerror = () => reject(new Error('사진 파일을 읽지 못했습니다.'));
+  reader.readAsDataURL(file);
+});
+
 export const TransferDetail: React.FC = () => {
   const { transfers, selectedTransferId, navigateTo, selectCell, currentUser, showToast, reloadBusinessData } = useApp();
   const initial = transfers.find((item) => item.id === selectedTransferId) || null;
@@ -45,6 +66,7 @@ export const TransferDetail: React.FC = () => {
   const [editMediaType, setEditMediaType] = useState('');
   const [editLocation, setEditLocation] = useState('');
   const [editUrgent, setEditUrgent] = useState(false);
+  const [editPhotos, setEditPhotos] = useState<PendingEditPhoto[]>([]);
   const [photoViewerIndex, setPhotoViewerIndex] = useState<number | null>(null);
   const [failedPhotoIds, setFailedPhotoIds] = useState<string[]>([]);
   const [pendingAction, setPendingAction] = useState<'delete' | 'reopen' | null>(null);
@@ -92,7 +114,37 @@ export const TransferDetail: React.FC = () => {
     setEditMediaType(transfer.mediaType || 'CABLE');
     setEditLocation(transfer.location);
     setEditUrgent(Boolean(transfer.isUrgent));
+    setEditPhotos([]);
   }, [transfer?.id]);
+
+  const handleEditPhotoSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files: File[] = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+    event.currentTarget.value = '';
+    if (files.length === 0) return;
+    const selected = files.map((file) => ({ file, mimeType: supportedPhotoMime(file) }));
+    if (selected.some(({ mimeType }) => !mimeType)) {
+      showToast('업무이관 사진은 JPG, PNG, WEBP 형식만 등록할 수 있습니다.', 'warning');
+      return;
+    }
+    if (evidencePhotos.length + editPhotos.length + selected.length > 3) {
+      showToast('기존 사진을 포함해 업무이관 사진은 최대 3장까지 등록할 수 있습니다.', 'warning');
+      return;
+    }
+    if (selected.some(({ file }) => file.size > 10 * 1024 * 1024)) {
+      showToast('업무이관 사진은 한 장당 10MB 이하만 등록할 수 있습니다.', 'warning');
+      return;
+    }
+    try {
+      const next = await Promise.all(selected.map(async ({ file, mimeType }, index) => ({
+        id: `${Date.now()}-${index}-${file.name}`,
+        fileName: file.name,
+        dataUrl: await readPhoto(file, mimeType),
+      })));
+      setEditPhotos((current) => [...current, ...next]);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '사진을 읽지 못했습니다.', 'error');
+    }
+  };
 
   const handleFieldAction = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -151,11 +203,18 @@ export const TransferDetail: React.FC = () => {
         inspectionCompany: editInspectionCompany.trim(), mediaType: editMediaType.trim(),
         isUrgent: editUrgent,
       });
+      for (const photo of editPhotos) {
+        await transfersApi.addAttachment(transfer.id, {
+          attachmentType: 'request_photo', fileName: photo.fileName, dataUrl: photo.dataUrl,
+        });
+      }
+      setEditPhotos([]);
       setEditing(false);
-      showToast('업무이관 정보를 수정했습니다.', 'success');
+      showToast(editPhotos.length > 0 ? '업무이관 정보와 추가 사진을 저장했습니다.' : '업무이관 정보를 수정했습니다.', 'success');
       await Promise.all([loadDetail(), reloadBusinessData()]);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '수정에 실패했습니다.', 'error');
+      await loadDetail();
     } finally {
       setBusy(false);
     }
@@ -203,7 +262,7 @@ export const TransferDetail: React.FC = () => {
             </div>
             <p className="text-xs text-slate-500 mt-1">{transfer.regionName} · {transfer.inspectionRequestedDate || transfer.requestDate}</p>
           </div>
-          {canManage && transfer.workflowStatus !== 'completed' ? <button type="button" onClick={() => setEditing((value) => !value)} className="inline-flex items-center gap-1.5 px-3 h-9 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold"><Pencil className="w-3.5 h-3.5" />등록정보 수정</button> : null}
+          {canManage && transfer.workflowStatus !== 'completed' ? <button type="button" onClick={() => { setEditPhotos([]); setEditing((value) => !value); }} className="inline-flex items-center gap-1.5 px-3 h-9 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold"><Pencil className="w-3.5 h-3.5" />등록정보·사진 수정</button> : null}
         </div>
       </section>
 
@@ -217,8 +276,13 @@ export const TransferDetail: React.FC = () => {
             <label className="block text-xs font-bold text-slate-700">매체구분 *<input required value={editMediaType} onChange={(event) => setEditMediaType(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" /></label>
           </div>
           <label className="block text-xs font-bold text-slate-700">고객주소 *<input required value={editLocation} onChange={(event) => setEditLocation(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" /></label>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-slate-700">추가 업무이관 사진 ({evidencePhotos.length + editPhotos.length}/3)</span><span className="text-[10px] text-slate-400">장당 10MB</span></div>
+            {evidencePhotos.length + editPhotos.length < 3 ? <label className="mt-2 flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-white text-xs font-bold text-[#2878B5]"><ImagePlus className="h-4 w-4" />갤러리에서 선택<input type="file" accept="image/*" multiple onChange={(event) => void handleEditPhotoSelection(event)} className="sr-only" /></label> : <p className="mt-2 text-[11px] font-bold text-amber-700">사진 3장이 모두 등록되어 추가할 수 없습니다.</p>}
+            {editPhotos.length > 0 ? <div className="mt-2 grid grid-cols-3 gap-2">{editPhotos.map((photo, index) => <div key={photo.id} className="relative overflow-hidden rounded-lg border border-slate-200 bg-white"><img src={photo.dataUrl} alt={photo.fileName} className="aspect-square w-full object-cover" /><button type="button" aria-label={`추가 사진 ${index + 1} 삭제`} onClick={() => setEditPhotos((current) => current.filter((item) => item.id !== photo.id))} className="absolute right-1 top-1 rounded-md bg-red-600 p-1 text-white"><Trash2 className="h-3 w-3" /></button><p className="truncate px-1.5 py-1 text-[9px] text-slate-500">{photo.fileName}</p></div>)}</div> : null}
+          </div>
           <label className="flex items-center gap-2 text-xs font-bold text-red-700"><input type="checkbox" checked={editUrgent} onChange={(event) => setEditUrgent(event.target.checked)} />긴급 건</label>
-          <div className="flex justify-end gap-2"><button type="button" onClick={() => setEditing(false)} className="px-4 h-10 rounded-xl bg-slate-100 text-xs font-bold">취소</button><button type="button" disabled={busy} onClick={() => void handleSaveEdit()} className="inline-flex items-center gap-1.5 px-4 h-10 rounded-xl bg-[#2878B5] text-white text-xs font-bold"><Save className="w-4 h-4" />저장</button></div>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => { setEditPhotos([]); setEditing(false); }} className="px-4 h-10 rounded-xl bg-slate-100 text-xs font-bold">취소</button><button type="button" disabled={busy} onClick={() => void handleSaveEdit()} className="inline-flex items-center gap-1.5 px-4 h-10 rounded-xl bg-[#2878B5] text-white text-xs font-bold"><Save className="w-4 h-4" />저장</button></div>
         </section>
       ) : null}
 
@@ -230,6 +294,7 @@ export const TransferDetail: React.FC = () => {
           <dt className="font-bold text-slate-500">지점</dt><dd className="font-extrabold text-[#173B57]">{transfer.branchName || '-'}</dd>
           <dt className="font-bold text-slate-500">점검업체/매체</dt><dd className="font-medium">{transfer.inspectionCompany || '유지텔레컴'} / {transfer.mediaType || 'CABLE'}</dd>
           <dt className="font-bold text-slate-500 flex items-center gap-1"><MapPin className="w-3 h-3" />주소</dt><dd className="font-medium">{transfer.location}</dd>
+          <dt className="font-bold text-slate-500 flex items-center gap-1"><User className="w-3 h-3" />작업처리자</dt><dd className="font-semibold">{transfer.fieldProcessedByName || '미지정'}</dd>
         </dl>
       </section>
 
