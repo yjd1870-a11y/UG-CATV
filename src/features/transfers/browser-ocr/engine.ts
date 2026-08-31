@@ -10,6 +10,11 @@ const EMPTY_QUALITY: OcrQualityResult = {
   blurScore: 0, glareRatio: 0, darkRatio: 0, warnings: [],
 };
 
+// Keep this cache namespace versioned. Reusing Tesseract's default IndexedDB
+// key can leave field devices stuck while an older/corrupt traineddata entry is
+// initialized after a deployment.
+const OCR_MODEL_CACHE_PATH = 'catv-work-transfer-ocr-v7-20260831';
+
 let recognitionInProgress = false;
 
 const abortError = () => new DOMException('OCR 작업이 취소되었습니다.', 'AbortError');
@@ -34,6 +39,9 @@ export const recognizeWorkTransferPhotoInBrowser = async (
 
   try {
     if (options.signal?.aborted) throw abortError();
+    if (typeof Worker === 'undefined' || typeof WebAssembly === 'undefined') {
+      throw new Error('이 브라우저에서는 OCR을 실행할 수 없습니다. 브라우저를 업데이트하거나 직접 입력해 주세요.');
+    }
     options.onProgress?.({ stage: 'quality', progress: 0.05, message: '사진 품질을 확인하고 있습니다.' });
     const inspected = await inspectOcrPhotoQuality(file);
     bitmap = inspected.bitmap;
@@ -51,6 +59,7 @@ export const recognizeWorkTransferPhotoInBrowser = async (
         corePath: '/ocr/tesseract-core/tesseract-core-lstm.wasm.js',
         langPath: '/ocr/lang',
         gzip: true,
+        cachePath: OCR_MODEL_CACHE_PATH,
         cacheMethod: 'write',
         logger: (message) => {
           if (message.status === 'recognizing text') {

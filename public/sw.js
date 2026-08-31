@@ -1,4 +1,4 @@
-const CACHE_NAME = 'catv-work-management-v2-ca-ip-icon';
+const CACHE_NAME = 'catv-work-management-v3-transfer-ocr';
 const APP_SHELL = [
   './',
   './manifest.webmanifest',
@@ -47,6 +47,24 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => caches.match('./')),
+    );
+    return;
+  }
+
+  // OCR runtime files are updated independently from hashed Vite bundles.
+  // Always refresh them from the network and only fall back to the last good
+  // response when the device is temporarily offline.
+  if (url.pathname.startsWith('/ocr/')) {
+    event.respondWith(
+      fetch(request, {cache: 'no-cache'})
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request)),
     );
     return;
   }

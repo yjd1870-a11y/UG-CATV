@@ -9,11 +9,15 @@ const routes = fs.readFileSync(path.join(root, 'backend/routes/work-transfers.ts
 const securityMiddleware = fs.readFileSync(path.join(root, 'backend/security/middleware.ts'), 'utf8');
 
 assert.match(engine, /workerPath: '\/ocr\/tesseract\/worker\.min\.js'/);
+assert.match(engine, /cachePath: OCR_MODEL_CACHE_PATH/);
+assert.match(engine, /catv-work-transfer-ocr-v7-20260831/);
 assert.match(engine, /langPath: '\/ocr\/lang'/);
 assert.match(engine, /createWorker\('kor\+eng'/);
 assert.doesNotMatch(engine, /https?:\/\//);
 assert.doesNotMatch(list, /\bocrPreview\b|imageDataUrl.*ocr/i);
 assert.match(list, /requestPhotos: evidencePhotos/);
+assert.match(list, /OCR 갤러리 선택/);
+assert.match(list, /const files: File\[\] = event\.currentTarget\.files \? Array\.from\(event\.currentTarget\.files\) : \[\]/);
 assert.match(routes, /BROWSER_OCR_ONLY/g);
 assert.match(securityMiddleware, /script-src 'self'.*'wasm-unsafe-eval'/);
 assert.doesNotMatch(securityMiddleware, /script-src[^\n]*'unsafe-eval'/);

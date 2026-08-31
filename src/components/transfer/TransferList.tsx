@@ -26,6 +26,10 @@ import { StatusBadge } from '../common/StatusBadge';
 import { TransferPhotoViewer } from './TransferPhotoViewer';
 
 type PendingPhoto = { id: string; fileName: string; dataUrl: string };
+const PHOTO_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const PHOTO_MIME_BY_EXTENSION: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+};
 const emptySummary: TransferSummary = { registered: 0, field_processed: 0, completed: 0 };
 const statusTabs: Array<{ value: TransferWorkflowStatus; label: string }> = [
   { value: 'registered', label: '미완료' },
@@ -39,9 +43,19 @@ const localDate = () => {
   return date.toISOString().slice(0, 10);
 };
 
-const readFile = (file: File) => new Promise<string>((resolve, reject) => {
+const supportedPhotoMime = (file: File) => {
+  const declared = file.type.toLowerCase();
+  if (PHOTO_MIME_TYPES.has(declared)) return declared;
+  const extension = file.name.split('.').pop()?.toLowerCase() || '';
+  return PHOTO_MIME_BY_EXTENSION[extension] || '';
+};
+
+const readFile = (file: File, mimeType: string) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result || ''));
+  reader.onload = () => {
+    const dataUrl = String(reader.result || '');
+    resolve(dataUrl.replace(/^data:[^;,]*;/i, `data:${mimeType};`));
+  };
   reader.onerror = () => reject(new Error('사진 파일을 읽지 못했습니다.'));
   reader.readAsDataURL(file);
 });
@@ -181,8 +195,9 @@ export const TransferList: React.FC = () => {
 
   const processOcrPhoto = async (file: File | undefined) => {
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      showToast('OCR에는 이미지 파일만 등록할 수 있습니다.', 'warning');
+    const mimeType = supportedPhotoMime(file);
+    if (!mimeType) {
+      showToast('OCR 사진은 JPG, PNG, WEBP 형식만 사용할 수 있습니다.', 'warning');
       return;
     }
     if (file.size > 15 * 1024 * 1024) {
@@ -203,7 +218,8 @@ export const TransferList: React.FC = () => {
     setOcrStatus('pending');
     setOcrMessage('사진 품질을 확인하고 있습니다.');
     try {
-      const result = await recognizeWorkTransferPhotoInBrowser(file, {
+      const normalizedFile = file.type === mimeType ? file : new File([file], file.name, { type: mimeType });
+      const result = await recognizeWorkTransferPhotoInBrowser(normalizedFile, {
         signal: controller.signal,
         onProgress: (progress) => {
           if (requestId === ocrRequestId.current) setOcrMessage(progress.message);
@@ -255,8 +271,8 @@ export const TransferList: React.FC = () => {
 
   const processEvidencePhotos = async (fileList: FileList | File[]) => {
     const selected = Array.from(fileList);
-    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
-    if (selected.some((file) => !allowedTypes.has(file.type))) {
+    const selectedWithMime = selected.map((file) => ({ file, mimeType: supportedPhotoMime(file) }));
+    if (selectedWithMime.some(({ mimeType }) => !mimeType)) {
       showToast('업무이관 사진은 JPG, PNG, WEBP 형식만 등록할 수 있습니다.', 'warning');
       return;
     }
@@ -272,10 +288,10 @@ export const TransferList: React.FC = () => {
       return;
     }
     try {
-      const nextPhotos = await Promise.all(files.map(async (file, index) => ({
+      const nextPhotos = await Promise.all(selectedWithMime.map(async ({ file, mimeType }, index) => ({
         id: `${Date.now()}-${index}-${file.name}`,
         fileName: file.name,
-        dataUrl: await readFile(file),
+        dataUrl: await readFile(file, mimeType),
       })));
       setEvidencePhotos((current) => [...current, ...nextPhotos]);
     } catch (error) {
@@ -284,9 +300,11 @@ export const TransferList: React.FC = () => {
   };
 
   const handleEvidencePhotos = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.currentTarget.files;
-    event.target.value = '';
-    if (files) await processEvidencePhotos(files);
+    // FileList is live and becomes empty as soon as the input value is reset.
+    // Copy it first so mobile gallery selections survive the reset.
+    const files: File[] = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+    event.currentTarget.value = '';
+    if (files.length > 0) await processEvidencePhotos(files);
   };
 
   const handleEvidenceDrop = (event: React.DragEvent<HTMLElement>) => {
@@ -484,17 +502,23 @@ export const TransferList: React.FC = () => {
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <span className="font-bold text-slate-700">OCR용 점검사진</span><span className="text-[10px] text-emerald-700">서버 전송·저장 안 함</span>
                 </div>
-                <label
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="h-12 rounded-xl bg-[#2878B5] text-white flex items-center justify-center gap-2 font-bold cursor-pointer">
+                    <Camera className="w-4 h-4" />OCR 사진 촬영
+                    <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void handleOcrPhoto(event)} className="sr-only" />
+                  </label>
+                  <label className="h-12 rounded-xl bg-blue-50 border border-blue-200 text-[#2878B5] flex items-center justify-center gap-2 font-bold cursor-pointer">
+                    <Images className="w-4 h-4" />OCR 갤러리 선택
+                    <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void handleOcrPhoto(event)} className="sr-only" />
+                  </label>
+                </div>
+                <div
                   onDragEnter={(event) => { event.preventDefault(); setOcrDragActive(true); }}
                   onDragOver={(event) => event.preventDefault()}
                   onDragLeave={() => setOcrDragActive(false)}
                   onDrop={handleOcrDrop}
-                  className={`h-24 border-2 border-dashed rounded-xl flex flex-col items-center justify-center gap-1 cursor-pointer font-bold transition ${ocrDragActive ? 'border-[#2878B5] bg-blue-100 text-[#173B57]' : 'border-blue-200 bg-blue-50/50 text-[#2878B5]'}`}
-                >
-                  <ImagePlus className="w-6 h-6" />사진 촬영·선택 또는 여기에 드래그
-                  <span className="text-[10px] font-medium opacity-70">무료 OCR · JPG/PNG/WEBP</span>
-                  <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void handleOcrPhoto(event)} className="sr-only" />
-                </label>
+                  className={`mt-2 h-10 border border-dashed rounded-xl hidden sm:flex items-center justify-center gap-2 font-bold transition ${ocrDragActive ? 'border-[#2878B5] bg-blue-100 text-[#173B57]' : 'border-blue-200 text-[#2878B5]'}`}
+                ><ImagePlus className="w-4 h-4" />PC에서는 OCR 사진을 여기에 끌어놓을 수도 있습니다.</div>
                 {ocrSource ? <div className="mt-2 flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-2"><img src={ocrSource.previewUrl} alt={ocrSource.fileName} className="w-20 h-16 object-cover rounded-lg border border-emerald-200" /><div className="min-w-0"><p className="truncate font-bold text-slate-700">{ocrSource.fileName}</p><p className="mt-1 flex items-center gap-1 text-[10px] text-emerald-700"><ShieldCheck className="h-3.5 w-3.5" />현재 브라우저 메모리에서만 처리됩니다.</p></div></div> : null}
                 {ocrMessage ? <div className={`mt-2 p-2.5 rounded-lg flex items-center gap-2 ${ocrLoading ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-800'}`}><Sparkles className="w-4 h-4 shrink-0" />{ocrMessage}</div> : null}
               </div>
