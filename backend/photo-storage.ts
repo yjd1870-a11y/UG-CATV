@@ -57,7 +57,7 @@ export const savePrivatePhoto = async (dataUrl: string, uploadedBy = '') => {
   }
   const objectKey = createPhotoObjectKey(mimeType, uploadedBy);
   if (usesR2Storage) {
-    await putR2Object(objectKey, buffer, mimeType);
+    await putR2Object(objectKey, buffer, mimeType, {}, 'private, no-store, max-age=0');
   } else {
     const absolutePath = resolvePrivatePhoto(objectKey);
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });

@@ -3,15 +3,18 @@ import {
   AlertTriangle,
   ArrowRightLeft,
   Calendar,
+  Camera,
   CheckCircle2,
   ChevronRight,
   ImagePlus,
+  Images,
   MapPin,
   Plus,
   Search,
   ShieldCheck,
   Sparkles,
   ChartNoAxesCombined,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
@@ -20,8 +23,9 @@ import { recognizeWorkTransferPhotoInBrowser, type BrowserOcrResult } from '../.
 import { HNS_BRANCHES, HNS_BRANCH_REGION_HINTS } from '../../features/transfers/browser-ocr/validation';
 import type { TransferWorkflowStatus, WorkTransfer } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
+import { TransferPhotoViewer } from './TransferPhotoViewer';
 
-type PendingPhoto = { fileName: string; dataUrl: string };
+type PendingPhoto = { id: string; fileName: string; dataUrl: string };
 const emptySummary: TransferSummary = { registered: 0, field_processed: 0, completed: 0 };
 const statusTabs: Array<{ value: TransferWorkflowStatus; label: string }> = [
   { value: 'registered', label: '미완료' },
@@ -64,16 +68,11 @@ export const TransferList: React.FC = () => {
   const [newRegionId, setNewRegionId] = useState('');
   const [isUrgent, setIsUrgent] = useState(false);
   const [branchName, setBranchName] = useState('');
-  const [requesterName, setRequesterName] = useState('');
+  const [inspectionCompany, setInspectionCompany] = useState('유지텔레컴');
+  const [mediaType, setMediaType] = useState('CABLE');
   const [location, setLocation] = useState('');
-  const [handoverReason, setHandoverReason] = useState('');
-  const [tapRnLocation, setTapRnLocation] = useState('');
-  const [poleNumber, setPoleNumber] = useState('');
-  const [leadInLength, setLeadInLength] = useState('');
-  const [preActionNotes, setPreActionNotes] = useState('');
-  const [inspectionRequestDetails, setInspectionRequestDetails] = useState('');
-  const [ocrText, setOcrText] = useState('');
   const [evidencePhotos, setEvidencePhotos] = useState<PendingPhoto[]>([]);
+  const [evidenceViewerIndex, setEvidenceViewerIndex] = useState<number | null>(null);
   const [ocrSource, setOcrSource] = useState<{ fileName: string; previewUrl: string } | null>(null);
   const [ocrResult, setOcrResult] = useState<BrowserOcrResult | null>(null);
   const [ocrReviewed, setOcrReviewed] = useState(false);
@@ -149,16 +148,11 @@ export const TransferList: React.FC = () => {
     setNewRegionId((currentUser?.role === 'team_leader' ? meta?.currentRegionId : '') || '');
     setIsUrgent(false);
     setBranchName('');
-    setRequesterName('');
+    setInspectionCompany('유지텔레컴');
+    setMediaType('CABLE');
     setLocation('');
-    setHandoverReason('');
-    setTapRnLocation('');
-    setPoleNumber('');
-    setLeadInLength('');
-    setPreActionNotes('');
-    setInspectionRequestDetails('');
-    setOcrText('');
     setEvidencePhotos([]);
+    setEvidenceViewerIndex(null);
     setOcrSource(null);
     setOcrResult(null);
     setOcrReviewed(false);
@@ -219,28 +213,22 @@ export const TransferList: React.FC = () => {
       setOcrResult(result);
       setOcrStatus(result.status);
       if (result.status === 'succeeded') {
-        setOcrText(result.text);
         const recognizedBranch = result.fields.branchName.value;
         setBranchName(recognizedBranch);
-        setRequesterName(result.fields.requesterName.value);
         if (result.fields.inspectionRequestedDate.validationStatus === 'valid') {
           setInspectionRequestedDate(result.fields.inspectionRequestedDate.value);
         }
+        setInspectionCompany(result.fields.inspectionCompany.value || '유지텔레컴');
+        setMediaType(result.fields.mediaType.value || 'CABLE');
         setLocation(result.fields.customerAddress.value);
-        setHandoverReason(result.fields.handoverReason.value);
-        setTapRnLocation(result.fields.tapRnLocation.value);
-        setPoleNumber(result.fields.poleNumber.value);
-        setLeadInLength(result.fields.leadInLength.value);
-        setPreActionNotes(result.fields.preActionNotes.value);
-        setInspectionRequestDetails(result.fields.inspectionRequestDetails.value);
         const regionMapped = applyRegionHint(recognizedBranch);
         setOcrMessage(!recognizedBranch
           ? 'OCR은 완료됐지만 지점명을 확정하지 못했습니다. 지점과 지역을 직접 선택해 주세요.'
           : !regionMapped && currentUser?.role !== 'team_leader'
             ? 'OCR은 완료됐습니다. 지점은 확인했지만 지역은 자동 확정하지 않았으니 직접 확인해 주세요.'
             : result.requiresReview
-              ? 'OCR 변환이 완료되었습니다. 경고 항목과 원문을 확인해 주세요.'
-              : 'OCR 변환이 완료되었습니다. 저장 전 내용을 확인해 주세요.');
+              ? 'OCR 변환이 완료되었습니다. 6개 자동입력 항목을 확인해 주세요.'
+              : 'OCR 변환이 완료되었습니다. 저장 전 6개 항목을 확인해 주세요.');
       } else {
         setOcrMessage(result.errorMessage || 'OCR 변환에 실패했습니다. 다시 촬영하거나 직접 입력해 주세요.');
       }
@@ -266,15 +254,30 @@ export const TransferList: React.FC = () => {
   };
 
   const processEvidencePhotos = async (fileList: FileList | File[]) => {
-    const files = Array.from(fileList).filter((file) => file.type.startsWith('image/')).slice(0, 5) as File[];
+    const selected = Array.from(fileList);
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    if (selected.some((file) => !allowedTypes.has(file.type))) {
+      showToast('업무이관 사진은 JPG, PNG, WEBP 형식만 등록할 수 있습니다.', 'warning');
+      return;
+    }
+    const remaining = 3 - evidencePhotos.length;
+    if (remaining <= 0 || selected.length > remaining) {
+      showToast('업무이관 사진은 최대 3장까지 등록할 수 있습니다.', 'warning');
+      return;
+    }
+    const files = selected as File[];
     if (files.length === 0) return;
-    if (files.some((file) => file.size > 15 * 1024 * 1024)) {
-      showToast('증빙사진은 한 장당 15MB 이하만 등록할 수 있습니다.', 'warning');
+    if (files.some((file) => file.size > 10 * 1024 * 1024)) {
+      showToast('업무이관 사진은 한 장당 10MB 이하만 등록할 수 있습니다.', 'warning');
       return;
     }
     try {
-      const nextPhotos = await Promise.all(files.map(async (file) => ({ fileName: file.name, dataUrl: await readFile(file) })));
-      setEvidencePhotos(nextPhotos);
+      const nextPhotos = await Promise.all(files.map(async (file, index) => ({
+        id: `${Date.now()}-${index}-${file.name}`,
+        fileName: file.name,
+        dataUrl: await readFile(file),
+      })));
+      setEvidencePhotos((current) => [...current, ...nextPhotos]);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '증빙사진을 읽지 못했습니다.', 'error');
     }
@@ -295,8 +298,12 @@ export const TransferList: React.FC = () => {
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!newRegionId || !branchName || !inspectionRequestedDate || !location.trim()
-      || !handoverReason.trim() || !inspectionRequestDetails.trim()) {
-      showToast('지점, 지역, 점검요청일, 고객주소, 이관사유, 점검요청내용은 필수입니다.', 'warning');
+      || !inspectionCompany.trim() || !mediaType.trim()) {
+      showToast('요청일, 지역, 지점, 점검작업업체, 매체구분, 고객주소는 필수입니다.', 'warning');
+      return;
+    }
+    if (evidencePhotos.length < 1 || evidencePhotos.length > 3) {
+      showToast('상세내용 확인을 위한 업무이관 사진을 1~3장 등록해 주세요.', 'warning');
       return;
     }
     if (ocrResult?.status === 'succeeded' && !ocrReviewed) {
@@ -310,23 +317,12 @@ export const TransferList: React.FC = () => {
         regionId: newRegionId,
         isUrgent,
         branchName,
-        requesterName: requesterName.trim(),
+        inspectionCompany: inspectionCompany.trim(),
+        mediaType: mediaType.trim(),
         customerAddress: location.trim(),
-        handoverReason: handoverReason.trim(),
-        tapRnLocation: tapRnLocation.trim(),
-        poleNumber: poleNumber.trim(),
-        leadInLength: leadInLength.trim(),
-        preActionNotes: preActionNotes.trim(),
-        inspectionRequestDetails: inspectionRequestDetails.trim(),
-        inspectionCompany: '유지텔레컴',
-        mediaType: 'CABLE',
-        ocrText: ocrText.trim(),
         ocrStatus,
-        ocrError: ocrStatus === 'failed' ? ocrMessage : '',
         ocrEngine: ocrResult?.engine || 'manual',
-        ocrConfidence: ocrResult?.confidence,
-        ocrQuality: ocrResult?.quality,
-        requestPhotos: evidencePhotos,
+        requestPhotos: evidencePhotos.map(({ fileName, dataUrl }) => ({ fileName, dataUrl })),
       });
       showToast('업무이관이 미완료 상태로 등록되었습니다.', 'success');
       closeRegistration();
@@ -340,7 +336,7 @@ export const TransferList: React.FC = () => {
 
   const handleComplete = async (event: React.MouseEvent, transfer: WorkTransfer) => {
     event.stopPropagation();
-    if (!window.confirm(`${transfer.regionName} 업무를 최종 완료하시겠습니까?`)) return;
+    if (!window.confirm(`${transfer.regionName} 업무를 최종 완료하시겠습니까? 완료하면 CATV에 등록된 업무이관 사진은 복구할 수 없게 완전 삭제됩니다.`)) return;
     try {
       await transfersApi.complete(transfer.id);
       showToast('업무이관을 최종 완료했습니다.', 'success');
@@ -420,7 +416,7 @@ export const TransferList: React.FC = () => {
 
         <div className="relative">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="지점, 요청자, 주소, 이관사유, TAP/RN, 전주번호, 점검·현장처리, OCR 원문 검색" className="w-full h-11 pl-10 pr-10 bg-[#F9FAFB] border border-[#D1D5DB] rounded-xl text-xs outline-none focus:bg-white focus:border-[#2878B5]" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="지역, 지점, 점검업체, 매체, 주소, 현장처리자 검색" className="w-full h-11 pl-10 pr-10 bg-[#F9FAFB] border border-[#D1D5DB] rounded-xl text-xs outline-none focus:bg-white focus:border-[#2878B5]" />
           {query ? <button type="button" aria-label="검색어 지우기" onClick={() => setQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400"><X className="w-4 h-4" /></button> : null}
         </div>
       </section>
@@ -446,6 +442,7 @@ export const TransferList: React.FC = () => {
               <dt className="font-bold text-slate-500 flex items-center gap-1"><Calendar className="w-3 h-3" />점검요청일</dt><dd className="font-semibold text-slate-800">{item.inspectionRequestedDate || item.requestDate}</dd>
               <dt className="font-bold text-slate-500">지역/지점</dt><dd className="font-extrabold text-[#173B57]">{item.regionName || '-'} · {item.branchName || '-'}</dd>
               <dt className="font-bold text-slate-500 flex items-center gap-1"><MapPin className="w-3 h-3" />주소</dt><dd className="font-medium text-slate-800">{item.location}</dd>
+              <dt className="font-bold text-slate-500 flex items-center gap-1"><Images className="w-3 h-3" />사진</dt><dd className="font-medium text-slate-800">{item.workflowStatus === 'completed' ? '완료 시 삭제됨' : `${item.evidencePhotoCount || 0}장`}</dd>
               <dt className="font-bold text-slate-500">처리내용</dt><dd className="font-medium text-slate-800 whitespace-pre-wrap line-clamp-3">{item.workflowStatus === 'registered' ? '현장처리 대기' : item.fieldActionSummary || '-'}</dd>
             </dl>
             {canComplete ? (
@@ -500,65 +497,55 @@ export const TransferList: React.FC = () => {
                 </label>
                 {ocrSource ? <div className="mt-2 flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-2"><img src={ocrSource.previewUrl} alt={ocrSource.fileName} className="w-20 h-16 object-cover rounded-lg border border-emerald-200" /><div className="min-w-0"><p className="truncate font-bold text-slate-700">{ocrSource.fileName}</p><p className="mt-1 flex items-center gap-1 text-[10px] text-emerald-700"><ShieldCheck className="h-3.5 w-3.5" />현재 브라우저 메모리에서만 처리됩니다.</p></div></div> : null}
                 {ocrMessage ? <div className={`mt-2 p-2.5 rounded-lg flex items-center gap-2 ${ocrLoading ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-800'}`}><Sparkles className="w-4 h-4 shrink-0" />{ocrMessage}</div> : null}
-                {ocrResult ? <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
-                  <div className="rounded-lg bg-slate-50 p-2"><strong>전체 신뢰도</strong><span className="ml-1">{Math.round(ocrResult.confidence * 100)}%</span></div>
-                  <div className="rounded-lg bg-slate-50 p-2"><strong>사진 품질</strong><span className="ml-1">{ocrResult.quality.status === 'good' ? '양호' : ocrResult.quality.status === 'acceptable' ? '확인 필요' : '재촬영 권장'}</span></div>
-                  {ocrResult.quality.warnings.map((warning) => <p key={warning} className="col-span-2 text-amber-700">• {warning}</p>)}
-                </div> : null}
               </div>
-              <label className="block font-bold text-slate-700">OCR 원문
-                <textarea rows={5} value={ocrText} onChange={(event) => { setOcrText(event.target.value); setOcrReviewed(false); }} placeholder="OCR 결과가 표시됩니다. 실패한 경우 직접 입력할 수 있습니다." className="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl resize-y font-medium" />
-              </label>
               <section className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3" aria-labelledby="inspection-fields-title">
-                <h3 id="inspection-fields-title" className="font-extrabold text-sm text-[#173B57]">점검사항</h3>
+                <h3 id="inspection-fields-title" className="font-extrabold text-sm text-[#173B57]">누적 관리 항목</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="font-bold text-slate-700">지점 *
                     <select required value={branchName} onChange={(event) => { setBranchName(event.target.value); setOcrReviewed(false); applyRegionHint(event.target.value); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl">
                       <option value="">지점 선택</option>{HNS_BRANCHES.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
                     </select>
                   </label>
-                  <label className="font-bold text-slate-700">요청자
-                    <input value={requesterName} onChange={(event) => { setRequesterName(event.target.value); setOcrReviewed(false); }} placeholder="성명 또는 연락처 포함" className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
+                  <label className="font-bold text-slate-700">점검작업업체 *
+                    <input required value={inspectionCompany} onChange={(event) => { setInspectionCompany(event.target.value); setOcrReviewed(false); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
                   </label>
-                  <label className="font-bold text-slate-700">점검작업업체
-                    <input readOnly value="유지텔레컴" className="mt-1 w-full h-10 px-3 bg-slate-100 border border-slate-200 rounded-xl text-slate-600" />
-                  </label>
-                  <label className="font-bold text-slate-700">매체구분
-                    <input readOnly value="CABLE" className="mt-1 w-full h-10 px-3 bg-slate-100 border border-slate-200 rounded-xl text-slate-600" />
+                  <label className="font-bold text-slate-700">매체구분 *
+                    <input required value={mediaType} onChange={(event) => { setMediaType(event.target.value); setOcrReviewed(false); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
                   </label>
                 </div>
-              <label className="block font-bold text-slate-700">고객주소 *
-                <input required value={location} onChange={(event) => { setLocation(event.target.value); setOcrReviewed(false); }} placeholder="현장 주소를 확인해 입력하세요." className="mt-1 w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl" />
-              </label>
-              <label className="block font-bold text-slate-700">이관사유 *
-                <input required value={handoverReason} onChange={(event) => { setHandoverReason(event.target.value); setOcrReviewed(false); }} placeholder="예: 신호점검" className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
-              </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <label className="font-bold text-slate-700">TAP/RN 위치<input value={tapRnLocation} onChange={(event) => { setTapRnLocation(event.target.value); setOcrReviewed(false); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" /></label>
-                  <label className="font-bold text-slate-700">전주번호<input value={poleNumber} onChange={(event) => { setPoleNumber(event.target.value); setOcrReviewed(false); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" /></label>
-                  <label className="font-bold text-slate-700">인입선길이<input value={leadInLength} onChange={(event) => { setLeadInLength(event.target.value); setOcrReviewed(false); }} placeholder="원문 형식 유지" className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" /></label>
-                </div>
-                <label className="block font-bold text-slate-700">사전조치내용
-                  <textarea rows={3} value={preActionNotes} onChange={(event) => { setPreActionNotes(event.target.value); setOcrReviewed(false); }} className="mt-1 w-full p-3 bg-white border border-slate-200 rounded-xl resize-y" />
-                </label>
-                <label className="block font-bold text-slate-700">점검요청내용 *
-                  <textarea required rows={4} value={inspectionRequestDetails} onChange={(event) => { setInspectionRequestDetails(event.target.value); setOcrReviewed(false); }} placeholder="현장 매니저가 확인할 점검 요청내용" className="mt-1 w-full p-3 bg-white border border-slate-200 rounded-xl resize-y" />
+                <label className="block font-bold text-slate-700">고객주소 *
+                  <input required value={location} onChange={(event) => { setLocation(event.target.value); setOcrReviewed(false); }} placeholder="현장 주소를 확인해 입력하세요." className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
                 </label>
               </section>
               {ocrResult?.status === 'succeeded' ? <label className={`flex items-start gap-2 rounded-xl border p-3 font-bold ${ocrReviewed ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
                 <input type="checkbox" checked={ocrReviewed} onChange={(event) => setOcrReviewed(event.target.checked)} className="mt-0.5 h-4 w-4" />
-                OCR 원문과 모든 자동입력 항목을 직접 확인했으며 필요한 부분을 수정했습니다.
+                OCR로 입력된 요청일·지역·지점·점검작업업체·매체구분·고객주소를 확인하고 필요한 부분을 수정했습니다.
               </label> : null}
               <div>
-                <div className="flex items-center justify-between gap-2 mb-1"><span className="font-bold text-slate-700">접수 증빙사진 (선택)</span><span className="text-[10px] text-slate-400">기존 방식으로 저장됨 · 최대 5장</span></div>
-                <label
+                <div className="flex items-center justify-between gap-2 mb-2"><span className="font-bold text-slate-700">업무이관 사진 * ({evidencePhotos.length}/3)</span><span className="text-[10px] text-slate-400">JPG/PNG/WEBP · 장당 10MB</span></div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="h-12 rounded-xl bg-[#2878B5] text-white flex items-center justify-center gap-2 font-bold cursor-pointer">
+                    <Camera className="w-4 h-4" />카메라로 촬영
+                    <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void handleEvidencePhotos(event)} className="sr-only" />
+                  </label>
+                  <label className="h-12 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center gap-2 font-bold cursor-pointer">
+                    <Images className="w-4 h-4" />갤러리에서 선택
+                    <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void handleEvidencePhotos(event)} className="sr-only" />
+                  </label>
+                </div>
+                <div
                   onDragEnter={(event) => { event.preventDefault(); setEvidenceDragActive(true); }}
                   onDragOver={(event) => event.preventDefault()}
                   onDragLeave={() => setEvidenceDragActive(false)}
                   onDrop={handleEvidenceDrop}
-                  className={`h-16 border border-dashed rounded-xl flex items-center justify-center gap-2 font-bold cursor-pointer transition ${evidenceDragActive ? 'border-[#2878B5] bg-blue-50 text-[#2878B5]' : 'border-slate-300 text-slate-600'}`}
-                ><ImagePlus className="w-4 h-4" />증빙사진 선택 또는 드래그<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void handleEvidencePhotos(event)} className="sr-only" /></label>
-                {evidencePhotos.length > 0 ? <div className="mt-2 flex gap-2 overflow-x-auto">{evidencePhotos.map((photo) => <img key={photo.fileName} src={photo.dataUrl} alt={photo.fileName} className="w-20 h-16 object-cover rounded-lg border border-slate-200" />)}</div> : null}
+                  className={`mt-2 h-10 border border-dashed rounded-xl hidden sm:flex items-center justify-center gap-2 font-bold transition ${evidenceDragActive ? 'border-[#2878B5] bg-blue-50 text-[#2878B5]' : 'border-slate-300 text-slate-500'}`}
+                ><ImagePlus className="w-4 h-4" />PC에서는 사진을 여기에 끌어놓을 수도 있습니다.</div>
+                {evidencePhotos.length > 0 ? <div className="mt-3 grid grid-cols-3 gap-2">{evidencePhotos.map((photo, index) => <div key={photo.id} className="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                  <button type="button" onClick={() => setEvidenceViewerIndex(index)} className="block w-full"><img src={photo.dataUrl} alt={photo.fileName} className="w-full aspect-square object-cover" /><span className="absolute left-1.5 top-1.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[10px] font-bold text-white">{index + 1}</span></button>
+                  <button type="button" aria-label={`${index + 1}번 사진 삭제`} onClick={() => setEvidencePhotos((current) => current.filter((item) => item.id !== photo.id))} className="absolute right-1.5 top-1.5 rounded-md bg-red-600 p-1 text-white"><Trash2 className="h-3.5 w-3.5" /></button>
+                  <p className="truncate px-2 py-1.5 text-[10px] text-slate-500">{photo.fileName}</p>
+                </div>)}</div> : <p className="mt-2 text-[11px] text-amber-700">사진에 이관사유와 상세 요청내용이 보이도록 1~3장을 등록해 주세요.</p>}
+                <p className="mt-2 rounded-lg bg-amber-50 p-2 text-[10px] font-medium text-amber-800">업무이관 완료 시 CATV에 업로드된 첨부사진은 자동으로 완전 삭제됩니다. 휴대폰 갤러리 원본은 삭제되지 않습니다.</p>
               </div>
               <div className="pt-2 flex gap-2">
                 <button type="button" onClick={closeRegistration} className="flex-1 h-11 bg-slate-100 text-slate-700 font-bold rounded-xl">취소</button>
@@ -568,6 +555,11 @@ export const TransferList: React.FC = () => {
           </div>
         </div>
       ) : null}
+      {evidenceViewerIndex !== null ? <TransferPhotoViewer
+        photos={evidencePhotos.map((photo) => ({ id: photo.id, url: photo.dataUrl, fileName: photo.fileName }))}
+        initialIndex={evidenceViewerIndex}
+        onClose={() => setEvidenceViewerIndex(null)}
+      /> : null}
     </div>
   );
 };

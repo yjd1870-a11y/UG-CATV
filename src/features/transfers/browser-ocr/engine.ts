@@ -1,7 +1,6 @@
 import { criticalOcrFieldsNeedReview, parseAndValidateOcrText } from './validation';
 import {
   inspectOcrPhotoQuality, prepareOcrAddressCanvas, prepareOcrCanvas,
-  prepareOcrPreActionCanvas, prepareOcrRequestDetailsCanvas,
 } from './quality';
 import type { BrowserOcrProgress, BrowserOcrResult, OcrFieldName, OcrFieldResult, OcrQualityResult } from './types';
 
@@ -32,8 +31,6 @@ export const recognizeWorkTransferPhotoInBrowser = async (
   let bitmap: ImageBitmap | null = null;
   let canvas: HTMLCanvasElement | null = null;
   let addressCanvas: HTMLCanvasElement | null = null;
-  let preActionCanvas: HTMLCanvasElement | null = null;
-  let requestDetailsCanvas: HTMLCanvasElement | null = null;
 
   try {
     if (options.signal?.aborted) throw abortError();
@@ -104,8 +101,8 @@ export const recognizeWorkTransferPhotoInBrowser = async (
       options.onProgress?.({ stage: 'validation', progress: 0.94, message: '서비스번호·날짜·주소 형식을 검증하고 있습니다.' });
       let fields = parseAndValidateOcrText(text);
       let resultConfidence = result.data.confidence;
-      // 짧게 잘린 주소도 글자 수 검증은 통과하므로 유효 여부와 관계없이
-      // 주소와 사전조치 행을 확대 재검사한다. 모든 처리는 브라우저 내부에서만 수행된다.
+      // 장기 저장하는 필드 중 오인식 영향이 큰 주소만 확대 재검사한다.
+      // 모든 처리는 브라우저 내부에서만 수행된다.
       options.onProgress?.({ stage: 'recognition', progress: 0.88, message: '주소 영역을 정밀 확인하고 있습니다.' });
       await worker.setParameters({ tessedit_pageseg_mode: tesseractModule.PSM.SPARSE_TEXT, preserve_interword_spaces: '1' });
       addressCanvas = prepareOcrAddressCanvas(bitmap);
@@ -115,22 +112,7 @@ export const recognizeWorkTransferPhotoInBrowser = async (
       if (focusedAddressText) text = `${text}\n\n[주소 영역 재검사]\n${focusedAddressText}`;
       resultConfidence = Math.max(resultConfidence, addressResult.data.confidence);
 
-      options.onProgress?.({ stage: 'recognition', progress: 0.92, message: '사전조치내용 영역을 정밀 확인하고 있습니다.' });
-      await worker.setParameters({ tessedit_pageseg_mode: tesseractModule.PSM.SINGLE_BLOCK, preserve_interword_spaces: '1' });
-      preActionCanvas = prepareOcrPreActionCanvas(bitmap);
-      const preActionResult = await worker.recognize(preActionCanvas);
-      if (options.signal?.aborted) throw abortError();
-      const focusedPreActionText = preActionResult.data.text.trim();
-      if (focusedPreActionText) text = `${text}\n\n[사전조치 영역 재검사]\n${focusedPreActionText}`;
-
-      options.onProgress?.({ stage: 'recognition', progress: 0.95, message: '점검요청내용 영역을 정밀 확인하고 있습니다.' });
-      requestDetailsCanvas = prepareOcrRequestDetailsCanvas(bitmap);
-      const requestDetailsResult = await worker.recognize(requestDetailsCanvas);
-      if (options.signal?.aborted) throw abortError();
-      const focusedRequestDetailsText = requestDetailsResult.data.text.trim();
-      if (focusedRequestDetailsText) text = `${text}\n\n[점검요청 영역 재검사]\n${focusedRequestDetailsText}`;
       fields = parseAndValidateOcrText(text);
-      resultConfidence = Math.max(resultConfidence, preActionResult.data.confidence, requestDetailsResult.data.confidence);
       const confidence = Number((Math.max(0, Math.min(100, resultConfidence)) / 100).toFixed(3));
       if (!text) {
         return {
@@ -157,8 +139,6 @@ export const recognizeWorkTransferPhotoInBrowser = async (
   } finally {
     canvas?.remove();
     addressCanvas?.remove();
-    preActionCanvas?.remove();
-    requestDetailsCanvas?.remove();
     bitmap?.close();
     await worker?.terminate().catch(() => undefined);
     recognitionInProgress = false;

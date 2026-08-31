@@ -320,6 +320,6 @@ export const criticalOcrFieldsNeedReview = (fields: Record<OcrFieldName, OcrFiel
   fields.branchName.validationStatus !== 'valid'
   || fields.inspectionRequestedDate.validationStatus !== 'valid'
   || fields.customerAddress.validationStatus !== 'valid'
-  || fields.handoverReason.validationStatus !== 'valid'
-  || fields.inspectionRequestDetails.validationStatus !== 'valid'
+  || fields.inspectionCompany.validationStatus !== 'valid'
+  || fields.mediaType.validationStatus !== 'valid'
 );

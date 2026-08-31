@@ -37,6 +37,7 @@ export const putR2Object = async (
   body: Buffer,
   contentType: string,
   metadata: Record<string, string> = {},
+  cacheControl = 'private, max-age=300',
 ) => {
   await client().send(new PutObjectCommand({
     Bucket: env.r2BucketName,
@@ -45,7 +46,7 @@ export const putR2Object = async (
     ContentLength: body.length,
     ContentType: contentType,
     Metadata: metadata,
-    CacheControl: 'private, max-age=300',
+    CacheControl: cacheControl,
   }));
 };
 

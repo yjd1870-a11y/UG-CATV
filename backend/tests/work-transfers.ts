@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import type { Server } from 'node:http';
 import { createApiApp } from '../app';
 import { db, initializeDatabase } from '../db';
+import { resolvePrivatePhoto } from '../photo-storage';
 
 await initializeDatabase();
 const app = createApiApp();
@@ -64,7 +66,8 @@ try {
       preActionNotes: 'ONU 7C RFOG 확인', tapRnLocation: 'TAP 3번', poleNumber: '12-34', leadInLength: '45m',
       ocrText: '오산 테스트 현장 케이블 현장 조치 요청', isUrgent: true,
       ocrStatus: 'succeeded', ocrEngine: 'browser-tesseract-kor-eng',
-      requestPhotos: [{ fileName: 'evidence.png', dataUrl: photoDataUrl }],
+      inspectionCompany: '유지텔레컴', mediaType: 'CABLE',
+      requestPhotos: [1, 2, 3].map((number) => ({ fileName: `evidence-${number}.png`, dataUrl: photoDataUrl })),
     },
   });
   assert.equal(created.response.status, 201);
@@ -72,15 +75,18 @@ try {
   transferId = created.payload.data?.id || '';
   const detail = await call<{
     attachments: Array<{ id: string; url: string }>;
-    branchName: string; inspectionRequestedDate: string; inspectionCompany: string; mediaType: string; preActionNotes: string;
+    branchName: string; inspectionRequestedDate: string; inspectionCompany: string; mediaType: string;
+    preActionNotes: string; evidencePhotoCount: number; evidencePhotosDeletedAt?: string; ocrText?: string;
     fieldActions: unknown[];
   }>(`/work-transfers/${transferId}`, { cookie: teamCookie });
-  assert.equal(detail.payload.data?.attachments.length, 1);
+  assert.equal(detail.payload.data?.attachments.length, 3);
+  assert.equal(detail.payload.data?.evidencePhotoCount, 3);
   assert.equal(detail.payload.data?.branchName, 'HNS화성지점');
   assert.equal(detail.payload.data?.inspectionRequestedDate, '2026-08-25');
   assert.equal(detail.payload.data?.inspectionCompany, '유지텔레컴');
   assert.equal(detail.payload.data?.mediaType, 'CABLE');
-  assert.equal(detail.payload.data?.preActionNotes, 'ONU 7C RFOG 확인');
+  assert.equal(detail.payload.data?.preActionNotes, '');
+  assert.equal(detail.payload.data?.ocrText, undefined);
   assert.equal(detail.payload.data?.fieldActions.length, 0);
   const ocrRun = db.prepare(`
     SELECT attachment_id, engine, status FROM work_transfer_ocr_runs WHERE transfer_id = ?
@@ -88,9 +94,22 @@ try {
   assert.equal(ocrRun.attachment_id, null);
   assert.equal(ocrRun.engine, 'browser-tesseract-kor-eng');
   assert.equal(ocrRun.status, 'succeeded');
+  const storedPhotoRows = db.prepare(`
+    SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ? ORDER BY created_at, id
+  `).all(transferId) as Array<{ file_url: string }>;
+  assert.equal(storedPhotoRows.length, 3);
+  for (const photo of storedPhotoRows) assert.equal(fs.existsSync(resolvePrivatePhoto(photo.file_url)), true);
   const photoResponse = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: teamCookie } });
   assert.equal(photoResponse.status, 200);
   assert.equal(photoResponse.headers.get('content-type'), 'image/png');
+  assert.match(photoResponse.headers.get('cache-control') || '', /no-store/);
+
+  const fourthPhoto = await call(`/work-transfers/${transferId}/attachments`, {
+    method: 'POST', cookie: teamCookie,
+    body: { attachmentType: 'request_photo', fileName: 'evidence-4.png', dataUrl: photoDataUrl },
+  });
+  assert.equal(fourthPhoto.response.status, 400);
+  assert.equal(fourthPhoto.payload.code, 'PHOTO_LIMIT_EXCEEDED');
 
   const managerList = await call<Array<{ id: string }>>('/work-transfers', { cookie: managerCookie });
   assert.ok(managerList.payload.data?.some((item) => item.id === transferId));
@@ -107,11 +126,23 @@ try {
   assert.equal(fieldAction.response.status, 201);
   assert.equal(fieldAction.payload.data?.workflowStatus, 'field_processed');
 
-  const completed = await call<{ workflowStatus: string }>(`/work-transfers/${transferId}/complete`, {
+  const completed = await call<{
+    workflowStatus: string; attachments: unknown[]; evidencePhotoCount: number; evidencePhotosDeletedAt: string;
+  }>(`/work-transfers/${transferId}/complete`, {
     method: 'POST', cookie: teamCookie, body: { comment: '현장처리 검수 완료' },
   });
   assert.equal(completed.response.status, 200);
   assert.equal(completed.payload.data?.workflowStatus, 'completed');
+  assert.equal(completed.payload.data?.attachments.length, 0);
+  assert.equal(completed.payload.data?.evidencePhotoCount, 3);
+  assert.ok(completed.payload.data?.evidencePhotosDeletedAt);
+  const remainingAttachmentCount = db.prepare(`
+    SELECT COUNT(*) AS count FROM work_transfer_attachments WHERE transfer_id = ?
+  `).get(transferId) as { count: number };
+  assert.equal(remainingAttachmentCount.count, 0);
+  for (const photo of storedPhotoRows) assert.equal(fs.existsSync(resolvePrivatePhoto(photo.file_url)), false);
+  const removedPhotoResponse = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: teamCookie } });
+  assert.equal(removedPhotoResponse.status, 404);
 
   const hiddenCompleted = await call(`/work-transfers/${transferId}`, { cookie: managerCookie });
   assert.equal(hiddenCompleted.response.status, 404);
@@ -156,7 +187,7 @@ try {
   `).get(transferId) as { metadata: string };
   assert.equal(JSON.parse(deleteAudit.metadata).reason, '잘못 등록된 점검표');
 
-  console.log('Work-transfer test passed: explicit fields → region RBAC → field action → completion → reopen → soft delete');
+  console.log('Work-transfer test passed: six OCR fields → max 3 photos → hard purge on completion → reopen → soft delete');
 } finally {
   if (transferId) db.prepare('DELETE FROM work_transfers WHERE id = ?').run(transferId);
   db.prepare("DELETE FROM auth_sessions WHERE user_id IN ('user-1', 'user-3', 'user-4', 'user-5')").run();

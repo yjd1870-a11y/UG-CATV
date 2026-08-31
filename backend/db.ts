@@ -179,6 +179,8 @@ CREATE TABLE IF NOT EXISTS work_transfers (
   transfer_date TEXT NOT NULL,
   due_date TEXT,
   completed_at TEXT,
+  evidence_photo_count INTEGER NOT NULL DEFAULT 0,
+  evidence_photos_deleted_at TEXT,
   extra_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -726,6 +728,8 @@ export const createSchema = () => {
   ensureColumn('work_transfers', 'is_urgent', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('work_transfers', 'ocr_status', "TEXT NOT NULL DEFAULT 'pending'");
   ensureColumn('work_transfers', 'ocr_text', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'evidence_photo_count', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('work_transfers', 'evidence_photos_deleted_at', 'TEXT');
   ensureColumn('work_transfers', 'field_processed_at', 'TEXT');
   ensureColumn('work_transfers', 'field_processed_by', 'TEXT');
   ensureColumn('work_transfers', 'final_completed_by', 'TEXT');
@@ -785,6 +789,16 @@ export const createSchema = () => {
   ensureColumn('straight_map_jobs', 'total_tile_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('straight_map_jobs', 'total_artifact_bytes', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('straight_map_job_sheets', 'checkpoint_json', 'TEXT');
+  // OCR 원문은 업무 데이터로 누적하지 않는다. 기존 값도 배포 시 제거해
+  // 사진과 무관한 6개 확정 필드만 장기 보관한다.
+  db.prepare("UPDATE work_transfers SET ocr_text = '' WHERE ocr_text <> ''").run();
+  db.prepare("UPDATE work_transfer_ocr_runs SET extracted_text = '' WHERE extracted_text <> ''").run();
+  db.prepare(`
+    UPDATE work_transfers
+       SET extra_json = json_remove(extra_json, '$.ocrText', '$.ocrQuality')
+     WHERE json_valid(extra_json) = 1
+       AND (json_type(extra_json, '$.ocrText') IS NOT NULL OR json_type(extra_json, '$.ocrQuality') IS NOT NULL)
+  `).run();
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_station_key ON catv_b2c_lines(station_key);
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_normalized_search ON catv_b2c_lines(normalized_search);

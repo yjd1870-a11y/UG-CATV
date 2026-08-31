@@ -104,7 +104,8 @@ export const env = {
   adminMutationAllowedOrigins: new Set(adminOrigins.length ? adminOrigins : configuredOrigins),
   trustProxy: booleanValue('TRUST_PROXY', nodeEnv === 'production'),
   enforceHttps: booleanValue('ENFORCE_HTTPS', nodeEnv === 'production'),
-  jsonBodyLimit: process.env.JSON_BODY_LIMIT || '30mb',
+  // 10MB 사진 3장의 Base64 오버헤드까지 한 요청에서 수용한다.
+  jsonBodyLimit: process.env.JSON_BODY_LIMIT || '45mb',
   workTransferOcrExecutionMode: workTransferOcrExecutionMode as 'browser_only',
   loginFailureLimit: numberValue('LOGIN_FAILURE_LIMIT', 5, 3, 50),
   loginWindowMinutes: numberValue('LOGIN_WINDOW_MINUTES', 10, 1, 1440),

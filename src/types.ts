@@ -184,7 +184,8 @@ export interface WorkTransfer {
   regionName?: string;
   isUrgent?: boolean;
   ocrStatus?: TransferOcrStatus;
-  ocrText?: string;
+  evidencePhotoCount?: number;
+  evidencePhotosDeletedAt?: string;
   fieldProcessedAt?: string;
   fieldProcessedBy?: string;
   fieldProcessedByName?: string;
