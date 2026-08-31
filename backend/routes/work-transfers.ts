@@ -472,6 +472,15 @@ router.get('/:id/attachments/:attachmentId/file', asyncRoute(async (req, res) =>
   res.sendFile(absolutePath);
 }));
 
+router.get('/:id/attachments/:attachmentId/access-url', asyncRoute(async (req, res) => {
+  const attachment = attachmentForUser(req.params.id, req.params.attachmentId, authUser(req));
+  const objectKey = String(attachment.file_url);
+  const url = usesR2Storage
+    ? await privatePhotoDownloadUrl(objectKey)
+    : `/work-transfers/${req.params.id}/attachments/${req.params.attachmentId}/file`;
+  success(res, { url });
+}));
+
 router.post('/:id/ocr', (req, _res) => {
   const user = authUser(req);
   if (!registrationRoles.has(user.role)) throw new ApiError(403, 'OCR을 실행할 권한이 없습니다.', 'FORBIDDEN');

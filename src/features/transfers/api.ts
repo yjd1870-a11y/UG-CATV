@@ -1,5 +1,5 @@
 import type { TransferWorkflowStatus, WorkTransfer } from '../../types';
-import { downloadFile, request } from '../../shared/api/client';
+import { apiResourceUrl, downloadFile, request } from '../../shared/api/client';
 
 export type TransferFilters = {
   status?: TransferWorkflowStatus | '';
@@ -111,6 +111,10 @@ export const transfersApi = {
     request<{ id: string }>(`/work-transfers/${encodeURIComponent(id)}/attachments`, {
       method: 'POST', body: JSON.stringify(input),
     }),
+  attachmentAccessUrl: async (id: string, attachmentId: string) => {
+    const result = await request<{ url: string }>(`/work-transfers/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}/access-url`);
+    return apiResourceUrl(result.url);
+  },
   addFieldAction: (id: string, input: { actionText: string; processedAt?: string }) =>
     request<WorkTransfer>(`/work-transfers/${encodeURIComponent(id)}/field-actions`, {
       method: 'POST', body: JSON.stringify(input),

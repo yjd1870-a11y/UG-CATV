@@ -20,7 +20,6 @@ import {
 import { useApp } from '../../context/AppContext';
 import { transfersApi } from '../../features/transfers/api';
 import { HNS_BRANCHES } from '../../features/transfers/browser-ocr/validation';
-import { apiResourceUrl } from '../../shared/api/client';
 import type { WorkTransfer } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
 import { TransferPhotoViewer } from './TransferPhotoViewer';
@@ -47,6 +46,7 @@ export const TransferDetail: React.FC = () => {
   const [editLocation, setEditLocation] = useState('');
   const [editUrgent, setEditUrgent] = useState(false);
   const [photoViewerIndex, setPhotoViewerIndex] = useState<number | null>(null);
+  const [failedPhotoIds, setFailedPhotoIds] = useState<string[]>([]);
   const [pendingAction, setPendingAction] = useState<'delete' | 'reopen' | null>(null);
   const [actionReason, setActionReason] = useState('');
 
@@ -63,7 +63,17 @@ export const TransferDetail: React.FC = () => {
     setLoading(true);
     try {
       const detail = await transfersApi.detail(selectedTransferId);
-      setTransfer(detail);
+      const attachments = detail.workflowStatus === 'completed'
+        ? []
+        : await Promise.all((detail.attachments || []).map(async (photo) => {
+          try {
+            return { ...photo, url: await transfersApi.attachmentAccessUrl(detail.id, photo.id) };
+          } catch {
+            return { ...photo, url: '' };
+          }
+        }));
+      setFailedPhotoIds([]);
+      setTransfer({ ...detail, attachments });
     } catch (error) {
       setTransfer(null);
       showToast(error instanceof Error ? error.message : '업무이관을 불러오지 못했습니다.', 'error');
@@ -135,16 +145,15 @@ export const TransferDetail: React.FC = () => {
       || !editInspectionCompany.trim() || !editMediaType.trim()) return;
     setBusy(true);
     try {
-      const updated = await transfersApi.update(transfer.id, {
+      await transfersApi.update(transfer.id, {
         branchName: editBranchName,
         inspectionRequestedDate: editInspectionDate, customerAddress: editLocation.trim(),
         inspectionCompany: editInspectionCompany.trim(), mediaType: editMediaType.trim(),
         isUrgent: editUrgent,
       });
-      setTransfer(updated);
       setEditing(false);
       showToast('업무이관 정보를 수정했습니다.', 'success');
-      await reloadBusinessData();
+      await Promise.all([loadDetail(), reloadBusinessData()]);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '수정에 실패했습니다.', 'error');
     } finally {
@@ -231,11 +240,19 @@ export const TransferDetail: React.FC = () => {
         </div>
         {transfer.workflowStatus === 'completed' ? (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs font-bold text-emerald-800">업무 완료 처리로 첨부사진이 자동 삭제되었습니다.</div>
+        ) : loading ? (
+          <div className="rounded-xl bg-slate-50 p-4 text-xs font-bold text-slate-500">첨부사진 보기 권한을 확인하고 있습니다.</div>
         ) : evidencePhotos.length > 0 ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{evidencePhotos.map((photo, index) => <button key={photo.id} type="button" onClick={() => setPhotoViewerIndex(index)} className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
-            <img src={apiResourceUrl(photo.url)} alt={photo.fileName} className="w-full aspect-video object-cover transition group-hover:scale-105" />
-            <span className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-2 py-1.5 text-left text-[10px] font-bold text-white">{index + 1}. {photo.fileName}</span>
-          </button>)}</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{evidencePhotos.map((photo, index) => {
+            const failed = !photo.url || failedPhotoIds.includes(photo.id);
+            return failed ? <div key={photo.id} className="flex aspect-video flex-col items-center justify-center rounded-xl border border-red-200 bg-red-50 p-2 text-center text-[10px] font-bold text-red-700">
+              <span>사진을 불러오지 못했습니다.</span>
+              <button type="button" onClick={() => void loadDetail()} className="mt-1 rounded-lg bg-white px-2 py-1 text-[#2878B5] shadow-sm">다시 불러오기</button>
+            </div> : <button key={photo.id} type="button" onClick={() => setPhotoViewerIndex(index)} className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
+              <img src={photo.url} alt={photo.fileName} onError={() => setFailedPhotoIds((current) => current.includes(photo.id) ? current : [...current, photo.id])} className="w-full aspect-video object-cover transition group-hover:scale-105" />
+              <span className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-2 py-1.5 text-left text-[10px] font-bold text-white">{index + 1}. {photo.fileName}</span>
+            </button>;
+          })}</div>
         ) : <p className="rounded-xl bg-slate-50 p-4 text-xs text-slate-500">등록된 업무이관 사진이 없습니다.</p>}
         {transfer.workflowStatus !== 'completed' ? <p className="text-[10px] text-amber-700">완료 처리 시 CATV에 저장된 사진과 첨부 DB 정보가 완전 삭제됩니다.</p> : null}
       </section>
@@ -293,7 +310,7 @@ export const TransferDetail: React.FC = () => {
         </div>
       ) : null}
       {photoViewerIndex !== null ? <TransferPhotoViewer
-        photos={evidencePhotos.map((photo) => ({ id: photo.id, url: apiResourceUrl(photo.url), fileName: photo.fileName }))}
+        photos={evidencePhotos.map((photo) => ({ id: photo.id, url: photo.url, fileName: photo.fileName }))}
         initialIndex={photoViewerIndex}
         onClose={() => setPhotoViewerIndex(null)}
       /> : null}

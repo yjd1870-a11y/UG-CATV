@@ -103,6 +103,12 @@ try {
   assert.equal(photoResponse.status, 200);
   assert.equal(photoResponse.headers.get('content-type'), 'image/png');
   assert.match(photoResponse.headers.get('cache-control') || '', /no-store/);
+  const photoAccess = await call<{ url: string }>(
+    `/work-transfers/${transferId}/attachments/${detail.payload.data?.attachments[0].id}/access-url`,
+    { cookie: teamCookie },
+  );
+  assert.equal(photoAccess.response.status, 200);
+  assert.equal(photoAccess.payload.data?.url, detail.payload.data?.attachments[0].url);
 
   const fourthPhoto = await call(`/work-transfers/${transferId}/attachments`, {
     method: 'POST', cookie: teamCookie,
