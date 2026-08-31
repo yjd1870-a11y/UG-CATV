@@ -16,7 +16,11 @@ import { normalizeStationName, textValue } from './catv';
 import { saveFloorPlanDataUrl } from './floor-plan-storage';
 import { buildB2CSearchValue } from './b2c-search';
 import { normalizeStraightMapCompactText } from './straight-map-search';
-import { WORK_TRANSFER_REGION_NAMES } from './work-transfer-policy';
+import {
+  WORK_TRANSFER_REGION_NAMES,
+  workTransferRegionParams,
+  workTransferRegionPlaceholders,
+} from './work-transfer-policy';
 
 fs.mkdirSync(path.dirname(env.databasePath), { recursive: true });
 
@@ -676,6 +680,8 @@ const syncRegionAssignments = () => {
     ON CONFLICT(region_name) DO NOTHING
   `);
   WORK_TRANSFER_REGION_NAMES.forEach((regionName, index) => insertRegion.run(randomUUID(), regionName, index + 1));
+  db.prepare(`UPDATE regions SET active = 1 WHERE region_name IN (${workTransferRegionPlaceholders})`)
+    .run(...workTransferRegionParams);
   departments.forEach((entry, index) => insertRegion.run(randomUUID(), entry.department, index + 101));
   const cellRegions = db.prepare(`
     SELECT DISTINCT region FROM cells
