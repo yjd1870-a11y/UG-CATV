@@ -19,6 +19,14 @@ let recognitionInProgress = false;
 
 const abortError = () => new DOMException('OCR 작업이 취소되었습니다.', 'AbortError');
 
+const verifyWebAssemblyExecution = async () => {
+  try {
+    await WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  } catch {
+    throw new Error('브라우저 보안 설정에서 OCR 실행이 차단되었습니다. 화면을 새로고침한 뒤 다시 시도해 주세요.');
+  }
+};
+
 const modelProgressMessage = (status: string) => {
   if (status === 'loading tesseract core') return '무료 OCR 실행 모듈을 준비하고 있습니다.';
   if (status === 'loading language traineddata') return '기기에 저장된 한글·영문 인식 모델을 불러오고 있습니다.';
@@ -42,6 +50,7 @@ export const recognizeWorkTransferPhotoInBrowser = async (
     if (typeof Worker === 'undefined' || typeof WebAssembly === 'undefined') {
       throw new Error('이 브라우저에서는 OCR을 실행할 수 없습니다. 브라우저를 업데이트하거나 직접 입력해 주세요.');
     }
+    await verifyWebAssemblyExecution();
     options.onProgress?.({ stage: 'quality', progress: 0.05, message: '사진 품질을 확인하고 있습니다.' });
     const inspected = await inspectOcrPhotoQuality(file);
     bitmap = inspected.bitmap;
@@ -82,7 +91,7 @@ export const recognizeWorkTransferPhotoInBrowser = async (
     let abortListener: (() => void) | undefined;
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = window.setTimeout(() => reject(new Error('OCR 모델 준비 시간이 초과되었습니다. 다시 시도해 주세요.')), 90_000);
+        timeoutId = window.setTimeout(() => reject(new Error('OCR 모델 준비 시간이 초과되었습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.')), 150_000);
       });
       const abortPromise = new Promise<never>((_, reject) => {
         abortListener = () => reject(abortError());
@@ -110,18 +119,28 @@ export const recognizeWorkTransferPhotoInBrowser = async (
       options.onProgress?.({ stage: 'validation', progress: 0.94, message: '서비스번호·날짜·주소 형식을 검증하고 있습니다.' });
       let fields = parseAndValidateOcrText(text);
       let resultConfidence = result.data.confidence;
-      // 장기 저장하는 필드 중 오인식 영향이 큰 주소만 확대 재검사한다.
-      // 모든 처리는 브라우저 내부에서만 수행된다.
-      options.onProgress?.({ stage: 'recognition', progress: 0.88, message: '주소 영역을 정밀 확인하고 있습니다.' });
-      await worker.setParameters({ tessedit_pageseg_mode: tesseractModule.PSM.SPARSE_TEXT, preserve_interword_spaces: '1' });
-      addressCanvas = prepareOcrAddressCanvas(bitmap);
-      const addressResult = await worker.recognize(addressCanvas);
-      if (options.signal?.aborted) throw abortError();
-      const focusedAddressText = addressResult.data.text.trim();
-      if (focusedAddressText) text = `${text}\n\n[주소 영역 재검사]\n${focusedAddressText}`;
-      resultConfidence = Math.max(resultConfidence, addressResult.data.confidence);
-
-      fields = parseAndValidateOcrText(text);
+      // 주소가 1차 OCR에서 유효하면 고해상도 2차 인식을 생략한다. 저성능
+      // 모바일에서 전체 처리시간을 크게 줄이되, 누락되거나 지나치게 짧은
+      // 주소만 브라우저 내부에서 정밀 재검사한다.
+      const firstAddress = fields.customerAddress.value.trim();
+      const delimiterPairs = [['(', ')'], ['[', ']']] as const;
+      const hasUnbalancedDelimiter = delimiterPairs.some(([open, close]) => (
+        firstAddress.split(open).length !== firstAddress.split(close).length
+      ));
+      const addressNeedsRetry = fields.customerAddress.validationStatus !== 'valid'
+        || firstAddress.length < 24
+        || hasUnbalancedDelimiter;
+      if (addressNeedsRetry) {
+        options.onProgress?.({ stage: 'recognition', progress: 0.88, message: '주소 영역을 정밀 확인하고 있습니다.' });
+        await worker.setParameters({ tessedit_pageseg_mode: tesseractModule.PSM.SPARSE_TEXT, preserve_interword_spaces: '1' });
+        addressCanvas = prepareOcrAddressCanvas(bitmap);
+        const addressResult = await worker.recognize(addressCanvas);
+        if (options.signal?.aborted) throw abortError();
+        const focusedAddressText = addressResult.data.text.trim();
+        if (focusedAddressText) text = `${text}\n\n[주소 영역 재검사]\n${focusedAddressText}`;
+        resultConfidence = Math.max(resultConfidence, addressResult.data.confidence);
+        fields = parseAndValidateOcrText(text);
+      }
       const confidence = Number((Math.max(0, Math.min(100, resultConfidence)) / 100).toFixed(3));
       if (!text) {
         return {

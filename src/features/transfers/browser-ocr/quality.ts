@@ -16,7 +16,7 @@ export const OCR_QUALITY_CONFIG = Object.freeze({
   warningGlareRatio: 0.18,
   warningDarkRatio: 0.28,
   analysisMaximumSide: 960,
-  recognitionMaximumSide: 2400,
+  recognitionMaximumSide: 2200,
   recognitionMinimumLongSide: 1800,
 });
 
@@ -199,7 +199,7 @@ export const prepareOcrAddressCanvas = (bitmap: ImageBitmap) => {
   const sourceY = Math.round(bitmap.height * 0.4);
   const sourceWidth = Math.round(bitmap.width * 0.98);
   const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(bitmap.height * 0.22));
-  const scale = Math.min(3.2, 2800 / Math.max(sourceWidth, sourceHeight));
+  const scale = Math.min(2.8, 2200 / Math.max(sourceWidth, sourceHeight));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(sourceWidth * scale));
   canvas.height = Math.max(1, Math.round(sourceHeight * scale));
