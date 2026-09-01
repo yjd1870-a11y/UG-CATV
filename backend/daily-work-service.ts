@@ -267,22 +267,24 @@ export const aggregateDailyWork = (dimension: AggregateDimension, filters: Daily
   return { categories, rows: resultRows, categoryTotals, grandTotal, from, to };
 };
 
-export const getDailyWorkMeta = (includeUsers = false) => ({
+export const getDailyWorkMeta = (includeUsers = false, regionId?: string) => ({
   today: todayInSeoul(),
   categories: getWorkCategories(),
   regions: (db.prepare(`
     SELECT id, region_name AS name, sort_order AS sortOrder
-      FROM regions WHERE active = 1 ORDER BY sort_order, region_name
-  `).all() as Array<Record<string, unknown>>).map((row) => ({
+      FROM regions WHERE active = 1 ${regionId ? 'AND id = ?' : ''} ORDER BY sort_order, region_name
+  `).all(...(regionId ? [regionId] : [])) as Array<Record<string, unknown>>).map((row) => ({
     id: String(row.id), name: String(row.name), sortOrder: Number(row.sortOrder),
   })),
   users: includeUsers
     ? (db.prepare(`
         SELECT id, name, department, region_id AS regionId,
                COALESCE(access_role, CASE role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) AS role
-          FROM users WHERE status = 'active' AND deleted_at IS NULL
+          FROM users
+         WHERE status = 'active' AND deleted_at IS NULL
+           ${regionId ? 'AND region_id = ?' : ''}
          ORDER BY name
-      `).all() as Array<Record<string, unknown>>).map((row) => ({
+      `).all(...(regionId ? [regionId] : [])) as Array<Record<string, unknown>>).map((row) => ({
         id: String(row.id), name: String(row.name), department: String(row.department),
         regionId: row.regionId ? String(row.regionId) : '', role: String(row.role),
       }))

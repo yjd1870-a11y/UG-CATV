@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowRightLeft, Boxes, ChevronDown, ClipboardList, Pencil, Plus, Radio, Save, Trash2, X, Zap } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { homeApi } from '../../features/home/api';
 import { noticesApi } from '../../features/notices/api';
-import { HomeNotice } from '../../types';
+import { HomeNotice, HomeWorkSummary } from '../../types';
 import { CatvManpowerStatusCard } from './CatvManpowerStatusCard';
 
 const seoulDateParts = (date: Date) => Object.fromEntries(
@@ -25,8 +26,6 @@ export const HomeDashboard: React.FC = () => {
   const {
     currentUser,
     cells,
-    transfers,
-    dailyRecords,
     materialUsage,
     recentCells,
     navigateTo,
@@ -40,6 +39,9 @@ export const HomeDashboard: React.FC = () => {
   const [editingNoticeId, setEditingNoticeId] = useState<string | null>(null);
   const [noticeDraft, setNoticeDraft] = useState({ title: '', content: '' });
   const [newNoticeOpen, setNewNoticeOpen] = useState(false);
+  const [workSummary, setWorkSummary] = useState<HomeWorkSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState(false);
   const canManageNotices = currentUser?.role === 'admin' || currentUser?.role === 'team_leader';
 
   useEffect(() => {
@@ -52,6 +54,17 @@ export const HomeDashboard: React.FC = () => {
       .then(setNotices)
       .catch((error) => showToast(error instanceof Error ? error.message : '전달사항을 불러오지 못했습니다.', 'error'));
   }, [showToast]);
+
+  useEffect(() => {
+    let active = true;
+    setSummaryLoading(true);
+    setSummaryError(false);
+    void homeApi.summary()
+      .then((summary) => { if (active) setWorkSummary(summary); })
+      .catch(() => { if (active) setSummaryError(true); })
+      .finally(() => { if (active) setSummaryLoading(false); });
+    return () => { active = false; };
+  }, [currentUser?.id]);
 
   const startNoticeEdit = (notice: HomeNotice) => {
     setEditingNoticeId(notice.id);
@@ -95,17 +108,9 @@ export const HomeDashboard: React.FC = () => {
     }
   };
 
-  const pendingTransfers = transfers.filter(
-    (transfer) => transfer.status === '대기' || transfer.status === '작업중'
-  );
-
   const todayStr = seoulDateKey(now);
-  const todayUserRecord = dailyRecords.find(
-    (record) => record.date.replace(/\./g, '-') === todayStr && record.workerName === (currentUser?.name || '김현장')
-  );
-  const todayTotalWorkCount = todayUserRecord
-    ? Object.values(todayUserRecord.counts).reduce((total, count) => total + count, 0)
-    : 0;
+  const incompleteTransferCount = workSummary?.incompleteTransferCount || 0;
+  const summaryValue = (value: number | undefined) => summaryLoading ? '…' : summaryError ? '-' : String(value || 0);
 
   const todayMaterials = materialUsage.filter((material) => material.workDate.replace(/\./g, '-').startsWith(todayStr));
   const todayMaterialCount = todayMaterials.reduce((total, material) => total + material.quantity, 0);
@@ -170,9 +175,9 @@ export const HomeDashboard: React.FC = () => {
           </div>
           <span className="home-action-card__title">업무이관</span>
           <p className="home-action-card__description">점검 및 이관 확인</p>
-          {pendingTransfers.length > 0 ? (
+          {incompleteTransferCount > 0 ? (
             <span className="home-action-card__badge">
-              {pendingTransfers.length}건
+              {incompleteTransferCount}건
             </span>
           ) : null}
         </button>
@@ -213,21 +218,33 @@ export const HomeDashboard: React.FC = () => {
           <span className="text-xs font-medium text-[#6B7280]">{seoulDateLabel(now)}</span>
         </div>
 
-        <div className="grid flex-1 grid-cols-2 gap-3 sm:gap-4">
+        <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
           <button
             onClick={() => navigateTo('daily_work')}
             className="flex min-h-28 cursor-pointer flex-col justify-between rounded-xl border border-[#E5E7EB]/70 bg-[#F9FAFB] p-3.5 text-left transition hover:bg-blue-50/40 sm:p-4"
           >
-            <span className="text-xs font-semibold text-[#6B7280]">오늘 작업 업무</span>
+            <span className="text-xs font-semibold text-[#6B7280]">전일 미입력</span>
             <span className="my-1 flex items-baseline gap-1">
               <strong className="text-2xl font-black text-[#173B57] sm:text-3xl">
-                {todayTotalWorkCount}
+                {summaryValue(workSummary?.previousMissingCount)}
               </strong>
-              <span className="text-xs font-medium text-[#9CA3AF]">건</span>
+              <span className="text-xs font-medium text-[#9CA3AF]">명</span>
             </span>
-            <span className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
-              <span className="block h-full w-[70%] bg-[#2878B5]" />
+            <span className="text-[10px] text-gray-400">{workSummary?.previousDate || '서울 기준 전일'}</span>
+          </button>
+
+          <button
+            onClick={() => navigateTo('daily_work')}
+            className="flex min-h-28 cursor-pointer flex-col justify-between rounded-xl border border-[#E5E7EB]/70 bg-[#F9FAFB] p-3.5 text-left transition hover:bg-blue-50/40 sm:p-4"
+          >
+            <span className="text-xs font-semibold text-[#6B7280]">금일 미입력</span>
+            <span className="my-1 flex items-baseline gap-1">
+              <strong className="text-2xl font-black text-[#2878B5] sm:text-3xl">
+                {summaryValue(workSummary?.todayMissingCount)}
+              </strong>
+              <span className="text-xs font-medium text-[#9CA3AF]">명</span>
             </span>
+            <span className="text-[10px] text-gray-400">매니져 입력 현황</span>
           </button>
 
           <button
@@ -237,7 +254,7 @@ export const HomeDashboard: React.FC = () => {
             <span className="text-xs font-semibold text-[#6B7280]">미처리 이관</span>
             <span className="my-1 flex items-baseline gap-1">
               <strong className="text-2xl font-black text-[#F28C28] sm:text-3xl">
-                {pendingTransfers.length < 10 ? `0${pendingTransfers.length}` : pendingTransfers.length}
+                {summaryValue(workSummary?.incompleteTransferCount)}
               </strong>
               <span className="text-xs font-medium text-[#9CA3AF]">건</span>
             </span>

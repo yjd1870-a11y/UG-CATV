@@ -4,12 +4,14 @@ import noticesRouter from '../routes/notices';
 import workTransfersRouter from '../routes/work-transfers';
 import workTransferAnalyticsRouter from '../routes/work-transfer-analytics';
 import manpowerRouter from '../routes/manpower';
+import homeSummaryRouter from '../routes/home-summary';
 import type { ApiModule } from './types';
 
 export const operationsModule: ApiModule = {
   name: '업무 운영',
   routes: [
     { path: '/api/notices', router: noticesRouter },
+    { path: '/api/home', router: homeSummaryRouter },
     { path: '/api/work-transfers/analytics', router: workTransferAnalyticsRouter },
     { path: '/api/work-transfers', router: workTransfersRouter },
     { path: '/api/daily-work', router: dailyWorkRouter },

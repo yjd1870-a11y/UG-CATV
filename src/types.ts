@@ -11,6 +11,14 @@ export interface HomeNotice {
   updatedByName?: string;
 }
 
+export interface HomeWorkSummary {
+  previousDate: string;
+  today: string;
+  previousMissingCount: number;
+  todayMissingCount: number;
+  incompleteTransferCount: number;
+}
+
 export interface User {
   id: string;
   username?: string;

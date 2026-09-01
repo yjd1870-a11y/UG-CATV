@@ -26,11 +26,19 @@ export const dailyWorkApi = {
   meta: () => request<DailyWorkMeta>('/daily-work/meta'),
   my: (query = '') => request<DailyWorkAggregate>(`/daily-work/my${query ? `?${query}` : ''}`),
   detail: (id: string) => request<DailyWorkRecord>(`/daily-work/${encodeURIComponent(id)}`),
+  find: (date: string, userId?: string) => {
+    const params = new URLSearchParams({ date });
+    if (userId) params.set('userId', userId);
+    return request<DailyWorkRecord | null>(`/daily-work/record?${params.toString()}`);
+  },
   save: (input: { date: string; counts: Record<string, number>; memo?: string; cellId?: string; userId?: string; updatedAt?: string }) =>
     request<DailyWorkRecord>('/daily-work', { method: 'POST', body: JSON.stringify(input) }),
   update: (id: string, input: { date?: string; counts: Record<string, number>; memo?: string; updatedAt?: string }) =>
     request<DailyWorkRecord>(`/daily-work/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) }),
   history: (id: string) => request<Array<Record<string, unknown>>>(`/daily-work/${encodeURIComponent(id)}/history`),
+  remove: (id: string, reason?: string) => request<{ id: string; deleted: boolean; hardDeleted: boolean }>(`/daily-work/${encodeURIComponent(id)}`, {
+    method: 'DELETE', body: JSON.stringify({ reason }),
+  }),
   export: (query: DailyWorkQuery) => downloadFile(`/daily-work/export?${queryString(query)}`, '전송망_일일업무.xlsx'),
 };
 

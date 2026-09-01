@@ -13,6 +13,7 @@ import {
   Save,
   Search,
   SlidersHorizontal,
+  Trash2,
   Users,
   X,
 } from 'lucide-react';
@@ -179,8 +180,10 @@ const ResultView: React.FC<{
 };
 
 export const DailyWorkView: React.FC = () => {
-  const { currentUser, showToast } = useApp();
+  const { currentUser, reloadBusinessData, showToast } = useApp();
   const isAdmin = currentUser?.role === 'admin';
+  const canManageDailyWork = currentUser?.role === 'admin' || currentUser?.role === 'public_official' || currentUser?.role === 'team_leader';
+  const canDeleteDailyWork = currentUser?.role === 'admin' || currentUser?.role === 'public_official';
   const canExport = canExportDailyWork(currentUser?.role);
   const [mode, setMode] = useState<MainMode>('register');
   const [meta, setMeta] = useState<DailyWorkMeta | null>(null);
@@ -189,6 +192,7 @@ export const DailyWorkView: React.FC = () => {
   const [formCounts, setFormCounts] = useState<Record<string, number>>({});
   const [memo, setMemo] = useState('');
   const [existing, setExisting] = useState<DailyWorkRecord | null>(null);
+  const [targetUserId, setTargetUserId] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [from, setFrom] = useState('');
@@ -217,6 +221,7 @@ export const DailyWorkView: React.FC = () => {
   const [newCategoryName, setNewCategoryName] = useState('');
 
   const total = useMemo(() => (Object.values(formCounts) as number[]).reduce((sum, count) => sum + Number(count || 0), 0), [formCounts]);
+  const selectedTarget = meta?.users.find((user) => user.id === targetUserId);
 
   useEffect(() => {
     let mounted = true;
@@ -231,16 +236,8 @@ export const DailyWorkView: React.FC = () => {
         setYear(loadedMeta.today.slice(0, 4));
         setMonth(loadedMeta.today.slice(5, 7));
         setFormCounts(emptyCounts(loadedMeta.categories));
-        const ownToday = await dailyWorkApi.my(`from=${loadedMeta.today}&to=${loadedMeta.today}`);
-        const todayRow = ownToday.rows[0];
-        if (todayRow?.id) {
-          const record = await dailyWorkApi.detail(todayRow.id);
-          if (!mounted) return;
-          setExisting(record);
-          setFormCounts({ ...emptyCounts(loadedMeta.categories), ...record.counts });
-          setMemo(record.memo || '');
-        }
-        if (isAdmin) {
+        setTargetUserId(currentUser?.id || '');
+        if (canManageDailyWork) {
           const [loadedSummary, initialAdmin] = await Promise.all([
             adminDailyWorkApi.summary(),
             adminDailyWorkApi.query('period', { from: firstDayOfMonth(loadedMeta.today), to: loadedMeta.today, sortOrder: 'asc' }),
@@ -256,7 +253,24 @@ export const DailyWorkView: React.FC = () => {
       }
     })();
     return () => { mounted = false; };
-  }, [isAdmin]);
+  }, [canManageDailyWork, currentUser?.id]);
+
+  useEffect(() => {
+    if (!meta || !formDate || !targetUserId) return;
+    let active = true;
+    setExisting(null);
+    setFormCounts(emptyCounts(meta.categories));
+    setMemo('');
+    void dailyWorkApi.find(formDate, canManageDailyWork ? targetUserId : undefined)
+      .then((record) => {
+        if (!active || !record) return;
+        setExisting(record);
+        setFormCounts({ ...emptyCounts(meta.categories), ...record.counts });
+        setMemo(record.memo || '');
+      })
+      .catch((error) => { if (active) showToast(error instanceof Error ? error.message : '일일업무를 불러오지 못했습니다.', 'error'); });
+    return () => { active = false; };
+  }, [canManageDailyWork, formDate, meta, showToast, targetUserId]);
 
   const saveForm = async () => {
     if (!meta) return;
@@ -264,9 +278,11 @@ export const DailyWorkView: React.FC = () => {
     try {
       const saved = existing
         ? await dailyWorkApi.update(existing.id, { date: formDate, counts: formCounts, memo, updatedAt: existing.updatedAt })
-        : await dailyWorkApi.save({ date: formDate, counts: formCounts, memo });
+        : await dailyWorkApi.save({ date: formDate, counts: formCounts, memo, userId: canManageDailyWork ? targetUserId : undefined });
       setExisting(saved);
       setFormCounts({ ...emptyCounts(meta.categories), ...saved.counts });
+      if (canManageDailyWork) setSummary(await adminDailyWorkApi.summary());
+      await reloadBusinessData();
       showToast('일일업무가 저장되었습니다.', 'success');
     } catch (error) {
       if (error instanceof ApiClientError && error.code === 'STALE_UPDATE') {
@@ -326,7 +342,7 @@ export const DailyWorkView: React.FC = () => {
     try {
       if (row.id) {
         const [loaded, history] = await Promise.all([
-          isAdmin ? adminDailyWorkApi.detail(row.id) : dailyWorkApi.detail(row.id),
+          dailyWorkApi.detail(row.id),
           dailyWorkApi.history(row.id),
         ]);
         setDetail(loaded);
@@ -337,7 +353,7 @@ export const DailyWorkView: React.FC = () => {
         setDrillRows([]);
         return;
       }
-      if (!isAdmin) return;
+      if (!canManageDailyWork) return;
       const drilled = await adminDailyWorkApi.drilldown({
         from: row.workDate,
         to: row.workDate,
@@ -365,8 +381,34 @@ export const DailyWorkView: React.FC = () => {
       showToast('일일업무가 수정되었습니다.', 'success');
       if (mode === 'admin') await loadAdmin();
       if (mode === 'my') await loadMy();
+      if (canManageDailyWork) setSummary(await adminDailyWorkApi.summary());
+      await reloadBusinessData();
     } catch (error) {
       showToast(error instanceof Error ? error.message : '수정하지 못했습니다.', 'error');
+    }
+  };
+
+  const deleteDetail = async () => {
+    if (!detail || !canDeleteDailyWork) return;
+    if (!window.confirm(`${detail.workerName}님의 ${detail.workDate || detail.date} 일일업무를 DB에서 완전히 삭제하시겠습니까?`)) return;
+    const reason = window.prompt('삭제 사유를 입력해주세요. 감사 로그에 기록됩니다.', '')?.trim();
+    if (reason === undefined) return;
+    try {
+      await dailyWorkApi.remove(detail.id, reason);
+      setDetail(null);
+      setDetailHistory([]);
+      if (existing?.id === detail.id && meta) {
+        setExisting(null);
+        setFormCounts(emptyCounts(meta.categories));
+        setMemo('');
+      }
+      if (mode === 'admin') await loadAdmin();
+      if (mode === 'my') await loadMy();
+      if (canManageDailyWork) setSummary(await adminDailyWorkApi.summary());
+      await reloadBusinessData();
+      showToast('일일업무와 연관 데이터를 완전히 삭제했습니다.', 'info');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '일일업무를 삭제하지 못했습니다.', 'error');
     }
   };
 
@@ -441,7 +483,7 @@ export const DailyWorkView: React.FC = () => {
           {([
             ['register', '일일업무 등록'],
             ['my', '내 업무내역'],
-            ...(isAdmin ? [['admin', '관리자 통계']] : []),
+            ...(canManageDailyWork ? [['admin', '업무 관리']] : []),
           ] as Array<[MainMode, string]>).map(([value, label]) => (
             <button key={value} type="button" onClick={() => { setMode(value); if (value === 'my' && !myData) void loadMy(); }} className={`whitespace-nowrap rounded-lg px-3.5 py-2 text-xs font-bold ${mode === value ? 'bg-[#173B57] text-white' : 'text-slate-500 hover:bg-slate-50'}`}>
               {label}
@@ -453,16 +495,20 @@ export const DailyWorkView: React.FC = () => {
       {mode === 'register' && (
         <div className="space-y-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+            <div className={`grid gap-3 ${canManageDailyWork ? 'sm:grid-cols-[1fr_1.3fr_auto]' : 'sm:grid-cols-[1fr_1fr_auto]'} sm:items-end`}>
               <label className="text-xs font-bold text-slate-500">날짜
-                <input type="date" value={formDate} readOnly={!isAdmin} onChange={(event) => setFormDate(event.target.value)} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 font-bold text-[#173B57] outline-none" />
+                <input type="date" value={formDate} max={meta.today} readOnly={!canManageDailyWork} onChange={(event) => setFormDate(event.target.value)} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 font-bold text-[#173B57] outline-none" />
               </label>
-              <div>
+              {canManageDailyWork ? <label className="text-xs font-bold text-slate-500">담당자 / 지역
+                <select value={targetUserId} onChange={(event) => setTargetUserId(event.target.value)} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-extrabold text-[#173B57] outline-none">
+                  {meta.users.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.department}</option>)}
+                </select>
+              </label> : <div>
                 <p className="text-xs font-bold text-slate-500">담당자 / 지역</p>
-                <p className="mt-1.5 flex h-11 items-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-extrabold text-[#173B57]">{currentUser?.name} · {currentUser?.team}</p>
-              </div>
+                <p className="mt-1.5 flex h-11 items-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-extrabold text-[#173B57]">{currentUser?.name} · {currentUser?.regionName || currentUser?.team}</p>
+              </div>}
               <div className="flex h-14 items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-4 sm:min-w-40">
-                <span className="text-xs font-bold text-slate-500">오늘 합계</span>
+                <span className="text-xs font-bold text-slate-500">{formDate === meta.today ? '오늘 합계' : '선택일 합계'}</span>
                 <span className="text-2xl font-black text-[#F28C28]">{formatNumber(total)}<small className="ml-1 text-xs">건</small></span>
               </div>
             </div>
@@ -481,7 +527,7 @@ export const DailyWorkView: React.FC = () => {
 
           <button type="button" disabled={saving} onClick={() => void saveForm()} className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#F28C28] text-base font-black text-white shadow-sm disabled:opacity-60">
             {saving ? <RotateCcw className="h-5 w-5 animate-spin" /> : existing ? <Check className="h-5 w-5" /> : <Save className="h-5 w-5" />}
-            {saving ? '저장 중...' : existing ? `오늘 업무 수정 · ${formatNumber(total)}건` : `일일업무 저장 · ${formatNumber(total)}건`}
+            {saving ? '저장 중...' : existing ? `${selectedTarget?.name || currentUser?.name || ''} 업무 수정 · ${formatNumber(total)}건` : `일일업무 저장 · ${formatNumber(total)}건`}
           </button>
         </div>
       )}
@@ -504,7 +550,7 @@ export const DailyWorkView: React.FC = () => {
         </div>
       )}
 
-      {mode === 'admin' && isAdmin && (
+      {mode === 'admin' && canManageDailyWork && (
         <div className="space-y-3">
           {summary && (
             <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
@@ -524,7 +570,7 @@ export const DailyWorkView: React.FC = () => {
                 ['person', '개인별'], ['region', '지역별'], ['month', '월별'], ['period', '기간별'],
               ] as Array<[AdminMode, string]>).map(([value, label]) => <button key={value} type="button" onClick={() => { setAdminMode(value); void loadAdmin(value); }} className={`whitespace-nowrap rounded-xl px-4 py-2 text-xs font-bold ${adminMode === value ? 'bg-[#173B57] text-white' : 'border border-slate-200 bg-slate-50 text-slate-500'}`}>{label}</button>)}
               </div>
-              <button type="button" onClick={() => void openCategoryManager()} className="flex h-9 items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-[#2878B5]"><SlidersHorizontal className="h-4 w-4" />업무구분 관리</button>
+              {isAdmin ? <button type="button" onClick={() => void openCategoryManager()} className="flex h-9 items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-[#2878B5]"><SlidersHorizontal className="h-4 w-4" />업무구분 관리</button> : null}
             </div>
 
             {adminMode === 'period' && <div className="mb-3 flex flex-wrap gap-1.5">{([['today', '오늘'], ['yesterday', '어제'], ['week', '이번주'], ['lastWeek', '지난주'], ['month', '이번달'], ['lastMonth', '지난달']] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setQuickRange(value)} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-600">{label}</button>)}</div>}
@@ -604,7 +650,15 @@ export const DailyWorkView: React.FC = () => {
             <div className="mt-4"><p className="text-xs font-bold text-slate-500">비고</p>{detailEditing ? <textarea value={detailMemo} onChange={(event) => setDetailMemo(event.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-slate-200 p-3 text-sm" /> : <p className="mt-2 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{detail.memo || '등록된 비고가 없습니다.'}</p>}</div>
             <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-400"><p>등록시간<br /><span className="text-slate-600">{detail.createdAt || '-'}</span></p><p>최종수정시간<br /><span className="text-slate-600">{detail.updatedAt || '-'}</span></p></div>
             {detailHistory.length > 0 && <div className="mt-4 rounded-xl border border-slate-200 p-3"><p className="mb-2 text-xs font-black text-[#173B57]">변경이력</p><div className="space-y-1.5">{detailHistory.slice(0, 5).map((entry) => <div key={String(entry.id)} className="flex items-center justify-between text-[11px]"><span className="font-bold text-slate-600">{String(entry.changedByName || '')} · {String(entry.changeType || '')}</span><span className="text-slate-400">{String(entry.changedAt || '')}</span></div>)}</div></div>}
-            {(isAdmin || detail.canEdit) && <div className="mt-5 flex gap-2">{detailEditing ? <><button type="button" onClick={() => setDetailEditing(false)} className="h-11 flex-1 rounded-xl border border-slate-200 text-sm font-bold">취소</button><button type="button" onClick={() => void saveDetail()} className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#F28C28] text-sm font-bold text-white"><Save className="h-4 w-4" />저장</button></> : <button type="button" onClick={() => setDetailEditing(true)} className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-[#173B57] text-sm font-bold text-white"><Pencil className="h-4 w-4" />수정</button>}</div>}
+            {(detail.canEdit || canDeleteDailyWork) && <div className="mt-5 flex gap-2">
+              {detailEditing ? <>
+                <button type="button" onClick={() => setDetailEditing(false)} className="h-11 flex-1 rounded-xl border border-slate-200 text-sm font-bold">취소</button>
+                <button type="button" onClick={() => void saveDetail()} className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#F28C28] text-sm font-bold text-white"><Save className="h-4 w-4" />저장</button>
+              </> : <>
+                {canDeleteDailyWork ? <button type="button" onClick={() => void deleteDetail()} className="flex h-11 items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 text-sm font-bold text-rose-700"><Trash2 className="h-4 w-4" />삭제</button> : null}
+                {detail.canEdit ? <button type="button" onClick={() => setDetailEditing(true)} className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#173B57] text-sm font-bold text-white"><Pencil className="h-4 w-4" />수정</button> : null}
+              </>}
+            </div>}
           </div>
         </div>
       )}

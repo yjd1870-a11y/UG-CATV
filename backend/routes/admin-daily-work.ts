@@ -13,10 +13,15 @@ import {
   todayInSeoul,
 } from '../daily-work-service';
 import { ApiError, asText, success } from '../http';
-import { requireAuth, requireRoles } from '../security/session';
+import { authUser, type AuthUser, requireAuth, requireRoles } from '../security/session';
 
 const router = Router();
-router.use(requireAuth, requireRoles('admin'));
+router.use(requireAuth, requireRoles('admin', 'public_official', 'team_leader'));
+
+const requireRegion = (user: AuthUser) => {
+  if (user.regionId) return user.regionId;
+  throw new ApiError(403, '계정에 담당 지역이 지정되지 않았습니다. 관리자에게 문의해 주세요.', 'REGION_REQUIRED');
+};
 
 const filtersFromQuery = (query: Record<string, unknown>): DailyWorkFilters => ({
   from: typeof query.from === 'string' ? query.from : undefined,
@@ -30,28 +35,44 @@ const filtersFromQuery = (query: Record<string, unknown>): DailyWorkFilters => (
   sortOrder: typeof query.sortOrder === 'string' ? query.sortOrder : undefined,
 });
 
+const scopedFilters = (user: AuthUser, query: Record<string, unknown>): DailyWorkFilters => ({
+  ...filtersFromQuery(query),
+  ...(user.role === 'team_leader' ? { regionId: requireRegion(user) } : {}),
+});
+
 const aggregateHandler = (dimension: AggregateDimension) => (req: Request, res: Response) => {
-  success(res, aggregateDailyWork(dimension, filtersFromQuery(req.query as Record<string, unknown>)));
+  success(res, aggregateDailyWork(dimension, scopedFilters(authUser(req), req.query as Record<string, unknown>)));
 };
 
-router.get('/meta', (_req, res) => success(res, getDailyWorkMeta(true)));
+router.get('/meta', (req, res) => {
+  const user = authUser(req);
+  success(res, getDailyWorkMeta(true, user.role === 'team_leader' ? requireRegion(user) : undefined));
+});
 
-router.get('/summary', (_req, res) => {
+router.get('/summary', (req, res) => {
+  const user = authUser(req);
   const today = todayInSeoul();
   const monthStart = `${today.slice(0, 7)}-01`;
+  const regionId = user.role === 'team_leader' ? requireRegion(user) : undefined;
   const totalFor = (from: string, to: string) => Number((db.prepare(`
     SELECT COALESCE(SUM(i.work_count), 0) AS total
       FROM daily_work d JOIN daily_work_items i ON i.daily_work_id = d.id
      WHERE d.deleted_at IS NULL AND d.work_date BETWEEN ? AND ?
-  `).get(from, to) as { total: number }).total);
+       ${regionId ? 'AND d.region_id = ?' : ''}
+  `).get(...(regionId ? [from, to, regionId] : [from, to])) as { total: number }).total);
   const entered = Number((db.prepare(`
-    SELECT COUNT(DISTINCT user_id) AS count FROM daily_work
-     WHERE deleted_at IS NULL AND work_date = ?
-  `).get(today) as { count: number }).count);
+    SELECT COUNT(DISTINCT d.user_id) AS count
+      FROM daily_work d JOIN users u ON u.id = d.user_id
+     WHERE d.deleted_at IS NULL AND d.work_date = ?
+       AND COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) = 'manager'
+       ${regionId ? 'AND u.region_id = ?' : ''}
+  `).get(...(regionId ? [today, regionId] : [today])) as { count: number }).count);
   const target = Number((db.prepare(`
-    SELECT COUNT(*) AS count FROM users
-     WHERE status = 'active' AND deleted_at IS NULL AND role IN ('worker', 'manager')
-  `).get() as { count: number }).count);
+    SELECT COUNT(*) AS count FROM users u
+     WHERE u.status = 'active' AND u.deleted_at IS NULL
+       AND COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) = 'manager'
+       ${regionId ? 'AND u.region_id = ?' : ''}
+  `).get(...(regionId ? [regionId] : [])) as { count: number }).count);
   success(res, {
     today,
     todayTotal: totalFor(today, today),
@@ -67,22 +88,33 @@ router.get('/month', aggregateHandler('month'));
 router.get('/period', aggregateHandler('period'));
 
 router.get('/detail/:id', (req, res) => {
-  success(res, { ...getDailyWorkRecord(req.params.id), canEdit: true });
+  const user = authUser(req);
+  const record = getDailyWorkRecord(req.params.id);
+  if (user.role === 'team_leader' && record.regionId !== requireRegion(user)) {
+    throw new ApiError(404, '일일업무를 찾을 수 없습니다.', 'NOT_FOUND');
+  }
+  success(res, { ...record, canEdit: true });
 });
 
 router.get('/drilldown', (req, res) => {
-  success(res, aggregateDailyWork('person', filtersFromQuery(req.query as Record<string, unknown>)));
+  success(res, aggregateDailyWork('person', scopedFilters(authUser(req), req.query as Record<string, unknown>)));
 });
 
 router.get('/history', (req, res) => {
+  const user = authUser(req);
   const workId = typeof req.query.workId === 'string' ? req.query.workId : '';
+  const regionId = user.role === 'team_leader' ? requireRegion(user) : '';
+  const clauses = [workId ? 'h.daily_work_id = ?' : '', regionId ? 'd.region_id = ?' : ''].filter(Boolean);
+  const params = [...(workId ? [workId] : []), ...(regionId ? [regionId] : [])];
   const rows = db.prepare(`
     SELECT h.id, h.daily_work_id, h.change_type, h.before_data, h.after_data,
            h.changed_at, u.name AS changed_by_name
-      FROM daily_work_history h JOIN users u ON u.id = h.changed_by
-     ${workId ? 'WHERE h.daily_work_id = ?' : ''}
+      FROM daily_work_history h
+      JOIN users u ON u.id = h.changed_by
+      JOIN daily_work d ON d.id = h.daily_work_id
+     ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
      ORDER BY h.changed_at DESC LIMIT 500
-  `).all(...(workId ? [workId] : [])) as Array<Record<string, unknown>>;
+  `).all(...params) as Array<Record<string, unknown>>;
   success(res, rows.map((row) => ({
     id: String(row.id), dailyWorkId: String(row.daily_work_id),
     changeType: String(row.change_type),
@@ -95,7 +127,7 @@ router.get('/history', (req, res) => {
 router.get('/export', (req, res) => {
   const mode = String(req.query.mode || 'period');
   const dimension: AggregateDimension = mode === 'person' || mode === 'region' || mode === 'month' ? mode : 'period';
-  const result = aggregateDailyWork(dimension, filtersFromQuery(req.query as Record<string, unknown>));
+  const result = aggregateDailyWork(dimension, scopedFilters(authUser(req), req.query as Record<string, unknown>));
   const labelByCode = Object.fromEntries(result.categories.map((category) => [category.code, category.name]));
   const header = ['날짜'];
   if (dimension === 'person') header.push('담당자', '지역');
@@ -139,9 +171,9 @@ router.get('/export', (req, res) => {
   res.send(buffer);
 });
 
-router.get('/categories', (_req, res) => success(res, getWorkCategories(true)));
+router.get('/categories', requireRoles('admin'), (_req, res) => success(res, getWorkCategories(true)));
 
-router.post('/categories', (req, res) => {
+router.post('/categories', requireRoles('admin'), (req, res) => {
   const name = asText(req.body?.name, '업무구분명', 80);
   const max = db.prepare(`SELECT COALESCE(MAX(CAST(substr(code, 5) AS INTEGER)), 0) AS value FROM work_categories WHERE code LIKE 'WORK%'`).get() as { value: number };
   const code = `WORK${String(max.value + 1).padStart(2, '0')}`;
@@ -151,7 +183,7 @@ router.post('/categories', (req, res) => {
   success(res, { id, code, name, sortOrder: sort, active: true }, 201);
 });
 
-router.put('/categories/:id', (req, res) => {
+router.put('/categories/:id', requireRoles('admin'), (req, res) => {
   const existing = db.prepare('SELECT * FROM work_categories WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
   if (!existing) throw new ApiError(404, '업무구분을 찾을 수 없습니다.', 'NOT_FOUND');
   const name = req.body?.name === undefined ? String(existing.category_name) : asText(req.body.name, '업무구분명', 80);

@@ -13,18 +13,60 @@ import {
   todayInSeoul,
 } from '../daily-work-service';
 import { ApiError, optionalText, success } from '../http';
-import { authUser, requireAuth, requireRoles } from '../security/session';
+import { writeAuditLog } from '../security/audit';
+import { authUser, type AuthUser, requireAuth, requireRoles } from '../security/session';
 
 const router = Router();
 router.use(requireAuth);
 
-const assertCanEdit = (role: string, requesterId: string, ownerId: string, workDate: string) => {
-  if (role === 'admin') return;
-  if (requesterId !== ownerId) {
+const globalDailyWorkRoles = new Set(['admin', 'public_official']);
+const delegatedDailyWorkRoles = new Set(['admin', 'public_official', 'team_leader']);
+
+type DailyWorkTarget = {
+  id: string;
+  name: string;
+  department: string;
+  region_id: string | null;
+};
+
+const requireRegion = (user: AuthUser) => {
+  if (user.regionId) return user.regionId;
+  throw new ApiError(403, '계정에 담당 지역이 지정되지 않았습니다. 관리자에게 문의해 주세요.', 'REGION_REQUIRED');
+};
+
+const activeTarget = (targetUserId: string) => {
+  const target = db.prepare(`
+    SELECT id, name, department, region_id
+      FROM users WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+  `).get(targetUserId) as DailyWorkTarget | undefined;
+  if (!target) throw new ApiError(404, '작업자를 찾을 수 없습니다.', 'NOT_FOUND');
+  return target;
+};
+
+const assertCanAccess = (user: AuthUser, ownerId: string, regionId: string | undefined) => {
+  if (globalDailyWorkRoles.has(user.role)) return;
+  if (user.role === 'team_leader' && regionId && regionId === requireRegion(user)) return;
+  if (user.role === 'manager' && ownerId === user.id) return;
+  throw new ApiError(404, '일일업무를 찾을 수 없습니다.', 'NOT_FOUND');
+};
+
+const assertCanEdit = (user: AuthUser, target: DailyWorkTarget, workDate: string) => {
+  const today = todayInSeoul();
+  if (workDate > today) {
+    throw new ApiError(400, '미래 날짜의 일일업무는 등록할 수 없습니다.', 'FUTURE_WORK_DATE');
+  }
+  if (globalDailyWorkRoles.has(user.role)) return;
+  if (user.role === 'team_leader') {
+    if (!target.region_id || target.region_id !== requireRegion(user)) {
+      throw new ApiError(404, '작업자를 찾을 수 없습니다.', 'NOT_FOUND');
+    }
+    return;
+  }
+  if (target.id !== user.id) {
     throw new ApiError(403, '본인의 일일업무만 수정할 수 있습니다.', 'FORBIDDEN');
   }
-  if (workDate !== todayInSeoul()) {
-    throw new ApiError(403, '일반 사용자는 오늘 일일업무만 수정할 수 있습니다.', 'PAST_WORK_LOCKED');
+  if (workDate !== today) {
+    throw new ApiError(403, '매니져는 오늘 일일업무만 수정할 수 있습니다.', 'PAST_WORK_LOCKED');
   }
 };
 
@@ -41,7 +83,9 @@ const writeItems = (dailyWorkId: string, counts: ReturnType<typeof normalizeWork
 
 router.get('/meta', (req, res) => {
   const user = authUser(req);
-  success(res, getDailyWorkMeta(user.role === 'admin' || user.role === 'team_leader'));
+  const includeUsers = delegatedDailyWorkRoles.has(user.role);
+  const regionId = user.role === 'team_leader' ? requireRegion(user) : undefined;
+  success(res, getDailyWorkMeta(includeUsers, regionId));
 });
 
 router.get('/my', (req, res) => {
@@ -88,12 +132,30 @@ router.get('/export', requireRoles('admin', 'team_leader', 'public_official'), (
   res.send(buffer);
 });
 
+router.get('/record', (req, res) => {
+  const user = authUser(req);
+  const workDate = normalizeWorkDate(req.query.date);
+  const targetUserId = typeof req.query.userId === 'string' && req.query.userId ? req.query.userId : user.id;
+  const target = activeTarget(targetUserId);
+  assertCanAccess(user, target.id, target.region_id || undefined);
+  const row = db.prepare(`
+    SELECT id FROM daily_work
+     WHERE work_date = ? AND user_id = ? AND title = '일일업무 집계' AND deleted_at IS NULL
+  `).get(workDate, target.id) as { id: string } | undefined;
+  if (!row) {
+    success(res, null);
+    return;
+  }
+  const record = getDailyWorkRecord(row.id);
+  let canEdit = true;
+  try { assertCanEdit(user, target, workDate); } catch { canEdit = false; }
+  success(res, { ...record, canEdit });
+});
+
 router.get('/:id/history', (req, res) => {
   const user = authUser(req);
   const record = getDailyWorkRecord(req.params.id, true);
-  if (user.role !== 'admin' && record.userId !== user.id) {
-    throw new ApiError(403, '변경이력을 조회할 권한이 없습니다.', 'FORBIDDEN');
-  }
+  assertCanAccess(user, record.userId, record.regionId);
   const rows = db.prepare(`
     SELECT h.id, h.change_type, h.before_data, h.after_data, h.changed_at,
            u.id AS changed_by, u.name AS changed_by_name
@@ -116,13 +178,11 @@ router.get('/:id/history', (req, res) => {
 router.get('/:id', (req, res) => {
   const user = authUser(req);
   const record = getDailyWorkRecord(req.params.id);
-  if ((user.role === 'manager' || user.role === 'public_official') && record.userId !== user.id) {
-    throw new ApiError(403, '다른 사용자의 일일업무를 조회할 수 없습니다.', 'FORBIDDEN');
-  }
-  if (user.role === 'team_leader' && record.team !== user.department && record.userId !== user.id) {
-    throw new ApiError(403, '다른 지역의 일일업무를 조회할 수 없습니다.', 'FORBIDDEN');
-  }
-  success(res, { ...record, canEdit: user.role === 'admin' || (record.userId === user.id && record.workDate === todayInSeoul()) });
+  assertCanAccess(user, record.userId, record.regionId);
+  const target = activeTarget(record.userId);
+  let canEdit = true;
+  try { assertCanEdit(user, target, record.workDate); } catch { canEdit = false; }
+  success(res, { ...record, canEdit });
 });
 
 router.get('/', (req, res) => {
@@ -130,26 +190,23 @@ router.get('/', (req, res) => {
   const result = aggregateDailyWork('person', {
     from: typeof req.query.date === 'string' ? req.query.date : undefined,
     to: typeof req.query.date === 'string' ? req.query.date : undefined,
-    userId: user.role === 'manager' || user.role === 'public_official' ? user.id : undefined,
-    regionId: undefined,
+    userId: user.role === 'manager' ? user.id : undefined,
+    regionId: user.role === 'team_leader' ? requireRegion(user) : undefined,
     sortOrder: 'desc',
   });
-  if (user.role === 'team_leader') {
-    result.rows = result.rows.filter((row) => row.regionName === user.department);
-  }
   success(res, result.rows);
 });
 
 router.post('/', (req, res) => {
   const user = authUser(req);
   const workDate = normalizeWorkDate(req.body?.date || req.body?.workDate);
-  const targetUserId = user.role === 'admin' && req.body?.userId ? String(req.body.userId) : user.id;
-  assertCanEdit(user.role, user.id, targetUserId, workDate);
-  const target = db.prepare(`
-    SELECT id, name, department, region_id
-      FROM users WHERE id = ? AND status = 'active' AND deleted_at IS NULL
-  `).get(targetUserId) as { id: string; name: string; department: string; region_id: string | null } | undefined;
-  if (!target) throw new ApiError(404, '작업자를 찾을 수 없습니다.', 'NOT_FOUND');
+  const requestedTargetId = req.body?.userId ? String(req.body.userId) : user.id;
+  const targetUserId = delegatedDailyWorkRoles.has(user.role) ? requestedTargetId : user.id;
+  if (!delegatedDailyWorkRoles.has(user.role) && requestedTargetId !== user.id) {
+    throw new ApiError(403, '다른 사용자의 일일업무를 등록할 수 없습니다.', 'FORBIDDEN');
+  }
+  const target = activeTarget(targetUserId);
+  assertCanEdit(user, target, workDate);
   if (!target.region_id) {
     const knownRegion = db.prepare('SELECT id FROM regions WHERE region_name = ?').get(target.department) as { id: string } | undefined;
     const resolvedRegionId = knownRegion?.id || randomUUID();
@@ -172,6 +229,9 @@ router.post('/', (req, res) => {
   `).get(workDate, targetUserId) as { id: string; deleted_at: string | null } | undefined;
   const id = existing?.id || randomUUID();
   const before = existing && !existing.deleted_at ? getDailyWorkRecord(id) : null;
+  if (before && !req.body?.updatedAt) {
+    throw new ApiError(409, '이미 등록된 일일업무입니다. 기존 업무를 불러와 수정해 주세요.', 'DAILY_WORK_EXISTS');
+  }
   if (before && req.body?.updatedAt && String(req.body.updatedAt) !== before.updatedAt) {
     throw new ApiError(409, '다른 사용자가 먼저 수정했습니다. 최신 내용을 다시 불러와 주세요.', 'STALE_UPDATE');
   }
@@ -209,10 +269,17 @@ router.put('/:id', (req, res) => {
   const user = authUser(req);
   const before = getDailyWorkRecord(req.params.id);
   const workDate = normalizeWorkDate(req.body?.date || req.body?.workDate || before.workDate);
-  assertCanEdit(user.role, user.id, before.userId, workDate);
+  const target = activeTarget(before.userId);
+  assertCanEdit(user, target, workDate);
   if (req.body?.updatedAt && String(req.body.updatedAt) !== before.updatedAt) {
     throw new ApiError(409, '다른 사용자가 먼저 수정했습니다. 최신 내용을 다시 불러와 주세요.', 'STALE_UPDATE');
   }
+  const duplicate = db.prepare(`
+    SELECT id FROM daily_work
+     WHERE work_date = ? AND user_id = ? AND title = '일일업무 집계'
+       AND deleted_at IS NULL AND id <> ?
+  `).get(workDate, before.userId, req.params.id) as { id: string } | undefined;
+  if (duplicate) throw new ApiError(409, '해당 날짜에 이미 등록된 일일업무가 있습니다.', 'DAILY_WORK_EXISTS');
   const categories = getWorkCategories();
   const counts = normalizeWorkCounts(req.body?.counts || before.counts, categories);
   const memo = req.body?.memo === undefined ? before.memo : optionalText(req.body.memo, 3000);
@@ -240,17 +307,30 @@ router.put('/:id', (req, res) => {
 
 router.delete('/:id', (req, res) => {
   const user = authUser(req);
-  if (user.role !== 'admin') throw new ApiError(403, '관리자만 일일업무를 삭제할 수 있습니다.', 'FORBIDDEN');
+  if (!globalDailyWorkRoles.has(user.role)) {
+    throw new ApiError(403, '관리자와 공무만 일일업무를 삭제할 수 있습니다.', 'FORBIDDEN');
+  }
   const before = getDailyWorkRecord(req.params.id);
-  const now = new Date().toISOString();
+  const reason = optionalText(req.body?.reason, 500) || '사유 미입력';
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare(`
-      UPDATE daily_work SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ?
-    `).run(now, now, user.id, req.params.id);
-    saveHistory(req.params.id, user.id, 'DELETE', before, null);
+    writeAuditLog(req, {
+      action: 'DAILY_WORK_DELETE',
+      targetType: 'daily_work',
+      targetId: req.params.id,
+      metadata: {
+        reason,
+        workerId: before.userId,
+        workerName: before.workerName,
+        workDate: before.workDate,
+        total: before.total,
+      },
+    });
+    db.prepare('DELETE FROM daily_work_history WHERE daily_work_id = ?').run(req.params.id);
+    const deleted = db.prepare('DELETE FROM daily_work WHERE id = ?').run(req.params.id);
+    if (Number(deleted.changes) !== 1) throw new Error('일일업무 삭제 건수가 일치하지 않습니다.');
     db.exec('COMMIT');
-    success(res, { id: req.params.id, deleted: true });
+    success(res, { id: req.params.id, deleted: true, hardDeleted: true });
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;

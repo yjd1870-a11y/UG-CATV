@@ -14,6 +14,7 @@
     "start": "tsx backend/server.ts",
     "db:init": "tsx backend/init-db.ts",
     "test:api": "tsx backend/tests/run-isolated.ts backend/tests/api.integration.ts",
+    "test:daily-work-permissions": "tsx backend/tests/run-isolated.ts backend/tests/daily-work-permissions.ts",
     "test:api-resource-url": "tsx backend/tests/api-resource-url.ts",
     "test:work-transfers": "tsx backend/tests/run-isolated.ts backend/tests/work-transfers.ts",
     "test:work-transfer-analytics": "tsx backend/tests/run-isolated.ts backend/tests/work-transfer-analytics.ts",
