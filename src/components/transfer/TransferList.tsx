@@ -90,7 +90,6 @@ export const TransferList: React.FC = () => {
   const [evidenceViewerIndex, setEvidenceViewerIndex] = useState<number | null>(null);
   const [ocrSource, setOcrSource] = useState<{ fileName: string; previewUrl: string } | null>(null);
   const [ocrResult, setOcrResult] = useState<BrowserOcrResult | null>(null);
-  const [ocrReviewed, setOcrReviewed] = useState(false);
   const [ocrDragActive, setOcrDragActive] = useState(false);
   const [evidenceDragActive, setEvidenceDragActive] = useState(false);
   const ocrRequestId = useRef(0);
@@ -170,7 +169,6 @@ export const TransferList: React.FC = () => {
     setEvidenceViewerIndex(null);
     setOcrSource(null);
     setOcrResult(null);
-    setOcrReviewed(false);
     setOcrDragActive(false);
     setEvidenceDragActive(false);
     setOcrMessage('');
@@ -217,7 +215,6 @@ export const TransferList: React.FC = () => {
     ocrPreviewUrl.current = previewUrl;
     setOcrSource({ fileName: file.name, previewUrl });
     setOcrResult(null);
-    setOcrReviewed(false);
     setOcrLoading(true);
     setOcrStatus('pending');
     setOcrMessage('사진 품질을 확인하고 있습니다.');
@@ -333,10 +330,6 @@ export const TransferList: React.FC = () => {
     }
     if (evidencePhotos.length < 1 || evidencePhotos.length > 3) {
       showToast('상세내용 확인을 위한 업무이관 사진을 1~3장 등록해 주세요.', 'warning');
-      return;
-    }
-    if (ocrResult?.status === 'succeeded' && !ocrReviewed) {
-      showToast('OCR 결과를 확인한 뒤 확인란을 선택해 주세요.', 'warning');
       return;
     }
     setSubmitting(true);
@@ -499,7 +492,7 @@ export const TransferList: React.FC = () => {
             <form onSubmit={handleCreate} className="space-y-4 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="font-bold text-slate-700">점검요청일 *
-                  <input type="date" required value={inspectionRequestedDate} onChange={(event) => { setInspectionRequestedDate(event.target.value); setOcrReviewed(false); }} className="mt-1 w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl" />
+                  <input type="date" required value={inspectionRequestedDate} onChange={(event) => setInspectionRequestedDate(event.target.value)} className="mt-1 w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl" />
                 </label>
                 <label className="font-bold text-slate-700">지역 *
                   <select required disabled={currentUser?.role === 'team_leader'} value={newRegionId} onChange={(event) => setNewRegionId(event.target.value)} className="mt-1 w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl disabled:bg-slate-100">
@@ -532,25 +525,21 @@ export const TransferList: React.FC = () => {
                 <h3 id="inspection-fields-title" className="font-extrabold text-sm text-[#173B57]">누적 관리 항목</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="font-bold text-slate-700">지점 *
-                    <select required value={branchName} onChange={(event) => { setBranchName(event.target.value); setOcrReviewed(false); applyRegionHint(event.target.value); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl">
+                    <select required value={branchName} onChange={(event) => { setBranchName(event.target.value); applyRegionHint(event.target.value); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl">
                       <option value="">지점 선택</option>{HNS_BRANCHES.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
                     </select>
                   </label>
                   <label className="font-bold text-slate-700">점검작업업체 *
-                    <input required value={inspectionCompany} onChange={(event) => { setInspectionCompany(event.target.value); setOcrReviewed(false); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
+                    <input required value={inspectionCompany} onChange={(event) => setInspectionCompany(event.target.value)} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
                   </label>
                   <label className="font-bold text-slate-700">매체구분 *
-                    <input required value={mediaType} onChange={(event) => { setMediaType(event.target.value); setOcrReviewed(false); }} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
+                    <input required value={mediaType} onChange={(event) => setMediaType(event.target.value)} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
                   </label>
                 </div>
                 <label className="block font-bold text-slate-700">고객주소 *
-                  <input required value={location} onChange={(event) => { setLocation(event.target.value); setOcrReviewed(false); }} placeholder="현장 주소를 확인해 입력하세요." className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
+                  <input required value={location} onChange={(event) => setLocation(event.target.value)} placeholder="현장 주소를 확인해 입력하세요." className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
                 </label>
               </section>
-              {ocrResult?.status === 'succeeded' ? <label className={`flex items-start gap-2 rounded-xl border p-3 font-bold ${ocrReviewed ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-                <input type="checkbox" checked={ocrReviewed} onChange={(event) => setOcrReviewed(event.target.checked)} className="mt-0.5 h-4 w-4" />
-                OCR로 입력된 요청일·지역·지점·점검작업업체·매체구분·고객주소를 확인하고 필요한 부분을 수정했습니다.
-              </label> : null}
               <div>
                 <div className="flex items-center justify-between gap-2 mb-2"><span className="font-bold text-slate-700">업무이관 사진 * ({evidencePhotos.length}/3)</span><span className="text-[10px] text-slate-400">JPG/PNG/WEBP · 장당 10MB</span></div>
                 <label className="h-12 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center gap-2 font-bold cursor-pointer">
