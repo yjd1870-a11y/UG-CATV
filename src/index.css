@@ -8,6 +8,14 @@
   background-attachment: fixed;
 }
 
+.app-main-content {
+  padding-bottom: calc(6.25rem + env(safe-area-inset-bottom)) !important;
+}
+
+#bottom-navigation-bar {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 .home-action-card {
   --card-accent: #2389f4;
   --card-soft: #dff3ff;

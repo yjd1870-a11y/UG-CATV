@@ -261,9 +261,9 @@ export const TransferList: React.FC = () => {
   };
 
   const handleOcrPhoto = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
+    const files: File[] = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
     event.currentTarget.value = '';
-    await processOcrPhoto(file);
+    await processOcrPhoto(files[0]);
   };
 
   const handleOcrDrop = (event: React.DragEvent<HTMLElement>) => {
@@ -516,7 +516,7 @@ export const TransferList: React.FC = () => {
                 </div>
                 <label className="h-12 rounded-xl bg-[#2878B5] text-white flex items-center justify-center gap-2 font-bold cursor-pointer">
                   <Images className="w-4 h-4" />OCR 사진 갤러리에서 선택
-                  <input type="file" accept="image/*" onChange={(event) => void handleOcrPhoto(event)} className="sr-only" />
+                  <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void handleOcrPhoto(event)} className="sr-only" />
                 </label>
                 <div
                   onDragEnter={(event) => { event.preventDefault(); setOcrDragActive(true); }}
@@ -555,7 +555,7 @@ export const TransferList: React.FC = () => {
                 <div className="flex items-center justify-between gap-2 mb-2"><span className="font-bold text-slate-700">업무이관 사진 * ({evidencePhotos.length}/3)</span><span className="text-[10px] text-slate-400">JPG/PNG/WEBP · 장당 10MB</span></div>
                 <label className="h-12 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center gap-2 font-bold cursor-pointer">
                   <Images className="w-4 h-4" />갤러리에서 선택
-                  <input type="file" accept="image/*" multiple onChange={(event) => void handleEvidencePhotos(event)} className="sr-only" />
+                  <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void handleEvidencePhotos(event)} className="sr-only" />
                 </label>
                 <div
                   onDragEnter={(event) => { event.preventDefault(); setEvidenceDragActive(true); }}

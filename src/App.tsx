@@ -36,7 +36,7 @@ const MainLayout: React.FC = () => {
       <Header />
 
       {/* Main Content Area */}
-      <main className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
+      <main className="app-main-content flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
         <ActiveView />
       </main>
 

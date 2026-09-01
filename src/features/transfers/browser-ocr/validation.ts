@@ -32,7 +32,7 @@ const valueResult = (
   warnings: string[] = [],
 ): OcrFieldResult => ({ raw, value, confidence, validationStatus, warnings, alternatives: [] });
 
-const FIELD_LABEL = /^(?:지점|점검요청정보|요청자|점검작업업체|점검요청일|서비스관리번호|서비스기술방식|고객주소|이관사유|매체구분|TAP\s*\/\s*RN\s*위치|전주번호|인입선길이|사전\s*조치\s*내[용옹]|점검\s*요청\s*내[용옹]|완료처리|작업상태)\s*[:：]?\s*/i;
+const FIELD_LABEL = /^(?:지점|점검요청정보|요청자|점검작업업체|점검요청일|서비스관리번호|서비스기술방식|고객\s*주\s*소|이관사유|매체구분|TAP\s*\/\s*RN\s*위치|전주번호|인입선길이|사전\s*조치\s*내[용옹]|점검\s*요청\s*내[용옹]|완료처리|작업상태)\s*[:：]?\s*/i;
 
 const cleanValue = (value: string) => value
   .replace(/^[|:：\-–—\s]+/, '')
@@ -136,8 +136,8 @@ const addressCandidateScore = (raw: string) => {
   if (!value) return -1_000;
   let score = value.length;
   score -= (value.match(/\n/g) || []).length * 10;
-  if (/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)\s/.test(value)) score += 20;
-  if (/(?:시|군|구|동|읍|면|로|길)\b/.test(value)) score += 8;
+  if (/^(?:서울(?:특별시)?|부산(?:광역시)?|대구(?:광역시)?|인천(?:광역시)?|광주(?:광역시)?|대전(?:광역시)?|울산(?:광역시)?|세종(?:특별자치시)?|경기(?:도)?|강원(?:특별자치도|도)?|충북|충남|전북|전남|경북|경남|제주(?:특별자치도)?)\s*/.test(value)) score += 20;
+  if (/(?:시|군|구|동|읍|면|대로|로|번길|길)(?:\s|\d|$)/.test(value)) score += 8;
   const balancedRound = (value.match(/\(/g) || []).length === (value.match(/\)/g) || []).length;
   const balancedSquare = (value.match(/\[/g) || []).length === (value.match(/\]/g) || []).length;
   score += balancedRound && balancedSquare ? 14 : -18;
@@ -151,8 +151,25 @@ const selectAddressCandidate = (...candidates: string[]) => candidates
 
 const normalizeAddressText = (raw: string) => cleanValue(raw)
   .replace(/\s*\n\s*/g, ' ')
+  .replace(/^경\s*기\s*도?\s*/i, (value) => value.replace(/\s/g, '').startsWith('경기도') ? '경기도 ' : '경기 ')
+  .replace(/^(서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|강원특별자치도|제주특별자치도)(?=[가-힣])/i, '$1 ')
   .replace(/\((?:56|5R|S6)(?=친오애아파트)/gi, '(SR')
   .replace(/포승을(?=\s|$)/g, '포승읍');
+
+const regionalAddressFromLines = (sourceLines: string[]) => {
+  const regionPattern = /(?:서울(?:특별시)?|부산(?:광역시)?|대구(?:광역시)?|인천(?:광역시)?|광주(?:광역시)?|대전(?:광역시)?|울산(?:광역시)?|세종(?:특별자치시)?|경\s*기(?:\s*도)?|강원(?:특별자치도|도)?|충북|충남|전북|전남|경북|경남|제주(?:특별자치도)?)\s*.+/i;
+  const start = sourceLines.findIndex((line) => regionPattern.test(line));
+  if (start < 0) return '';
+  const first = sourceLines[start].match(regionPattern)?.[0] || '';
+  const values = [first];
+  for (let index = start + 1; index < sourceLines.length && index <= start + 3; index += 1) {
+    const next = cleanValue(sourceLines[index]);
+    if (!next || FIELD_LABEL.test(next) || /^(?:이관\s*사유|매체\s*구분|CABLE|신호\s*점검)$/i.test(next)) break;
+    if (!/[\d()[\],-]|(?:시|군|구|동|읍|면|대로|로|번길|길)(?:\s|\d|$)/.test(next)) break;
+    values.push(next);
+  }
+  return values.join(' ');
+};
 
 const normalizePreActionText = (raw: string) => normalizeTechnicalTerms(raw
   .split('\n')
@@ -241,15 +258,12 @@ export const parseAndValidateOcrText = (text: string): Record<OcrFieldName, OcrF
     ? valueResult(branchRaw, branch, 0.98, 'valid')
     : valueResult(branchRaw === normalized ? '' : branchRaw, '', 0.2, 'invalid', ['공식 HNS 지점명을 확인해 주세요.']);
   const date = dateField(labelledValue(lines, /^점검\s*요청일\s*[:：]?\s*(.*)$/i) || normalized);
-  const regionPattern = /(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)\s+.+/;
-  const regionalLine = lines.find((line) => regionPattern.test(line)) || '';
-  const regionalTail = regionalLine.match(regionPattern)?.[0] || '';
+  const regionalTail = regionalAddressFromLines(lines);
   const inlineAddressReason = regionalTail.match(/^(.+?(?:\[[^\]]+\]|\([^)]*\)|\d))\s+([가-힣A-Za-z][가-힣A-Za-z0-9 /.-]{1,29})\s+CABLE\b/i);
-  const focusedRegionalLine = addressLines.find((line) => regionPattern.test(line)) || '';
-  const focusedRegionalTail = focusedRegionalLine.match(regionPattern)?.[0] || '';
-  const focusedAddressRaw = labelledValue(addressLines, /^고객\s*주소\s*[:：]?\s*(.*)$/i, true)
+  const focusedRegionalTail = regionalAddressFromLines(addressLines);
+  const focusedAddressRaw = labelledValue(addressLines, /^고객\s*주\s*소\s*[:：]?\s*(.*)$/i, true)
     || focusedRegionalTail;
-  const fullAddressRaw = labelledValue(lines, /^고객\s*주소\s*[:：]?\s*(.*)$/i, true)
+  const fullAddressRaw = labelledValue(lines, /^고객\s*주\s*소\s*[:：]?\s*(.*)$/i, true)
     || inlineAddressReason?.[1] || regionalTail;
   const addressRaw = normalizeAddressText(selectAddressCandidate(focusedAddressRaw, fullAddressRaw));
   const address = textField(addressRaw, { min: 8 });

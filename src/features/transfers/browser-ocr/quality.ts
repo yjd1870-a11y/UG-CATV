@@ -196,10 +196,10 @@ export const prepareOcrAddressCanvas = (bitmap: ImageBitmap) => {
   // 긴 주소는 전체 화면 OCR에서 글자 크기가 작아지며 오른쪽 괄호·번지부터
   // 잘리는 경우가 있으므로 라벨부터 행의 우측 끝까지 별도로 확대한다.
   const sourceX = Math.round(bitmap.width * 0.01);
-  const sourceY = Math.round(bitmap.height * 0.4);
+  const sourceY = Math.round(bitmap.height * 0.32);
   const sourceWidth = Math.round(bitmap.width * 0.98);
-  const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(bitmap.height * 0.22));
-  const scale = Math.min(2.8, 2200 / Math.max(sourceWidth, sourceHeight));
+  const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(bitmap.height * 0.4));
+  const scale = Math.min(3.2, 2600 / Math.max(sourceWidth, sourceHeight));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(sourceWidth * scale));
   canvas.height = Math.max(1, Math.round(sourceHeight * scale));

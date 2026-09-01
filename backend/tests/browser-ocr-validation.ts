@@ -171,4 +171,17 @@ assert.equal(
   '1. 측정주파수:\n2. 상/하향 레벨:\n3. MER:',
 );
 
+const mobileWrappedAddress = parseAndValidateOcrText(`
+고객 주 소
+경 기 도수원시 팔달구 중부대로 165
+(우만동, 동수원병원) [우만동,157-7]
+이관사유
+신호점검
+`);
+assert.equal(
+  mobileWrappedAddress.customerAddress.value,
+  '경기도 수원시 팔달구 중부대로 165 (우만동, 동수원병원) [우만동,157-7]',
+);
+assert.equal(mobileWrappedAddress.customerAddress.validationStatus, 'valid');
+
 console.log('Browser OCR validation test passed: HNS normalization, kor+eng terms, date and structured fields');
