@@ -48,7 +48,7 @@ materialUsageRouter.get('/', (req, res) => {
   const user = authUser(req);
   const filters: string[] = [];
   const params: Array<string | number | null> = [];
-  if (user.role === 'manager' || user.role === 'public_official') {
+  if (user.role === 'manager' || user.role === 'guest' || user.role === 'public_official') {
     filters.push('mu.user_id = ?');
     params.push(user.id);
   } else if (user.role === 'team_leader') {

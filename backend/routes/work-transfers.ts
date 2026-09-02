@@ -64,7 +64,7 @@ const requireRegion = (user: AuthUser) => {
 const scopeSql = (user: AuthUser, alias = 'wt') => {
   if (globalRoles.has(user.role)) return { sql: '', params: [] as Array<string | number> };
   const regionId = requireRegion(user);
-  const completedRule = user.role === 'manager' ? ` AND ${alias}.workflow_status <> 'completed'` : '';
+  const completedRule = user.role === 'manager' || user.role === 'guest' ? ` AND ${alias}.workflow_status <> 'completed'` : '';
   return { sql: ` AND ${alias}.region_id = ?${completedRule}`, params: [regionId] as Array<string | number> };
 };
 

@@ -272,11 +272,13 @@ const queryAnalytics = (req: Request, user: AuthUser) => {
            SUM(CASE WHEN wt.is_urgent = 1 THEN 1 ELSE 0 END) AS urgent,
            AVG(CASE WHEN wt.workflow_status = 'completed' AND wt.completed_at IS NOT NULL
              THEN (julianday(datetime(wt.completed_at, '+9 hours')) - julianday(${requestDateSql})) * 24 END) AS average_processing_hours
-      FROM work_transfers wt
+     FROM work_transfers wt
       LEFT JOIN users field_user ON field_user.id = wt.field_processed_by
       LEFT JOIN regions processor_region ON processor_region.id = field_user.region_id
       LEFT JOIN regions transfer_region ON transfer_region.id = wt.region_id
      WHERE ${filter.sql} AND ${requestDateSql} BETWEEN date(?) AND date(?)
+       AND (wt.field_processed_by IS NULL
+         OR COALESCE(field_user.access_role, CASE field_user.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) <> 'guest')
      GROUP BY wt.field_processed_by, field_user.name,
        CASE WHEN wt.field_processed_by IS NULL THEN transfer_region.region_name ELSE processor_region.region_name END
      ORDER BY processed DESC, processor_name

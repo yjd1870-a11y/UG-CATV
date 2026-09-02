@@ -9,7 +9,7 @@ export type ApiUser = {
   department: string;
   phone: string | null;
   company: string;
-  role: 'manager' | 'public_official' | 'team_leader' | 'admin';
+  role: 'manager' | 'guest' | 'public_official' | 'team_leader' | 'admin';
   regionId: string | null;
   regionName: string | null;
   status: 'pending' | 'active' | 'disabled';
@@ -29,7 +29,7 @@ const toUiUser = (user: ApiUser): User => ({
   username: user.username,
   name: user.name,
   role: user.role,
-  roleLabel: user.role === 'admin' ? '관리자' : user.role === 'team_leader' ? '팀장' : user.role === 'public_official' ? '공무' : '매니져',
+  roleLabel: user.role === 'admin' ? '관리자' : user.role === 'team_leader' ? '팀장' : user.role === 'public_official' ? '공무' : user.role === 'guest' ? '게스트' : '매니져',
   team: user.department,
   phone: user.phone || '',
   company: user.company,

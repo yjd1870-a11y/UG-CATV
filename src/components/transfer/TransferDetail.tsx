@@ -21,6 +21,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { transfersApi } from '../../features/transfers/api';
 import { HNS_BRANCHES } from '../../features/transfers/browser-ocr/validation';
+import { canProcessTransfer } from '../../shared/auth/permissions';
 import type { WorkTransfer } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
 import { TransferPhotoViewer } from './TransferPhotoViewer';
@@ -73,6 +74,7 @@ export const TransferDetail: React.FC = () => {
   const [actionReason, setActionReason] = useState('');
 
   const canManage = currentUser?.role === 'admin' || currentUser?.role === 'public_official' || currentUser?.role === 'team_leader';
+  const canProcess = canProcessTransfer(currentUser?.role);
   const canReopen = currentUser?.role === 'admin' || currentUser?.role === 'public_official';
   const canDelete = currentUser?.role === 'admin' || currentUser?.role === 'public_official';
   const evidencePhotos = useMemo(() => transfer?.attachments || [], [transfer?.attachments]);
@@ -325,7 +327,7 @@ export const TransferDetail: React.FC = () => {
       <section className="bg-white rounded-2xl p-4 sm:p-5 border border-[#E5E7EB] shadow-sm space-y-3">
         <h2 className="text-sm font-extrabold text-[#173B57] flex items-center gap-1.5"><Wrench className="w-4 h-4 text-[#F28C28]" />현장처리 정보</h2>
         {transfer.fieldActions?.length ? <div className="space-y-2">{transfer.fieldActions.map((action) => <div key={action.id} className="p-3 rounded-xl bg-blue-50/60 border border-blue-100 text-xs"><div className="flex items-center justify-between gap-2 mb-1"><strong className="flex items-center gap-1"><User className="w-3 h-3" />{action.processedByName}</strong><span className="text-slate-500">{action.processedAt}</span></div><p className="whitespace-pre-wrap">{action.actionText}</p></div>)}</div> : <p className="text-xs text-slate-400">등록된 현장처리가 없습니다.</p>}
-        {transfer.workflowStatus !== 'completed' ? (
+        {canProcess && transfer.workflowStatus !== 'completed' ? (
           <form onSubmit={handleFieldAction} className="pt-3 border-t border-slate-100 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-2"><label className="text-xs font-bold text-slate-700">처리일시<input type="datetime-local" value={processedAt} onChange={(event) => setProcessedAt(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" /></label><label className="text-xs font-bold text-slate-700">현장 처리내용 *<textarea required rows={3} value={fieldActionText} onChange={(event) => setFieldActionText(event.target.value)} className="mt-1 w-full p-3 rounded-xl border border-slate-200 bg-slate-50" /></label></div>
             <div className="flex justify-end"><button type="submit" disabled={busy || !fieldActionText.trim()} className="px-5 h-10 bg-[#2878B5] text-white rounded-xl text-xs font-bold disabled:opacity-50">현장처리 등록</button></div>

@@ -56,7 +56,7 @@ router.use((req, res, next) => {
   next();
 });
 
-type DbRole = 'manager' | 'public_official' | 'team_leader' | 'admin';
+type DbRole = 'manager' | 'guest' | 'public_official' | 'team_leader' | 'admin';
 type CellUploadRecord = {
   keyNumber: string;
   cellName: string;
@@ -113,7 +113,7 @@ type PendingCellUpload = {
 };
 
 const pendingCellUploads = new Map<string, PendingCellUpload>();
-const allowedRoles = new Set<DbRole>(['manager', 'public_official', 'team_leader', 'admin']);
+const allowedRoles = new Set<DbRole>(['manager', 'guest', 'public_official', 'team_leader', 'admin']);
 
 const ensureRegion = (regionName: string) => {
   const existing = db.prepare('SELECT id FROM regions WHERE region_name = ? AND active = 1').get(regionName) as { id: string } | undefined;

@@ -94,9 +94,10 @@ const cellEditorSections: Array<{ title: string; fields: CellField[] }> = [
   { title: '기타', fields: ['notes'] },
 ];
 
-type AccountRole = 'manager' | 'public_official' | 'team_leader' | 'admin';
+type AccountRole = 'manager' | 'guest' | 'public_official' | 'team_leader' | 'admin';
 const accountRoleOptions: Array<{ value: AccountRole; label: string }> = [
   { value: 'manager', label: '매니져' },
+  { value: 'guest', label: '게스트' },
   { value: 'public_official', label: '공무' },
   { value: 'team_leader', label: '팀장' },
   { value: 'admin', label: '관리자' },

@@ -30,6 +30,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
     currentUser,
     showToast,
   } = useApp();
+  const canWrite = currentUser?.role !== 'guest';
 
   // Create Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -274,7 +275,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
           </span>
         </h2>
 
-        <button
+        {canWrite ? <button
           type="button"
           onClick={() => {
             setHistTitle('');
@@ -288,7 +289,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
         >
           <Plus className="w-4 h-4" />
           <span>작업이력 등록</span>
-        </button>
+        </button> : null}
       </div>
 
       {/* History Cards List */}
@@ -297,7 +298,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
           <div className="py-10 text-center text-slate-400 space-y-2">
             <History className="w-8 h-8 mx-auto text-slate-300" />
             <p className="text-xs font-medium">등록된 작업 및 유지보수 이력이 없습니다.</p>
-            <button
+            {canWrite ? <button
               type="button"
               onClick={() => {
                 setHistTitle('');
@@ -310,7 +311,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
               className="mt-2 text-xs font-bold text-[#173B57] hover:underline cursor-pointer"
             >
               첫 작업이력 등록하기
-            </button>
+            </button> : null}
           </div>
         ) : (
           cell.history.map((hist, idx) => {
@@ -519,23 +520,23 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
 
             {/* Action Buttons: 수정, 삭제, 닫기 */}
             <div className="pt-3 border-t border-slate-200 flex gap-2">
-              <button
+              {canWrite ? <button
                 type="button"
                 onClick={() => handleDeleteHistory(viewingHistory.id)}
                 className="px-3.5 h-11 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs rounded-xl border border-red-200 transition flex items-center justify-center gap-1 cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
                 <span>삭제</span>
-              </button>
+              </button> : null}
 
-              <button
+              {canWrite ? <button
                 type="button"
                 onClick={() => handleOpenEdit(viewingHistory)}
                 className="flex-1 h-11 bg-[#173B57] hover:bg-[#122e44] text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Edit3 className="w-4 h-4" />
                 <span>작업이력 수정</span>
-              </button>
+              </button> : null}
 
               <button
                 type="button"
@@ -550,7 +551,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
       )}
 
       {/* 2. 작업이력 수정 모달 (Edit Modal) */}
-      {editingHistory && (
+      {editingHistory && canWrite && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-5 sm:p-6 shadow-2xl animate-in zoom-in-95 duration-150 space-y-4">
             {/* Modal Header */}
@@ -731,7 +732,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
       )}
 
       {/* 3. 작업이력 신규 등록 모달 (Add Modal) */}
-      {showAddModal && (
+      {showAddModal && canWrite && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-5 sm:p-6 shadow-2xl animate-in zoom-in-95 duration-150 space-y-4">
             {/* Modal Header */}

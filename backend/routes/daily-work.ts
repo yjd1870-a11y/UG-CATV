@@ -38,6 +38,7 @@ const activeTarget = (targetUserId: string) => {
   const target = db.prepare(`
     SELECT id, name, department, region_id
       FROM users WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+       AND COALESCE(access_role, CASE role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) <> 'guest'
   `).get(targetUserId) as DailyWorkTarget | undefined;
   if (!target) throw new ApiError(404, '작업자를 찾을 수 없습니다.', 'NOT_FOUND');
   return target;
@@ -46,11 +47,14 @@ const activeTarget = (targetUserId: string) => {
 const assertCanAccess = (user: AuthUser, ownerId: string, regionId: string | undefined) => {
   if (globalDailyWorkRoles.has(user.role)) return;
   if (user.role === 'team_leader' && regionId && regionId === requireRegion(user)) return;
-  if (user.role === 'manager' && ownerId === user.id) return;
+  if ((user.role === 'manager' || user.role === 'guest') && ownerId === user.id) return;
   throw new ApiError(404, '일일업무를 찾을 수 없습니다.', 'NOT_FOUND');
 };
 
 const assertCanEdit = (user: AuthUser, target: DailyWorkTarget, workDate: string) => {
+  if (user.role === 'guest') {
+    throw new ApiError(403, '게스트 계정은 일일업무를 변경할 수 없습니다.', 'GUEST_READ_ONLY');
+  }
   const today = todayInSeoul();
   if (workDate > today) {
     throw new ApiError(400, '미래 날짜의 일일업무는 등록할 수 없습니다.', 'FUTURE_WORK_DATE');
@@ -190,7 +194,7 @@ router.get('/', (req, res) => {
   const result = aggregateDailyWork('person', {
     from: typeof req.query.date === 'string' ? req.query.date : undefined,
     to: typeof req.query.date === 'string' ? req.query.date : undefined,
-    userId: user.role === 'manager' ? user.id : undefined,
+    userId: user.role === 'manager' || user.role === 'guest' ? user.id : undefined,
     regionId: user.role === 'team_leader' ? requireRegion(user) : undefined,
     sortOrder: 'desc',
   });

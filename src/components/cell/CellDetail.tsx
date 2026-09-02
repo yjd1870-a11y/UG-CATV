@@ -19,6 +19,7 @@ import { CellHistorySection } from './CellHistorySection';
 
 export const CellDetail: React.FC = () => {
   const {
+    currentUser,
     cells,
     selectedCellId,
     navigateTo,
@@ -122,12 +123,12 @@ export const CellDetail: React.FC = () => {
             <Copy className="w-3.5 h-3.5" />
             <span>CELL명 복사</span>
           </button>
-          <button
+          {currentUser?.role !== 'guest' ? <button
             onClick={() => navigateTo('material_list')}
             className="inline-flex items-center gap-1 text-xs font-bold text-white bg-[#F28C28] hover:bg-[#d97718] px-3.5 py-2 rounded-xl shadow-sm transition cursor-pointer"
           >
             <span>자재사용 등록</span>
-          </button>
+          </button> : null}
         </div>
       </div>
 

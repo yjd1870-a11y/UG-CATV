@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { db } from './db';
 import { ApiError } from './http';
 
+const effectiveRoleSql = `COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END)`;
+
 export type WorkCategoryRow = {
   id: string;
   code: string;
@@ -154,7 +156,7 @@ const resolveRange = (filters: DailyWorkFilters) => {
 
 const buildWhere = (filters: DailyWorkFilters) => {
   const { from, to } = resolveRange(filters);
-  const clauses = ['d.deleted_at IS NULL'];
+  const clauses = ['d.deleted_at IS NULL', `${effectiveRoleSql} <> 'guest'`];
   const params: Array<string | number> = [];
   if (from) { clauses.push('d.work_date >= ?'); params.push(from); }
   if (to) { clauses.push('d.work_date <= ?'); params.push(to); }
@@ -282,6 +284,7 @@ export const getDailyWorkMeta = (includeUsers = false, regionId?: string) => ({
                COALESCE(access_role, CASE role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) AS role
           FROM users
          WHERE status = 'active' AND deleted_at IS NULL
+           AND COALESCE(access_role, CASE role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) <> 'guest'
            ${regionId ? 'AND region_id = ?' : ''}
          ORDER BY name
       `).all(...(regionId ? [regionId] : [])) as Array<Record<string, unknown>>).map((row) => ({

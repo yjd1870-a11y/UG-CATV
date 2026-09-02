@@ -15,6 +15,7 @@ export const PhotoGalleryModal: React.FC<PhotoGalleryProps> = ({
   photos,
 }) => {
   const { addCellPhoto, currentUser, showToast } = useApp();
+  const canWrite = currentUser?.role !== 'guest';
   const [selectedPhoto, setSelectedPhoto] = useState<CellPhoto | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('전체');
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -95,13 +96,13 @@ export const PhotoGalleryModal: React.FC<PhotoGalleryProps> = ({
           ))}
         </div>
 
-        <button
+        {canWrite ? <button
           onClick={() => setShowUploadModal(true)}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#F28C28] hover:bg-[#d97718] text-white text-xs font-bold rounded-xl shadow-xs transition self-start sm:self-auto cursor-pointer"
         >
           <Camera className="w-4 h-4" />
           <span>+ 현장사진 촬영/등록</span>
-        </button>
+        </button> : null}
       </div>
 
       {/* Photos Grid */}
@@ -209,7 +210,7 @@ export const PhotoGalleryModal: React.FC<PhotoGalleryProps> = ({
       )}
 
       {/* Upload Photo Modal */}
-      {showUploadModal && (
+      {showUploadModal && canWrite && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">

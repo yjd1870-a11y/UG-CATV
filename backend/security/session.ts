@@ -5,7 +5,7 @@ import { env } from '../env';
 import { ApiError } from '../http';
 import { securityLog } from './audit';
 
-export type DbRole = 'manager' | 'public_official' | 'team_leader' | 'admin';
+export type DbRole = 'manager' | 'guest' | 'public_official' | 'team_leader' | 'admin';
 
 export interface AuthUser {
   id: string;
@@ -125,6 +125,16 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
 
   authReq.authUser = toAuthUser(row);
   authReq.sessionToken = token;
+  if (row.role === 'guest' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    securityLog(req, {
+      action: 'SECURITY_FORBIDDEN_ACCESS',
+      targetType: 'route',
+      targetId: req.originalUrl,
+      metadata: { reason: 'guest_read_only', method: req.method },
+    });
+    next(new ApiError(403, '게스트 계정은 조회만 할 수 있습니다.', 'GUEST_READ_ONLY'));
+    return;
+  }
   db.prepare(`
     UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP
      WHERE token_hash = ? AND datetime(last_seen_at) <= datetime('now', '-5 minutes')

@@ -56,8 +56,11 @@ router.get('/summary', (req, res) => {
   const regionId = user.role === 'team_leader' ? requireRegion(user) : undefined;
   const totalFor = (from: string, to: string) => Number((db.prepare(`
     SELECT COALESCE(SUM(i.work_count), 0) AS total
-      FROM daily_work d JOIN daily_work_items i ON i.daily_work_id = d.id
+      FROM daily_work d
+      JOIN users u ON u.id = d.user_id
+      JOIN daily_work_items i ON i.daily_work_id = d.id
      WHERE d.deleted_at IS NULL AND d.work_date BETWEEN ? AND ?
+       AND COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) <> 'guest'
        ${regionId ? 'AND d.region_id = ?' : ''}
   `).get(...(regionId ? [from, to, regionId] : [from, to])) as { total: number }).total);
   const entered = Number((db.prepare(`

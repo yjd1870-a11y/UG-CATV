@@ -20,7 +20,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { adminDailyWorkApi, dailyWorkApi, type DailyWorkQuery } from '../../features/daily-work/api';
 import { ApiClientError } from '../../shared/api/client';
-import { canExportDailyWork } from '../../shared/auth/permissions';
+import { canExportDailyWork, canWriteDailyWork, isGuest } from '../../shared/auth/permissions';
 import {
   DailyWorkAggregate,
   DailyWorkAggregateRow,
@@ -185,7 +185,9 @@ export const DailyWorkView: React.FC = () => {
   const canManageDailyWork = currentUser?.role === 'admin' || currentUser?.role === 'public_official' || currentUser?.role === 'team_leader';
   const canDeleteDailyWork = currentUser?.role === 'admin' || currentUser?.role === 'public_official';
   const canExport = canExportDailyWork(currentUser?.role);
-  const [mode, setMode] = useState<MainMode>('register');
+  const canWrite = canWriteDailyWork(currentUser?.role);
+  const guestView = isGuest(currentUser?.role);
+  const [mode, setMode] = useState<MainMode>(() => guestView ? 'my' : 'register');
   const [meta, setMeta] = useState<DailyWorkMeta | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [formDate, setFormDate] = useState('');
@@ -481,7 +483,7 @@ export const DailyWorkView: React.FC = () => {
         </div>
         <div className="flex overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
           {([
-            ['register', '일일업무 등록'],
+            ...(guestView ? [] : [['register', '일일업무 등록']]),
             ['my', '내 업무내역'],
             ...(canManageDailyWork ? [['admin', '업무 관리']] : []),
           ] as Array<[MainMode, string]>).map(([value, label]) => (
@@ -492,7 +494,7 @@ export const DailyWorkView: React.FC = () => {
         </div>
       </div>
 
-      {mode === 'register' && (
+      {mode === 'register' && canWrite && (
         <div className="space-y-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <div className={`grid gap-3 ${canManageDailyWork ? 'sm:grid-cols-[1fr_1.3fr_auto]' : 'sm:grid-cols-[1fr_1fr_auto]'} sm:items-end`}>

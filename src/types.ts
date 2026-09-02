@@ -1,4 +1,4 @@
-export type UserRole = 'manager' | 'public_official' | 'team_leader' | 'admin';
+export type UserRole = 'manager' | 'guest' | 'public_official' | 'team_leader' | 'admin';
 
 export interface HomeNotice {
   id: string;

@@ -96,10 +96,10 @@ export const TransferList: React.FC = () => {
   const ocrAbortController = useRef<AbortController | null>(null);
   const ocrPreviewUrl = useRef('');
 
-  const isManager = currentUser?.role === 'manager';
+  const isManagerView = currentUser?.role === 'manager' || currentUser?.role === 'guest';
   const canRegister = currentUser?.role === 'admin' || currentUser?.role === 'public_official' || currentUser?.role === 'team_leader';
   const canComplete = canRegister;
-  const visibleTabs = useMemo(() => isManager ? statusTabs.filter((tab) => tab.value !== 'completed') : statusTabs, [isManager]);
+  const visibleTabs = useMemo(() => isManagerView ? statusTabs.filter((tab) => tab.value !== 'completed') : statusTabs, [isManagerView]);
 
   const currentFilters = useMemo<TransferFilters>(() => ({
     status,
@@ -131,7 +131,7 @@ export const TransferList: React.FC = () => {
     void transfersApi.meta()
       .then((value) => {
         setMeta(value);
-        if (currentUser?.role === 'team_leader' || currentUser?.role === 'manager') {
+        if (currentUser?.role === 'team_leader' || currentUser?.role === 'manager' || currentUser?.role === 'guest') {
           setRegionId(value.currentRegionId || '');
           setNewRegionId(value.currentRegionId || '');
         } else {
@@ -396,7 +396,7 @@ export const TransferList: React.FC = () => {
       </div>
 
       <section className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-[#E5E7EB] space-y-3" aria-label="업무이관 검색 조건">
-        <div className={`grid gap-2 ${isManager ? 'grid-cols-2' : 'grid-cols-3'}`}>
+        <div className={`grid gap-2 ${isManagerView ? 'grid-cols-2' : 'grid-cols-3'}`}>
           {visibleTabs.map((tab) => (
             <button
               key={tab.value}
@@ -417,7 +417,7 @@ export const TransferList: React.FC = () => {
           <label className="text-[11px] font-bold text-slate-600">접수 종료일
             <input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" />
           </label>
-          {isManager ? (
+          {isManagerView ? (
             <div className="text-[11px] font-bold text-slate-600">담당 지역
               <div className="mt-1 h-10 px-3 flex items-center rounded-xl border border-slate-200 bg-slate-100 text-slate-800">{meta?.currentRegionName || '지역 미지정'}</div>
             </div>

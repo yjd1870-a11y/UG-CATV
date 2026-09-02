@@ -218,41 +218,33 @@ export const HomeDashboard: React.FC = () => {
           <span className="text-xs font-medium text-[#6B7280]">{seoulDateLabel(now)}</span>
         </div>
 
-        <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
+        <div className="grid flex-1 grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
           <button
+            id="home-summary-daily"
             onClick={() => navigateTo('daily_work')}
             className="flex min-h-28 cursor-pointer flex-col justify-between rounded-xl border border-[#E5E7EB]/70 bg-[#F9FAFB] p-3.5 text-left transition hover:bg-blue-50/40 sm:p-4"
           >
-            <span className="text-xs font-semibold text-[#6B7280]">전일 미입력</span>
-            <span className="my-1 flex items-baseline gap-1">
-              <strong className="text-2xl font-black text-[#173B57] sm:text-3xl">
-                {summaryValue(workSummary?.previousMissingCount)}
-              </strong>
-              <span className="text-xs font-medium text-[#9CA3AF]">명</span>
+            <span className="text-xs font-extrabold text-[#173B57]">일일업무</span>
+            <span className="mt-2 grid gap-1.5 text-[11px]">
+              <span className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5">
+                <span className="font-semibold text-[#6B7280]">전일 미입력</span>
+                <strong className="text-sm font-black text-[#173B57]">{summaryValue(workSummary?.previousMissingCount)}명</strong>
+              </span>
+              <span className="flex items-center justify-between gap-2 rounded-lg bg-blue-50 px-2.5 py-1.5">
+                <span className="font-semibold text-[#6B7280]">금일 미입력</span>
+                <strong className="text-sm font-black text-[#2878B5]">{summaryValue(workSummary?.todayMissingCount)}명</strong>
+              </span>
             </span>
-            <span className="text-[10px] text-gray-400">{workSummary?.previousDate || '서울 기준 전일'}</span>
           </button>
 
           <button
-            onClick={() => navigateTo('daily_work')}
-            className="flex min-h-28 cursor-pointer flex-col justify-between rounded-xl border border-[#E5E7EB]/70 bg-[#F9FAFB] p-3.5 text-left transition hover:bg-blue-50/40 sm:p-4"
-          >
-            <span className="text-xs font-semibold text-[#6B7280]">금일 미입력</span>
-            <span className="my-1 flex items-baseline gap-1">
-              <strong className="text-2xl font-black text-[#2878B5] sm:text-3xl">
-                {summaryValue(workSummary?.todayMissingCount)}
-              </strong>
-              <span className="text-xs font-medium text-[#9CA3AF]">명</span>
-            </span>
-            <span className="text-[10px] text-gray-400">매니져 입력 현황</span>
-          </button>
-
-          <button
+            id="home-summary-transfer"
             onClick={() => navigateTo('transfer_list')}
             className="flex min-h-28 cursor-pointer flex-col justify-between rounded-xl border border-[#E5E7EB]/70 bg-[#F9FAFB] p-3.5 text-left transition hover:bg-orange-50/40 sm:p-4"
           >
-            <span className="text-xs font-semibold text-[#6B7280]">미처리 이관</span>
+            <span className="text-xs font-extrabold text-[#173B57]">업무이관</span>
             <span className="my-1 flex items-baseline gap-1">
+              <span className="mr-auto text-[11px] font-semibold text-[#6B7280]">미처리 이관</span>
               <strong className="text-2xl font-black text-[#F28C28] sm:text-3xl">
                 {summaryValue(workSummary?.incompleteTransferCount)}
               </strong>
@@ -264,6 +256,7 @@ export const HomeDashboard: React.FC = () => {
           </button>
 
           <button
+            id="home-summary-recent-cell"
             onClick={() => {
               const targetName = recentCells[0] || 'SUJI-021-B';
               const target = cells.find((cell) => cell.cellName === targetName);
@@ -280,6 +273,7 @@ export const HomeDashboard: React.FC = () => {
           </button>
 
           <button
+            id="home-summary-material"
             onClick={() => navigateTo('material_list')}
             className="flex min-h-28 cursor-pointer flex-col justify-between rounded-xl border border-[#E5E7EB]/70 bg-[#F9FAFB] p-3.5 text-left transition hover:bg-green-50/40 sm:p-4"
           >

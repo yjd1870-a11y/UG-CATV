@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { isGuest } from '../../shared/auth/permissions';
 import {
   MATERIAL_CATEGORIES,
   MaterialCategory,
@@ -32,6 +33,7 @@ export const MaterialView: React.FC = () => {
   } = useApp();
 
   const [showModal, setShowModal] = useState(false);
+  const guestView = isGuest(currentUser?.role);
   const [filterCategory, setFilterCategory] = useState<string>('전체');
   const [searchKeyword, setSearchKeyword] = useState<string>('');
 
@@ -150,7 +152,7 @@ export const MaterialView: React.FC = () => {
           </p>
         </div>
 
-        <button
+        {!guestView ? <button
           id="material-register-btn"
           onClick={() => {
             setWorkerName(currentUser?.name || '김현장');
@@ -160,7 +162,7 @@ export const MaterialView: React.FC = () => {
         >
           <Plus className="w-4 h-4" />
           <span>+ 자재사용 등록</span>
-        </button>
+        </button> : <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-500">게스트 · 조회 전용</span>}
       </div>
 
       {/* Filter and Search Bar */}
@@ -296,7 +298,7 @@ export const MaterialView: React.FC = () => {
       </div>
 
       {/* Register Material Modal (Section 11) */}
-      {showModal && (
+      {showModal && !guestView && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-5 sm:p-6 shadow-2xl border border-[#E5E7EB] animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-[#E5E7EB] mb-4">
