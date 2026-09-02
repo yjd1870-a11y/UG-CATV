@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { pinchView, zoomViewAt } from '../../src/shared/gestures/pan-zoom';
+import { horizontalSwipeDirection, pinchView, zoomViewAt } from '../../src/shared/gestures/pan-zoom';
 
 const initial = { scale: 2, x: 100, y: 50 };
 const anchor = { x: 400, y: 300 };
@@ -16,4 +16,10 @@ assert.equal(pinched.y + worldBefore.y * pinched.scale, 320);
 
 const limited = zoomViewAt(initial, 100, anchor, 0.5, 4);
 assert.equal(limited.scale, 4);
-console.log('Pan/zoom test passed: zoom and pinch preserve the selected world coordinate.');
+
+assert.equal(horizontalSwipeDirection({ x: 120, y: 20 }, { x: 40, y: 24 }), 1);
+assert.equal(horizontalSwipeDirection({ x: 40, y: 20 }, { x: 120, y: 24 }), -1);
+assert.equal(horizontalSwipeDirection({ x: 40, y: 20 }, { x: 70, y: 22 }), 0);
+assert.equal(horizontalSwipeDirection({ x: 40, y: 20 }, { x: 100, y: 100 }), 0);
+
+console.log('Pan/zoom test passed: zoom, pinch, and horizontal swipe gestures behave as expected.');

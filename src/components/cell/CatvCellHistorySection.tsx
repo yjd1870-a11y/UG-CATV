@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { Camera, ChevronLeft, ChevronRight, Clock3, History, ImagePlus, Maximize2, Pencil, Plus, Trash2, Upload, UserRound, X } from 'lucide-react';
+import { Camera, Clock3, History, ImagePlus, Maximize2, Pencil, Plus, Trash2, Upload, UserRound, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { cellsApi } from '../../features/cells/api';
 import type { CellWorkHistory } from '../../types';
+import { InteractivePhotoViewer } from '../common/InteractivePhotoViewer';
 
 interface CatvCellHistorySectionProps {
   cellId: string;
@@ -340,18 +341,13 @@ export const CatvCellHistorySection: React.FC<CatvCellHistorySectionProps> = ({
       ) : null}
 
       {preview ? (
-        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/90 p-4" role="dialog" aria-modal="true" aria-label="작업이력 사진 확대">
-          <div className="w-full max-w-5xl">
-            <div className="mb-3 flex items-center justify-between text-white"><strong className="text-sm">{preview.title} · {preview.index + 1}/{preview.photos.length}</strong><button type="button" onClick={() => setPreview(null)} className="rounded-full bg-white/10 p-2" aria-label="확대 사진 닫기"><X className="h-5 w-5" /></button></div>
-            <div className="relative flex min-h-64 items-center justify-center overflow-hidden rounded-2xl bg-black">
-              <img src={preview.photos[preview.index]} alt={`${preview.title} 확대 사진 ${preview.index + 1}`} className="max-h-[78vh] max-w-full object-contain" />
-              {preview.photos.length > 1 ? <>
-                <button type="button" onClick={() => setPreview((current) => current ? { ...current, index: (current.index - 1 + current.photos.length) % current.photos.length } : null)} className="absolute left-3 rounded-full bg-black/60 p-3 text-white" aria-label="이전 사진"><ChevronLeft className="h-6 w-6" /></button>
-                <button type="button" onClick={() => setPreview((current) => current ? { ...current, index: (current.index + 1) % current.photos.length } : null)} className="absolute right-3 rounded-full bg-black/60 p-3 text-white" aria-label="다음 사진"><ChevronRight className="h-6 w-6" /></button>
-              </> : null}
-            </div>
-          </div>
-        </div>
+        <InteractivePhotoViewer
+          photos={preview.photos.map((url, index) => ({ id: `${index}-${url.slice(0, 24)}`, url, label: `${preview.title} 사진 ${index + 1}` }))}
+          initialIndex={preview.index}
+          title={preview.title}
+          ariaLabel="CATV 셀 작업이력 사진 확대"
+          onClose={() => setPreview(null)}
+        />
       ) : null}
     </section>
   );

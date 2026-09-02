@@ -44,3 +44,14 @@ export const pointCenter = (left: GesturePoint, right: GesturePoint): GesturePoi
   x: (left.x + right.x) / 2,
   y: (left.y + right.y) / 2,
 });
+
+export const horizontalSwipeDirection = (
+  start: GesturePoint,
+  end: GesturePoint,
+  threshold = 50,
+): -1 | 0 | 1 => {
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  if (Math.abs(deltaX) < threshold || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return 0;
+  return deltaX < 0 ? 1 : -1;
+};

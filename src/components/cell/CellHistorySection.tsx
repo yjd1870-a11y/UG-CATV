@@ -1,8 +1,6 @@
 import React, { useState, useRef } from 'react';
 import {
   Camera,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Edit3,
   History,
@@ -17,6 +15,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { CellInfo, CellWorkHistory } from '../../types';
 import { createPhotoDataUrl } from '../../data/mockData';
+import { InteractivePhotoViewer } from '../common/InteractivePhotoViewer';
 
 interface CellHistorySectionProps {
   cell: CellInfo;
@@ -52,9 +51,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
   const [editPhotos, setEditPhotos] = useState<string[]>([]);
 
   // Lightbox Preview for Large Photos
-  const [previewPhotoList, setPreviewPhotoList] = useState<string[]>([]);
-  const [currentPhotoIdx, setCurrentPhotoIdx] = useState<number>(0);
-  const [previewTitle, setPreviewTitle] = useState<string>('');
+  const [preview, setPreview] = useState<{ photos: string[]; initialIndex: number; title: string } | null>(null);
 
   const addFileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
@@ -258,9 +255,7 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
 
   // Lightbox trigger
   const openPhotoPreview = (photos: string[], title: string, initialIndex = 0) => {
-    setPreviewPhotoList(photos);
-    setCurrentPhotoIdx(initialIndex);
-    setPreviewTitle(title);
+    setPreview({ photos, initialIndex, title });
   };
 
   return (
@@ -916,94 +911,15 @@ export const CellHistorySection: React.FC<CellHistorySectionProps> = ({ cell }) 
         </div>
       )}
 
-      {/* 4. Lightbox / Large Photo Preview Modal with navigation */}
-      {previewPhotoList.length > 0 && (
-        <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 rounded-2xl max-w-3xl w-full p-4 shadow-2xl border border-slate-800 space-y-3 animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800 text-white">
-              <div className="flex items-center gap-2">
-                <Camera className="w-4 h-4 text-orange-400" />
-                <h4 className="font-bold text-sm">
-                  {previewTitle} - 사진 {currentPhotoIdx + 1}/{previewPhotoList.length}
-                </h4>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPreviewPhotoList([])}
-                className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Photo Container with Previous/Next buttons if multiple */}
-            <div className="relative rounded-xl overflow-hidden bg-black flex items-center justify-center min-h-[250px] max-h-[70vh]">
-              <img
-                src={previewPhotoList[currentPhotoIdx]}
-                alt={`Photo ${currentPhotoIdx + 1}`}
-                className="max-h-[70vh] w-auto object-contain"
-              />
-
-              {previewPhotoList.length > 1 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCurrentPhotoIdx((prev) =>
-                        prev === 0 ? previewPhotoList.length - 1 : prev - 1
-                      )
-                    }
-                    className="absolute left-2 top-1/2 -translate-y-1/2 p-2 bg-black/60 hover:bg-black/90 text-white rounded-full transition cursor-pointer"
-                    title="이전 사진"
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCurrentPhotoIdx((prev) =>
-                        prev === previewPhotoList.length - 1 ? 0 : prev + 1
-                      )
-                    }
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-black/60 hover:bg-black/90 text-white rounded-full transition cursor-pointer"
-                    title="다음 사진"
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* Thumbnails row if multiple */}
-            {previewPhotoList.length > 1 && (
-              <div className="flex items-center justify-center gap-2 pt-1">
-                {previewPhotoList.map((photo, pIdx) => (
-                  <button
-                    key={pIdx}
-                    type="button"
-                    onClick={() => setCurrentPhotoIdx(pIdx)}
-                    className={`w-14 h-11 rounded-lg overflow-hidden border-2 transition cursor-pointer ${
-                      currentPhotoIdx === pIdx
-                        ? 'border-orange-500 scale-105'
-                        : 'border-slate-700 opacity-60 hover:opacity-100'
-                    }`}
-                  >
-                    <img src={photo} alt={`Thumb ${pIdx + 1}`} className="w-full h-full object-cover" />
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setPreviewPhotoList([])}
-              className="w-full h-10 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition cursor-pointer"
-            >
-              닫기
-            </button>
-          </div>
-        </div>
-      )}
+      {preview ? (
+        <InteractivePhotoViewer
+          photos={preview.photos.map((url, index) => ({ id: `${index}-${url.slice(0, 24)}`, url, label: `${preview.title} 사진 ${index + 1}` }))}
+          initialIndex={preview.initialIndex}
+          title={preview.title}
+          ariaLabel="셀 작업이력 사진 확대"
+          onClose={() => setPreview(null)}
+        />
+      ) : null}
     </div>
   );
 };
