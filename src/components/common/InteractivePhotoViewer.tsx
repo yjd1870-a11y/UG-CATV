@@ -170,15 +170,13 @@ export const InteractivePhotoViewer: React.FC<Props> = ({
           gestureRef.current = null;
         }}
       >
-        <div className="absolute left-1/2 top-1/2 will-change-transform" style={{ transform: `translate(${view.x}px, ${view.y}px)` }}>
-          <img
-            src={photo.url}
-            alt={photo.label}
-            draggable={false}
-            className="max-h-[calc(100vh-7.5rem)] max-w-[100vw] -translate-x-1/2 -translate-y-1/2 object-contain will-change-transform"
-            style={{ transform: `translate(-50%, -50%) scale(${view.scale})`, transformOrigin: 'center' }}
-          />
-        </div>
+        <img
+          src={photo.url}
+          alt={photo.label}
+          draggable={false}
+          className="max-h-full max-w-full shrink-0 object-contain will-change-transform"
+          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, transformOrigin: 'center' }}
+        />
 
         {photos.length > 1 ? <>
           <button type="button" onClick={() => move(-1)} aria-label="이전 사진" className="absolute left-2 rounded-full bg-black/55 p-2 text-white hover:bg-black/75"><ChevronLeft className="h-6 w-6" /></button>
