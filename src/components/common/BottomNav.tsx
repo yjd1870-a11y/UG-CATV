@@ -1,63 +1,16 @@
 import React from 'react';
-import {
-  ArrowRightLeft,
-  Boxes,
-  ClipboardCheck,
-  Home,
-  Radio,
-} from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { AppView } from '../../types';
-
-interface NavItem {
-  key: AppView;
-  matchViews: AppView[];
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  badgeCount?: number;
-}
+import { primaryNavigationItems } from './primary-navigation';
 
 export const BottomNav: React.FC = () => {
   const { activeView, navigateTo, notificationCount } = useApp();
 
-  const navItems: NavItem[] = [
-    {
-      key: 'home',
-      matchViews: ['home'],
-      label: '홈',
-      icon: Home,
-    },
-    {
-      key: 'cell_list',
-      matchViews: ['cell_list', 'cell_detail'],
-      label: 'CELL',
-      icon: Radio,
-    },
-    {
-      key: 'transfer_list',
-      matchViews: ['transfer_list', 'transfer_analytics', 'transfer_detail'],
-      label: '업무이관',
-      icon: ArrowRightLeft,
-      badgeCount: notificationCount,
-    },
-    {
-      key: 'daily_work',
-      matchViews: ['daily_work', 'daily_lookup'],
-      label: '일일업무',
-      icon: ClipboardCheck,
-    },
-    {
-      key: 'material_list',
-      matchViews: ['material_list'],
-      label: '자재',
-      icon: Boxes,
-    },
-  ];
+  const navItems = primaryNavigationItems(notificationCount);
 
   return (
     <nav
       id="bottom-navigation-bar"
-      className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-[#E5E7EB] shadow-[0_-2px_10px_rgba(0,0,0,0.04)] pb-safe"
+      className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-[#E5E7EB] shadow-[0_-2px_10px_rgba(0,0,0,0.04)] pb-safe lg:hidden"
     >
       <div className="max-w-md mx-auto grid grid-cols-5 h-[68px] sm:h-[76px] px-2">
         {navItems.map((item) => {

@@ -1,23 +1,18 @@
 import type { OcrFieldName, OcrFieldResult, OcrValidationStatus } from './types';
 
 export const HNS_BRANCHES = [
-  'HNS평택지점', 'HNS화성지점', 'HNS수원동부지점',
-  'HNS수원서부지점', 'HNS용인남부지점', 'HNS용인북부지점',
+  'HNS평택지점', 'HNS화성지점', 'HNS수원지점', 'HNS용인지점',
 ] as const;
 
 export const HNS_BRANCH_REGION_HINTS: Record<(typeof HNS_BRANCHES)[number], string[]> = {
-  HNS평택지점: ['평택'],
-  HNS화성지점: ['화성', '오산화성'],
-  HNS수원동부지점: ['수원동부', '수원'],
-  HNS수원서부지점: ['수원서부', '수원'],
-  HNS용인남부지점: ['용인남부', '용인'],
-  HNS용인북부지점: ['용인북부', '용인'],
+  HNS평택지점: ['평택안성', '평택', '안성'], HNS화성지점: ['오산화성', '화성', '오산'],
+  HNS수원지점: ['수원'], HNS용인지점: ['용인'],
 };
 
-export const TECHNICAL_TERMS = [
-  'MHz', 'dB', 'dBmV', 'MER', 'BER', 'ONU', 'TBA', 'EA', 'PS', 'UPS', 'row', 'hi',
-  'RFOG', '5C', '7C', '12C', 'OFD', 'RACK', 'L2', 'TAP', 'RN', 'CABLE',
-] as const;
+const OCR_SECTION = /^\[(지점|주소 후보 [A-C]) 영역 재검사\]$/;
+const FIELD_LABEL = /^(?:지점|점검\s*요청일|고객\s*주\s*소|이관\s*사유|매체\s*구분|TAP\s*\/\s*RN|점검\s*작업업체|서비스\s*(?:관리번호|기술방식))\s*[:：]?\s*/i;
+const ADDRESS_END_LABEL = /^(?:이관\s*사유|매체\s*구분|TAP\s*\/\s*RN|점검\s*작업업체|서비스\s*(?:관리번호|기술방식))\s*[:：]?/i;
+const ADDRESS_CONTAMINATION = /(?:이관\s*사유|매체\s*구분|C\s*A\s*B\s*L\s*E|신호\s*점검|기타(?:\s|$)|TAP\s*\/\s*RN)/i;
 
 const EMPTY_FIELD = (): OcrFieldResult => ({
   raw: '', value: '', confidence: 0, validationStatus: 'invalid',
@@ -25,315 +20,254 @@ const EMPTY_FIELD = (): OcrFieldResult => ({
 });
 
 const valueResult = (
-  raw: string,
-  value: string,
-  confidence: number,
-  validationStatus: OcrValidationStatus,
-  warnings: string[] = [],
-): OcrFieldResult => ({ raw, value, confidence, validationStatus, warnings, alternatives: [] });
-
-const FIELD_LABEL = /^(?:지점|점검요청정보|요청자|점검작업업체|점검요청일|서비스관리번호|서비스기술방식|고객\s*주\s*소|이관사유|매체구분|TAP\s*\/\s*RN\s*위치|전주번호|인입선길이|사전\s*조치\s*내[용옹]|점검\s*요청\s*내[용옹]|완료처리|작업상태)\s*[:：]?\s*/i;
+  raw: string, value: string, confidence: number, validationStatus: OcrValidationStatus,
+  warnings: string[] = [], alternatives: string[] = [],
+): OcrFieldResult => ({ raw, value, confidence, validationStatus, warnings, alternatives });
 
 const cleanValue = (value: string) => value
-  .replace(/^[|:：\-–—\s]+/, '')
-  .replace(/[|\s]+$/, '')
-  .replace(/[ \t]+/g, ' ')
-  .trim();
+  .replace(/^[|:：\-–—\s]+/, '').replace(/[|\s]+$/, '').replace(/[ \t]+/g, ' ').trim();
+const compactText = (value: string) => value.toUpperCase().replace(/[^A-Z0-9가-힣]/g, '');
+const LEGACY_BRANCH_ALIASES: Record<string, (typeof HNS_BRANCHES)[number]> = {
+  HNS수원동부지점: 'HNS수원지점', HNS수원서부지점: 'HNS수원지점',
+  HNS용인남부지점: 'HNS용인지점', HNS용인북부지점: 'HNS용인지점',
+};
 
-const labelledValue = (lines: string[], label: RegExp, multiline = false) => {
+const editDistance = (left: string, right: string) => {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length];
+};
+
+const branchMatch = (text: string) => {
+  const source = compactText(text).replace(/^지점/, '');
+  const legacy = Object.entries(LEGACY_BRANCH_ALIASES).find(([name]) => source.includes(name));
+  if (legacy) return { value: legacy[1], fuzzy: false, legacy: true, alternatives: [] as string[] };
+  const exact = HNS_BRANCHES.find((branch) => {
+    const official = compactText(branch);
+    return source.includes(official) || source.includes(official.replace(/^HNS/, ''));
+  });
+  if (exact) return { value: exact, fuzzy: false, legacy: false, alternatives: [] as string[] };
+
+  const branchLike = source.match(/(?:HNS)?(?:평택|화성|수원|용인)(?:동부|서부|남부|북부)?지[점정검]/)?.[0] || source;
+  const candidates = HNS_BRANCHES.map((branch) => ({
+    branch,
+    distance: Math.min(editDistance(branchLike, compactText(branch)), editDistance(branchLike, compactText(branch).replace(/^HNS/, ''))),
+  })).filter(({ distance }) => distance <= 1);
+  const minimum = Math.min(...candidates.map(({ distance }) => distance));
+  const closest = candidates.filter(({ distance }) => distance === minimum).map(({ branch }) => branch);
+  return closest.length === 1
+    ? { value: closest[0], fuzzy: true, legacy: false, alternatives: [] as string[] }
+    : { value: '', fuzzy: false, legacy: false, alternatives: closest };
+};
+
+export const normalizeHnsBranchName = (text: string) => branchMatch(text).value;
+
+const sectionMap = (text: string) => {
+  const sections = new Map<string, string[]>();
+  let current = '전체';
+  sections.set(current, []);
+  for (const rawLine of text.replace(/\r/g, '').split('\n')) {
+    const line = rawLine.trim();
+    const marker = line.match(OCR_SECTION);
+    if (marker) {
+      current = marker[1];
+      sections.set(current, []);
+    } else if (line) sections.get(current)?.push(line);
+  }
+  return sections;
+};
+
+const labelledSingleValue = (lines: string[], label: RegExp) => {
   for (let index = 0; index < lines.length; index += 1) {
     const match = lines[index].match(label);
     if (!match) continue;
-    const values: string[] = [];
     const inline = cleanValue(match[1] || '');
-    if (inline) values.push(inline);
-    for (let cursor = index + 1; cursor < lines.length && (multiline || values.length === 0); cursor += 1) {
-      if (FIELD_LABEL.test(lines[cursor])) break;
-      const next = cleanValue(lines[cursor]);
-      if (next) values.push(next);
-      if (!multiline && values.length > 0) break;
-    }
-    return values.join('\n').trim();
+    if (inline) return inline;
+    const next = lines[index + 1];
+    if (next && !FIELD_LABEL.test(next)) return cleanValue(next);
   }
   return '';
 };
 
-export const normalizeHnsBranchName = (text: string) => {
-  const compact = text.toUpperCase().replace(/[^A-Z0-9가-힣]/g, '');
-  for (const branch of HNS_BRANCHES) {
-    const official = branch.toUpperCase().replace(/[^A-Z0-9가-힣]/g, '');
-    if (compact.includes(official) || compact.includes(official.replace(/^HNS/, ''))) return branch;
+const branchField = (sections: Map<string, string[]>): OcrFieldResult => {
+  const fullLines = sections.get('전체') || [];
+  const focused = (sections.get('지점') || []).join(' ');
+  const labelled = labelledSingleValue(fullLines, /^지점\s*[:：]?\s*(.*)$/i);
+  const branchLine = fullLines.find((line) => /H\s*N\s*S|(?:평택|화성|수원|용인).{0,5}지[점정검]/i.test(line)) || '';
+  const raw = focused || labelled || branchLine;
+  if (!raw) return EMPTY_FIELD();
+  const match = branchMatch(raw);
+  if (!match.value) return valueResult(raw, '', 0.2, 'invalid', ['공식 HNS 지점명을 확인해 주세요.'], match.alternatives);
+  return valueResult(
+    raw, match.value, match.fuzzy ? 0.86 : 0.98, 'valid',
+    match.legacy
+      ? ['과거 지점명을 현재 HNS 지점명으로 통합했습니다.']
+      : match.fuzzy ? ['지점명 한 글자 OCR 오류를 공식 목록과 대조해 보정했습니다.'] : [],
+  );
+};
+
+const extractBoundedAddress = (lines: string[]) => {
+  const start = lines.findIndex((line) => /^고객\s*주\s*소\s*[:：]?/i.test(line));
+  if (start < 0) return '';
+  const values: string[] = [];
+  const inline = cleanValue(lines[start].replace(/^고객\s*주\s*소\s*[:：]?\s*/i, ''));
+  if (inline) values.push(inline);
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (ADDRESS_END_LABEL.test(lines[index]) || FIELD_LABEL.test(lines[index])) break;
+    values.push(cleanValue(lines[index]));
   }
+  return values.filter(Boolean).join(' ');
+};
+
+const stripAddressContamination = (raw: string) => cleanValue(raw)
+  .replace(/^고객\s*주\s*소\s*[:：]?\s*/i, '')
+  .split(/\s+(?=이관\s*사유|매체\s*구분|C\s*A\s*B\s*L\s*E|신호\s*점검|기타(?:\s|$)|TAP\s*\/\s*RN)/i)[0]
+  .replace(/\s+[A-Za-z]{2,8}[\]\\:;,.]*$/, '');
+
+const reconcileLotLocality = (value: string) => {
+  const lot = value.match(/\[([가-힣]{1,10}(?:동|리))\s*,?\s*\d/);
+  if (!lot) return value;
+  const parenthetical = value.match(/\(([^)]*)\)/)?.[1] || '';
+  const candidates: string[] = parenthetical.match(/[가-힣]{1,10}(?:동|리)/g) ?? [];
+  const closest = candidates.find((candidate: string) => (
+    candidate[candidate.length - 1] === lot[1][lot[1].length - 1] && editDistance(candidate, lot[1]) <= 1
+  ));
+  return closest ? value.replace(`[${lot[1]}`, `[${closest}`) : value;
+};
+
+const normalizeAddressText = (raw: string) => {
+  const normalized = stripAddressContamination(raw)
+    .replace(/\s*\n\s*/g, ' ').replace(/[ \t]+/g, ' ')
+    .trim()
+    .replace(/^.*?(?=경\s*기(?:\s*도)?\s)/, '')
+    .replace(/^경\s*기(?:\s*도)?(?=\s*[^\s])/i, (value) => value.replace(/\s/g, '') === '경기도' ? '경기도 ' : '경기 ')
+    .replace(/(용\s*인|수\s*원|화\s*성|오\s*산|평\s*택|안\s*성)\s*시/g, (value) => value.replace(/\s/g, ''))
+    .replace(/^(?:[가-힣?·.]{1,4}\s+)?(수지구|기흥구|처인구)(?=\s)/, '경기 용인시 $1')
+    .replace(/^(?:[가-힣?·.]{1,4}\s+)?(장안구|팔달구|권선구|영통구)(?=\s)/, '경기 수원시 $1')
+    .replace(/^(?:[가-힣?·.]{1,4}\s+)?(평택시)(?=\s)/, '경기 $1')
+    .replace(/(\d+)\s*번\s*길/g, '$1번길')
+    .replace(/([가-힣]+(?:대로|로))\s+(\d+번길)/g, '$1$2')
+    .replace(/(\d)\s*-\s*(\d)/g, '$1-$2')
+    .replace(/\[([가-힣]{1,12})(\d+(?:-\d+)?)\]/g, '[$1,$2]')
+    .replace(/\s*[\[(]\s*,\s*\d+(?:-\d+)?\s*[\])]/g, '')
+    .replace(/\s+([)\]])/g, '$1').replace(/([(\[])\s+/g, '$1')
+    .replace(/[ \t]+/g, ' ').trim();
+  const closingBracket = normalized.lastIndexOf(']');
+  const bounded = closingBracket >= 0 ? normalized.slice(0, closingBracket + 1) : normalized;
+  return reconcileLotLocality(bounded);
+};
+
+export const branchFromCustomerAddress = (address: string): (typeof HNS_BRANCHES)[number] | '' => {
+  const compact = address.replace(/\s/g, '');
+  if (compact.includes('용인시')) return 'HNS용인지점';
+  if (compact.includes('수원시')) return 'HNS수원지점';
+  if (compact.includes('화성시') || compact.includes('오산시')) return 'HNS화성지점';
+  if (compact.includes('평택시') || compact.includes('안성시')) return 'HNS평택지점';
   return '';
 };
 
-const termPatterns: Array<[RegExp, string | ((substring: string) => string)]> = [
-  [/옥상\s*(?:팀|템|텝)\s*점검/g, '옥상탭 점검'],
-  [/점검\s*요정\s*합니다/g, '점검요청합니다'],
-  [/시청\s*불가/g, '시청불가'],
-  [/M\s*H\s*Z\b/gi, 'MHz'], [/D\s*B\s*M\s*V\b/gi, 'dBmV'], [/D\s*B\b/gi, 'dB'],
-  [/\bM\s*E\s*R\b/gi, 'MER'], [/\bB\s*E\s*R\b/gi, 'BER'], [/\bO\s*N\s*U\b/gi, 'ONU'],
-  [/\bT\s*B\s*A\b/gi, 'TBA'], [/\bU\s*P\s*S\b/gi, 'UPS'], [/\bR\s*F\s*O\s*G\b/gi, 'RFOG'],
-  [/\bO\s*F\s*D\b/gi, 'OFD'], [/\bR\s*A\s*C\s*K\b/gi, 'RACK'], [/\bT\s*A\s*P\b/gi, 'TAP'],
-  [/\bC\s*A\s*B\s*L\s*E\b/gi, 'CABLE'],
-  [/\b(?:5|7|12)\s*[¢©]/gi, (match) => match.replace(/[¢©]/, 'C').replace(/\s/g, '')],
-  [/\b1\s*2\s*C\b/gi, '12C'],
-  [/\b[57]\s*C\b/gi, (match) => match.replace(/\s/g, '').toUpperCase()],
-  [/\bL\s*2\b/gi, 'L2'], [/\bR\s*N\b/gi, 'RN'], [/\bE\s*A\b/gi, 'EA'], [/\bP\s*S\b/gi, 'PS'],
-  [/\bROW\b/gi, 'row'], [/\bHI\b/gi, 'hi'],
-];
+const delimiterBalanced = (value: string) => (
+  (value.match(/\(/g) || []).length === (value.match(/\)/g) || []).length
+  && (value.match(/\[/g) || []).length === (value.match(/\]/g) || []).length
+);
 
-export const normalizeTechnicalTerms = (text: string) => {
-  let value = text;
-  for (const [pattern, replacement] of termPatterns) {
-    value = typeof replacement === 'string'
-      ? value.replace(pattern, replacement)
-      : value.replace(pattern, replacement);
-  }
-  return value;
+const addressParts = (value: string) => {
+  const road = value.match(/([가-힣A-Za-z0-9·.]+(?:대로|로|번길|길))\s*(\d+(?:-\d+)?)/);
+  const lot = value.match(/\[([가-힣]{1,12}\s*,\s*\d+(?:-\d+)?)\s*\]/)?.[1] || '';
+  return { road: road?.[1] || '', building: road?.[2] || '', lot };
 };
 
-const normalizeDigits = (value: string) => value.replace(/[Oo]/g, '0').replace(/[Il|]/g, '1').replace(/[^0-9]/g, '');
-
-const dateField = (text: string): OcrFieldResult => {
-  const match = text.match(/(?:19|20)\d{2}[.\-/년\s]+[0-1Oo]?\d[.\-/월\s]+[0-3Oo]?\d/);
-  if (!match) return EMPTY_FIELD();
-  const digits = normalizeDigits(match[0]);
-  if (digits.length !== 8) return valueResult(match[0], '', 0.35, 'invalid', ['날짜 형식을 확인해 주세요.']);
-  const value = `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
-  const [year, month, day] = [Number(digits.slice(0, 4)), Number(digits.slice(4, 6)), Number(digits.slice(6, 8))];
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-  const valid = parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
-  return valueResult(match[0], value, valid ? 0.96 : 0.4, valid ? 'valid' : 'invalid', valid ? [] : ['실제 존재하는 날짜인지 확인해 주세요.']);
-};
-
-const textField = (raw: string, options: { min?: number; fixed?: string; technical?: boolean } = {}) => {
-  if (options.fixed) return valueResult(raw || options.fixed, options.fixed, 1, 'valid');
-  if (!raw) return EMPTY_FIELD();
-  const value = options.technical ? normalizeTechnicalTerms(cleanValue(raw)) : cleanValue(raw);
-  const valid = value.length >= (options.min || 1);
-  return valueResult(raw, value, valid ? 0.88 : 0.55, valid ? 'valid' : 'warning', valid ? [] : ['인식값을 확인해 주세요.']);
-};
-
-const phoneField = (text: string): OcrFieldResult => {
-  const match = text.match(/(?:01[016789]|0[2-6][1-5]?)[\s).-]*\d{3,4}[\s).-]*\d{4}/);
-  if (!match) return EMPTY_FIELD();
-  const digits = normalizeDigits(match[0]);
-  const value = digits.length === 11 ? `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}` : digits;
-  return valueResult(match[0], value, digits.length >= 9 ? 0.92 : 0.45, digits.length >= 9 ? 'valid' : 'warning');
-};
-
-const serviceNumberField = (text: string, lines: string[]) => {
-  const labelled = labelledValue(lines, /^(?:서비스\s*(?:관리)?\s*번호|서비스번호)\s*[:：]?\s*(.*)$/i);
-  const raw = labelled || text.match(/\b\d{9,14}\b/)?.[0] || '';
-  if (!raw) return EMPTY_FIELD();
-  const value = normalizeDigits(raw);
-  return valueResult(raw, value, value.length >= 9 ? 0.94 : 0.45, value.length >= 9 ? 'valid' : 'warning');
-};
-
-const addressCandidateScore = (raw: string) => {
-  const value = cleanValue(raw);
+export const addressCandidateScore = (raw: string) => {
+  const value = normalizeAddressText(raw);
   if (!value) return -1_000;
-  let score = value.length;
-  score -= (value.match(/\n/g) || []).length * 10;
-  if (/^(?:서울(?:특별시)?|부산(?:광역시)?|대구(?:광역시)?|인천(?:광역시)?|광주(?:광역시)?|대전(?:광역시)?|울산(?:광역시)?|세종(?:특별자치시)?|경기(?:도)?|강원(?:특별자치도|도)?|충북|충남|전북|전남|경북|경남|제주(?:특별자치도)?)\s*/.test(value)) score += 20;
-  if (/(?:시|군|구|동|읍|면|대로|로|번길|길)(?:\s|\d|$)/.test(value)) score += 8;
-  const balancedRound = (value.match(/\(/g) || []).length === (value.match(/\)/g) || []).length;
-  const balancedSquare = (value.match(/\[/g) || []).length === (value.match(/\]/g) || []).length;
-  score += balancedRound && balancedSquare ? 14 : -18;
-  if (/(?:고객\s*주소|이관\s*사유|매체\s*구분|서비스\s*기술)/i.test(value)) score -= 30;
+  const parts = addressParts(value);
+  let score = Math.min(value.length, 80);
+  if (/^(?:경기(?:도)?|서울|인천|강원|충[북남]|전[북남]|경[북남]|제주|세종)/.test(value)) score += 20;
+  if (/(?:시|군)\s+.*(?:구|읍|면|동)(?:\s|$)/.test(value)) score += 12;
+  if (parts.road) score += 18;
+  if (parts.building) score += 18;
+  if (delimiterBalanced(value)) score += 10; else score -= 25;
+  if (ADDRESS_CONTAMINATION.test(value)) score -= 50;
   return score;
 };
 
-const selectAddressCandidate = (...candidates: string[]) => candidates
-  .filter(Boolean)
-  .sort((left, right) => addressCandidateScore(right) - addressCandidateScore(left))[0] || '';
-
-const normalizeAddressText = (raw: string) => cleanValue(raw)
-  .replace(/\s*\n\s*/g, ' ')
-  .replace(/^경\s*기\s*도?\s*/i, (value) => value.replace(/\s/g, '').startsWith('경기도') ? '경기도 ' : '경기 ')
-  .replace(/^(서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|강원특별자치도|제주특별자치도)(?=[가-힣])/i, '$1 ')
-  .replace(/\((?:56|5R|S6)(?=친오애아파트)/gi, '(SR')
-  .replace(/포승을(?=\s|$)/g, '포승읍');
-
-const regionalAddressFromLines = (sourceLines: string[]) => {
-  const regionPattern = /(?:서울(?:특별시)?|부산(?:광역시)?|대구(?:광역시)?|인천(?:광역시)?|광주(?:광역시)?|대전(?:광역시)?|울산(?:광역시)?|세종(?:특별자치시)?|경\s*기(?:\s*도)?|강원(?:특별자치도|도)?|충북|충남|전북|전남|경북|경남|제주(?:특별자치도)?)\s*.+/i;
-  const start = sourceLines.findIndex((line) => regionPattern.test(line));
-  if (start < 0) return '';
-  const first = sourceLines[start].match(regionPattern)?.[0] || '';
-  const values = [first];
-  for (let index = start + 1; index < sourceLines.length && index <= start + 3; index += 1) {
-    const next = cleanValue(sourceLines[index]);
-    if (!next || FIELD_LABEL.test(next) || /^(?:이관\s*사유|매체\s*구분|CABLE|신호\s*점검)$/i.test(next)) break;
-    if (!/[\d()[\],-]|(?:시|군|구|동|읍|면|대로|로|번길|길)(?:\s|\d|$)/.test(next)) break;
-    values.push(next);
-  }
-  return values.join(' ');
-};
-
-const normalizePreActionText = (raw: string) => normalizeTechnicalTerms(raw
-  .split('\n')
-  .map((line) => cleanValue(line).replace(/^[.·ㆍ*]+\s*/, ''))
-  .filter(Boolean)
-  .join('\n'));
-
-const checklistValue = (line: string, label: RegExp) => {
-  const match = line.match(label);
-  if (!match || match.index === undefined) return '';
-  return cleanValue(line.slice(match.index + match[0].length)).replace(/^[:：.·ㆍ,]+\s*/, '');
-};
-
-const standardizeSignalChecklist = (raw: string, forceStandard: boolean): OcrFieldResult => {
-  const normalized = normalizeTechnicalTerms(raw);
-  const lines = normalized.split('\n').map(cleanValue).filter(Boolean);
-  const frequency = lines.find((line) => /(?:측|축)\s*정?\s*주파수/i.test(line));
-  const level = lines.find((line) => /(?:상|삼)\s*\/?\s*하(?:향|량).*(?:레벨|러빌)|상\s*\/\s*하향\s*레벨/i.test(line));
-  const mer = lines.find((line) => /\bM\s*E\s*R\b/i.test(line));
-  const detected = [frequency, level, mer].filter(Boolean).length;
-  if (!forceStandard && detected < 2) return textField(raw, { technical: true });
-  const frequencyValue = frequency ? checklistValue(frequency, /(?:측|축)\s*정?\s*주파수/i) : '';
-  const levelValue = level ? checklistValue(level, /(?:상|삼)\s*\/?\s*하(?:향|량).*?(?:레벨|러빌)/i) : '';
-  const merHasBer = Boolean(mer && /M\s*E\s*R\s*\/\s*B\s*E\s*R/i.test(mer));
-  const merValue = mer ? checklistValue(mer, /M\s*E\s*R(?:\s*\/\s*B\s*E\s*R)?/i) : '';
-  const values = [
-    `1. 측정주파수:${frequencyValue ? ` ${frequencyValue}` : ''}`,
-    `2. 상/하향 레벨:${levelValue ? ` ${levelValue}` : ''}`,
-    `3. ${merHasBer ? 'MER / BER' : 'MER'}:${merValue ? ` ${merValue}` : ''}`,
-  ];
+const addressField = (sections: Map<string, string[]>): OcrFieldResult => {
+  const rawFocusedCandidates = ['주소 후보 A', '주소 후보 B', '주소 후보 C']
+    .map((name) => (sections.get(name) || []).join(' ')).filter(Boolean);
+  const hadContamination = rawFocusedCandidates.some((candidate) => ADDRESS_CONTAMINATION.test(candidate));
+  const candidates = rawFocusedCandidates.map(normalizeAddressText).filter(Boolean);
+  const boundedRaw = extractBoundedAddress(sections.get('전체') || []);
+  const bounded = normalizeAddressText(boundedRaw);
+  if (bounded) candidates.push(bounded);
+  const unique = [...new Set(candidates)];
+  if (unique.length === 0) return EMPTY_FIELD();
+  const counts = new Map(unique.map((candidate) => [candidate, candidates.filter((item) => item === candidate).length]));
+  const ranked = [...unique].sort((left, right) => (
+    (counts.get(right) || 0) - (counts.get(left) || 0) || addressCandidateScore(right) - addressCandidateScore(left)
+  ));
+  const value = ranked[0];
+  const parts = addressParts(value);
+  const competingSignatures = new Set(ranked.slice(0, 3).map((candidate) => {
+    const candidateParts = addressParts(candidate);
+    return candidateParts.road && candidateParts.building && candidateParts.lot
+      ? `${candidateParts.road}|${candidateParts.building}|${candidateParts.lot}`
+      : '';
+  }).filter(Boolean));
+  const warnings: string[] = [];
+  if (!/^경기(?:도)?\s/.test(value)) warnings.push('주소가 경기 또는 경기도로 시작하는지 확인해 주세요.');
+  if (!/\]$/.test(value)) warnings.push('주소가 지번 대괄호(])로 끝나는지 확인해 주세요.');
+  if (value.length < 12) warnings.push('주소가 너무 짧습니다.');
+  if (!parts.road) warnings.push('도로명을 확인해 주세요.');
+  if (!parts.building) warnings.push('건물번호를 확인해 주세요.');
+  if (!parts.lot) warnings.push('마지막 지번을 [한글 동·리, 숫자] 형식으로 확인해 주세요.');
+  if (!delimiterBalanced(value)) warnings.push('주소의 괄호 또는 대괄호가 완전하지 않습니다.');
+  if (/\s+[A-Za-z]{2,8}[\]\\:;,.]*$/.test(value)) warnings.push('주소 끝에 영문 OCR 잡음이 포함되어 있습니다.');
+  if (hadContamination || ADDRESS_CONTAMINATION.test(value)) warnings.push('다음 업무 항목이 주소 영역에 섞여 있어 확인이 필요합니다.');
+  if (competingSignatures.size > 1) warnings.push('OCR 후보마다 도로명·건물번호 또는 지번이 달라 확인이 필요합니다.');
+  const valid = warnings.length === 0;
   return valueResult(
-    raw, values.join('\n'), detected === 3 ? 0.9 : 0.72, detected === 3 ? 'valid' : 'warning',
-    detected === 3 ? [] : ['표준 신호점검 항목을 복원했습니다. 측정값을 확인해 주세요.'],
+    candidates.join('\n'), value, valid ? ((counts.get(value) || 0) >= 2 ? 0.95 : 0.88) : 0.58,
+    valid ? 'valid' : 'warning', warnings, ranked.slice(1, 4),
   );
-};
-
-const isChecklistLine = (line: string) => /^(?:[|.*·ㆍ]?\s*)?(?:\d+[.)]?\s*)?(?:(?:측|축)\s*정?\s*주파수|(?:상|삼)\s*\/?\s*하(?:향|량).*(?:레벨|러빌)|M\s*E\s*R\s*[:：]?|B\s*E\s*R\s*[:：]?)/i.test(cleanValue(line));
-
-const splitPreActionValue = (section: string, lines: string[]) => {
-  const betweenSplitLabel = section.match(/(?:^|\n)\s*사전\s*\n([\s\S]*?)\n\s*조치\s*내?[용옹]?\s*(?:\n|$)/i)?.[1] || '';
-  if (betweenSplitLabel.trim()) return betweenSplitLabel.split('\n').map(cleanValue).filter(Boolean).join(' ');
-  const start = lines.findIndex((line) => /^사전\s*$/i.test(cleanValue(line)));
-  if (start < 0) return '';
-  const labelTail = lines.findIndex((line, index) => index > start && index <= start + 4 && /^조치\s*내?[용옹]?$/i.test(cleanValue(line)));
-  const isValueLine = (line: string) => (
-    /[가-힣A-Za-z]{2,}/.test(line)
-    && !FIELD_LABEL.test(line)
-    && !isChecklistLine(line)
-    && !/^(?:\d+[.)]\s*)|완료처리|점검\s*$|요청\s*내?[용옹]?$/i.test(line)
-  );
-  if (labelTail > start + 1) return lines.slice(start + 1, labelTail).filter(isValueLine).join(' ');
-  if (labelTail === start + 1) {
-    const values: string[] = [];
-    for (let index = labelTail + 1; index < lines.length; index += 1) {
-      if (/^(?:점검|요청\s*내?[용옹]?)$/i.test(cleanValue(lines[index])) || /^(?:\d+[.)]\s*)/.test(lines[index])) break;
-      if (isValueLine(lines[index])) values.push(cleanValue(lines[index]));
-    }
-    return values.join(' ');
-  }
-  return '';
 };
 
 export const parseAndValidateOcrText = (text: string): Record<OcrFieldName, OcrFieldResult> => {
-  const normalized = text.replace(/\r/g, '').replace(/[ \t]+/g, ' ').trim();
-  const beforeRequestSection = normalized.split('[점검요청 영역 재검사]')[0];
-  const requestDetailsSection = normalized.includes('[점검요청 영역 재검사]')
-    ? normalized.split('[점검요청 영역 재검사]').pop()?.trim() || ''
-    : '';
-  const beforePreActionSection = beforeRequestSection.split('[사전조치 영역 재검사]')[0];
-  const addressSection = beforePreActionSection.includes('[주소 영역 재검사]')
-    ? beforePreActionSection.split('[주소 영역 재검사]').pop()?.trim() || ''
-    : '';
-  const preActionSection = beforeRequestSection.includes('[사전조치 영역 재검사]')
-    ? beforeRequestSection.split('[사전조치 영역 재검사]').pop()?.trim() || ''
-    : '';
-  const lines = normalized.split('\n').map((line) => line.trim()).filter((line) => (
-    line && line !== '[값 영역 재검사]' && line !== '[주소 영역 재검사]'
-    && line !== '[사전조치 영역 재검사]' && line !== '[점검요청 영역 재검사]'
-  ));
-  const addressLines = addressSection.split('\n').map((line) => line.trim()).filter(Boolean);
-  const preActionLines = preActionSection.split('\n').map((line) => line.trim()).filter(Boolean);
-  const requestDetailsLines = requestDetailsSection.split('\n').map((line) => line.trim()).filter(Boolean);
-  const branchRaw = labelledValue(lines, /^지점\s*[:：]?\s*(.*)$/i) || normalized;
-  const branch = normalizeHnsBranchName(branchRaw);
-  const branchResult = branch
-    ? valueResult(branchRaw, branch, 0.98, 'valid')
-    : valueResult(branchRaw === normalized ? '' : branchRaw, '', 0.2, 'invalid', ['공식 HNS 지점명을 확인해 주세요.']);
-  const date = dateField(labelledValue(lines, /^점검\s*요청일\s*[:：]?\s*(.*)$/i) || normalized);
-  const regionalTail = regionalAddressFromLines(lines);
-  const inlineAddressReason = regionalTail.match(/^(.+?(?:\[[^\]]+\]|\([^)]*\)|\d))\s+([가-힣A-Za-z][가-힣A-Za-z0-9 /.-]{1,29})\s+CABLE\b/i);
-  const focusedRegionalTail = regionalAddressFromLines(addressLines);
-  const focusedAddressRaw = labelledValue(addressLines, /^고객\s*주\s*소\s*[:：]?\s*(.*)$/i, true)
-    || focusedRegionalTail;
-  const fullAddressRaw = labelledValue(lines, /^고객\s*주\s*소\s*[:：]?\s*(.*)$/i, true)
-    || inlineAddressReason?.[1] || regionalTail;
-  const addressRaw = normalizeAddressText(selectAddressCandidate(focusedAddressRaw, fullAddressRaw));
-  const address = textField(addressRaw, { min: 8 });
-  if (address.value.includes('육밀길') && address.value.includes('육일리')) {
-    address.value = address.value.replace('육밀길', '육일길');
-    address.warnings.push('법정리 표기와 대조해 도로명 OCR 오인식을 보정했습니다.');
+  const sections = sectionMap(text);
+  let branchName = branchField(sections);
+  const customerAddress = addressField(sections);
+  const addressBranch = branchFromCustomerAddress(customerAddress.value);
+  if (addressBranch) {
+    const ocrBranch = branchName.value;
+    branchName = valueResult(
+      branchName.raw, addressBranch, customerAddress.validationStatus === 'valid' ? 0.99 : 0.92, 'valid',
+      ocrBranch && ocrBranch !== addressBranch
+        ? [`문서의 지점명과 고객주소가 달라 고객주소 기준으로 ${addressBranch}을 적용했습니다.`]
+        : ['고객주소의 시·군을 기준으로 최종 지점을 적용했습니다.'],
+      ocrBranch && ocrBranch !== addressBranch ? [ocrBranch] : [],
+    );
+  } else if (branchName.value) {
+    branchName = valueResult(
+      branchName.raw, branchName.value, branchName.confidence, 'warning',
+      [...branchName.warnings, '고객주소에서 관할 시·군을 확인하지 못해 OCR 지점명을 임시 적용했습니다. 지점을 확인해 주세요.'],
+      branchName.alternatives,
+    );
   }
-  const focusedDetailFallback = requestDetailsLines.filter((line) => (
-    /(?:측|축)\s*정?\s*주파수|(?:상|삼)\s*\/?\s*하(?:향|량)|레벨|러빌|M\s*E\s*R|B\s*E\s*R/i.test(line)
-  )).join('\n');
-  const detailFallback = lines.filter((line) => /^(?:\d+[.)]\s*)|(?:측|축)\s*정?\s*주파수|(?:상|삼)\s*\/\s*하(?:향|량)|MER\s*[:：]|BER\s*[:：]/i.test(line)).join('\n');
-  const requestDetailsRaw = labelledValue(requestDetailsLines, /^점검\s*요청내용\s*[:：]?\s*(.*)$/i, true)
-    || focusedDetailFallback
-    || labelledValue(lines, /^점검\s*요청내용\s*[:：]?\s*(.*)$/i, true)
-    || detailFallback;
-  const requesterLabel = labelledValue(lines, /^(?:점검\s*요청정보|요청자)\s*[:：]?\s*(.*)$/i);
-  const requesterLine = lines.find((line) => /01[016789][\s).-]*\d{3,4}[\s).-]*\d{4}/.test(line)) || '';
-  const phoneMatch = requesterLine.match(/01[016789][\s).-]*\d{3,4}[\s).-]*\d{4}/);
-  const requesterPrefix = phoneMatch ? requesterLine.slice(0, phoneMatch.index).trim() : '';
-  const requesterPerson = requesterPrefix.match(/([가-힣]{2,5})\s*\[?\s*$/)?.[1] || '';
-  const requesterFallback = phoneMatch
-    ? `${requesterPerson} [${phoneField(phoneMatch[0]).value}]`.trim()
-    : '';
-  const handoverReasonRaw = labelledValue(lines, /^이관\s*사유\s*[:：]?\s*(.*)$/i)
-    || inlineAddressReason?.[2]
-    || normalized.match(/(?:\[[^\]]+\]|\d)\s+([가-힣]{2,20})\s+CABLE\b/i)?.[1]
-    || '';
-  const requestDetails = standardizeSignalChecklist(
-    requestDetailsRaw,
-    Boolean(branch && /신호\s*점검/.test(handoverReasonRaw) && /CABLE/i.test(normalized)),
-  );
-  const focusedPreAction = labelledValue(preActionLines, /^사전\s*조치\s*내[용옹]\s*[:：]?\s*(.*)$/i, true)
-    || splitPreActionValue(preActionSection, preActionLines)
-    || preActionLines.filter((line) => (
-      /[가-힣A-Za-z]{2,}/.test(line)
-      && !FIELD_LABEL.test(line)
-      && !isChecklistLine(line)
-      && !/^(?:\d+[.)]\s*)|완료처리|서비스|CABLE|TAP\s*\/\s*RN|전주|인입선/i.test(line)
-    )).join('\n');
-  const inlinePreAction = regionalTail.match(/\[[^\]]+\]\s+(.+?)(?=\s*1[.)]\s*측정\s*주파수)/i)?.[1] || '';
-  const preActionFallback = normalizePreActionText(focusedPreAction || inlinePreAction);
-
   return {
-    branchName: branchResult,
-    requesterName: textField(requesterLabel || requesterFallback),
-    inspectionCompany: textField('유지텔레컴', { fixed: '유지텔레컴' }),
-    inspectionRequestedDate: date,
-    customerAddress: address,
-    handoverReason: textField(handoverReasonRaw, { min: 2, technical: true }),
-    mediaType: textField('CABLE', { fixed: 'CABLE' }),
-    tapRnLocation: textField(labelledValue(lines, /^TAP\s*\/\s*RN\s*위치\s*[:：]?\s*(.*)$/i), { technical: true }),
-    poleNumber: textField(labelledValue(lines, /^전주\s*번호\s*[:：]?\s*(.*)$/i), { technical: true }),
-    leadInLength: textField(labelledValue(lines, /^인입선\s*길이\s*[:：]?\s*(.*)$/i), { technical: true }),
-    preActionNotes: textField(
-      preActionFallback || labelledValue(lines, /^사전\s*조치\s*내[용옹]\s*[:：]?\s*(.*)$/i, true),
-      { technical: true },
-    ),
-    inspectionRequestDetails: requestDetails,
-    inspectionDate: { ...date },
-    serviceNumber: serviceNumberField(normalized, lines),
-    contactPhone: phoneField(normalized),
-    address: { ...address },
-    requestDetail: { ...requestDetails },
+    branchName, customerAddress,
   };
 };
 
 export const criticalOcrFieldsNeedReview = (fields: Record<OcrFieldName, OcrFieldResult>) => (
   fields.branchName.validationStatus !== 'valid'
-  || fields.inspectionRequestedDate.validationStatus !== 'valid'
   || fields.customerAddress.validationStatus !== 'valid'
-  || fields.inspectionCompany.validationStatus !== 'valid'
-  || fields.mediaType.validationStatus !== 'valid'
 );

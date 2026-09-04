@@ -31,7 +31,7 @@ export const Header: React.FC = () => {
     <>
       <header
         id="app-header"
-        className="sticky top-0 z-30 text-white px-4 sm:px-6 py-3 sm:py-3.5 flex justify-between items-center shadow-md transition-all relative overflow-hidden bg-[#173B57]"
+        className="sticky top-0 z-30 flex items-center justify-between overflow-hidden bg-[#173B57] px-4 py-3 text-white shadow-md transition-all sm:px-6 sm:py-3.5 lg:h-[60px] lg:py-0"
         style={{
           backgroundImage: `linear-gradient(90deg, rgba(23, 59, 87, 0.93) 0%, rgba(23, 59, 87, 0.85) 60%, rgba(23, 59, 87, 0.92) 100%), url(${telecomBg})`,
           backgroundSize: 'cover',

@@ -36,6 +36,7 @@ const login = async (username: string) => {
 };
 
 let transferId = '';
+let defaultDateTransferId = '';
 try {
   for (const [index, name] of ['평택안성', '용인', '수원', '오산화성'].entries()) {
     db.prepare(`
@@ -69,6 +70,29 @@ try {
   });
   assert.equal(forbiddenCreate.response.status, 404);
 
+  const legacyBranchCreate = await call('/work-transfers', {
+    method: 'POST', cookie: teamCookie,
+    body: { regionId: teamRegion.regionId, branchName: 'HNS수원서부지점', customerAddress: '경기 수원시 테스트로 1' },
+  });
+  assert.equal(legacyBranchCreate.response.status, 400);
+
+  const invalidDateCreate = await call('/work-transfers', {
+    method: 'POST', cookie: teamCookie,
+    body: { regionId: teamRegion.regionId, branchName: 'HNS수원지점', inspectionRequestedDate: '2026-02-30', customerAddress: '경기 수원시 테스트로 1' },
+  });
+  assert.equal(invalidDateCreate.response.status, 400);
+
+  const defaultDateCreate = await call<{ id: string; inspectionRequestedDate: string }>('/work-transfers', {
+    method: 'POST', cookie: teamCookie,
+    body: { regionId: teamRegion.regionId, branchName: 'HNS수원지점', customerAddress: '경기 수원시 테스트로 1' },
+  });
+  assert.equal(defaultDateCreate.response.status, 201);
+  defaultDateTransferId = defaultDateCreate.payload.data?.id || '';
+  const koreaToday = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  assert.equal(defaultDateCreate.payload.data?.inspectionRequestedDate, koreaToday);
+
   const created = await call<{ id: string; workflowStatus: string }>('/work-transfers', {
     method: 'POST', cookie: teamCookie,
     body: {
@@ -78,7 +102,7 @@ try {
       preActionNotes: 'ONU 7C RFOG 확인', tapRnLocation: 'TAP 3번', poleNumber: '12-34', leadInLength: '45m',
       ocrText: '오산 테스트 현장 케이블 현장 조치 요청', isUrgent: true,
       ocrStatus: 'succeeded', ocrEngine: 'browser-tesseract-kor-eng',
-      inspectionCompany: '유지텔레컴', mediaType: 'CABLE',
+      inspectionCompany: '임의변경업체', mediaType: '임의매체',
       requestPhotos: [1, 2].map((number) => ({ fileName: `evidence-${number}.png`, dataUrl: photoDataUrl })),
     },
   });
@@ -216,9 +240,10 @@ try {
   `).get(transferId) as { metadata: string };
   assert.equal(JSON.parse(deleteAudit.metadata).reason, '잘못 등록된 점검표');
 
-  console.log('Work-transfer test passed: six OCR fields → max 3 photos → hard purge on completion → reopen → soft delete');
+  console.log('Work-transfer test passed: two OCR fields with fixed company → registration-date fallback → max 3 photos → completion and deletion');
 } finally {
   if (transferId) db.prepare('DELETE FROM work_transfers WHERE id = ?').run(transferId);
+  if (defaultDateTransferId) db.prepare('DELETE FROM work_transfers WHERE id = ?').run(defaultDateTransferId);
   db.prepare("DELETE FROM auth_sessions WHERE user_id IN ('user-1', 'user-3', 'user-4', 'user-5')").run();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

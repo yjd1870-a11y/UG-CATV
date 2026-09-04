@@ -36,6 +36,7 @@ const registrationRoles = new Set(['admin', 'public_official', 'team_leader']);
 const completionRoles = new Set(['admin', 'public_official', 'team_leader']);
 const workflowStatuses = new Set(['registered', 'field_processed', 'completed']);
 const allowedAttachmentTypes = new Set(['request_photo', 'field_photo']);
+const currentHnsBranches = new Set(['HNS평택지점', 'HNS화성지점', 'HNS수원지점', 'HNS용인지점']);
 const maxEvidencePhotos = 3;
 
 type StoredAttachment = { id: string; file_url: string };
@@ -110,6 +111,18 @@ const normalizeDay = (value: unknown, field: string) => {
     throw new ApiError(400, `${field} 형식이 올바르지 않습니다.`, 'VALIDATION_ERROR');
   }
   return day;
+};
+
+const currentKoreaDay = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
+
+const normalizeNewBranch = (value: unknown) => {
+  const branch = asText(value, '지점', 100);
+  if (!currentHnsBranches.has(branch)) {
+    throw new ApiError(400, '지점은 HNS평택지점, HNS화성지점, HNS수원지점, HNS용인지점 중에서 선택해 주세요.', 'VALIDATION_ERROR');
+  }
+  return branch;
 };
 
 const listFilters = (req: Request, user: AuthUser) => {
@@ -212,15 +225,14 @@ router.post('/', asyncRoute(async (req, res) => {
   const regionId = asText(req.body?.regionId, '지역', 100);
   assertRegionPermission(user, regionId);
   const region = regionById(regionId);
-  const branchName = asText(req.body?.branchName, '지점', 100);
-  const inspectionRequestedDate = normalizeDay(
-    req.body?.inspectionRequestedDate || req.body?.inspectionDate || req.body?.requestDate || req.body?.transferDate,
-    '점검요청일',
-  );
-  if (!inspectionRequestedDate) throw new ApiError(400, '점검요청일을 입력해 주세요.', 'VALIDATION_ERROR');
+  const branchName = normalizeNewBranch(req.body?.branchName);
+  const inspectionDateInput = req.body?.inspectionRequestedDate
+    ?? req.body?.inspectionDate ?? req.body?.requestDate ?? req.body?.transferDate;
+  const inspectionRequestedDate = normalizeDay(inspectionDateInput, '점검요청일') || currentKoreaDay();
   const location = asText(req.body?.customerAddress || req.body?.location || req.body?.address, '고객주소', 500);
-  const inspectionCompany = asText(req.body?.inspectionCompany || '유지텔레컴', '점검작업업체', 200);
-  const mediaType = asText(req.body?.mediaType || 'CABLE', '매체구분', 50);
+  // 신규 등록의 점검업체는 화면 입력이나 OCR 값을 신뢰하지 않고 정책값으로 고정한다.
+  const inspectionCompany = '유지텔레컴';
+  const mediaType = 'CABLE';
   const title = '업무이관 사진 참조';
   const description = '상세내용은 완료 전 증빙사진에서 확인';
   const transferDate = inspectionRequestedDate;
@@ -327,7 +339,10 @@ router.put('/:id', (req, res) => {
   regionById(nextRegionId);
   const saved = JSON.parse(String(existing.extra_json || '{}')) as Record<string, unknown>;
   const branchName = req.body?.branchName === undefined
-    ? String(existing.branch_name || saved.branchName || '') : asText(req.body.branchName, '지점', 100);
+    ? String(existing.branch_name || saved.branchName || '')
+    : String(req.body.branchName) === String(existing.branch_name || saved.branchName || '')
+      ? String(existing.branch_name || saved.branchName || '')
+      : normalizeNewBranch(req.body.branchName);
   const locationInput = req.body?.customerAddress ?? req.body?.location;
   const location = locationInput === undefined
     ? String(existing.customer_address || saved.customerAddress || saved.location || '')

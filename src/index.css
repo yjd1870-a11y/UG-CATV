@@ -16,6 +16,12 @@
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+@media (min-width: 1024px) {
+  .app-main-content {
+    padding-bottom: 2rem !important;
+  }
+}
+
 .home-action-card {
   --card-accent: #2389f4;
   --card-soft: #dff3ff;

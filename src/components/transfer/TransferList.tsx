@@ -20,6 +20,7 @@ import { useApp } from '../../context/AppContext';
 import { transfersApi, type TransferFilters, type TransferMeta, type TransferSummary } from '../../features/transfers/api';
 import { recognizeWorkTransferPhotoInBrowser, type BrowserOcrResult } from '../../features/transfers/browser-ocr/engine';
 import { HNS_BRANCHES, HNS_BRANCH_REGION_HINTS } from '../../features/transfers/browser-ocr/validation';
+import { koreaDate, resolveInspectionRequestedDate } from '../../features/transfers/registration-policy';
 import type { TransferWorkflowStatus, WorkTransfer } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
 import { TransferPhotoViewer } from './TransferPhotoViewer';
@@ -29,18 +30,14 @@ const PHOTO_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const PHOTO_MIME_BY_EXTENSION: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
 };
+const FIXED_INSPECTION_COMPANY = '유지텔레컴';
+const INTERNAL_MEDIA_TYPE = 'CABLE';
 const emptySummary: TransferSummary = { registered: 0, field_processed: 0, completed: 0 };
 const statusTabs: Array<{ value: TransferWorkflowStatus; label: string }> = [
   { value: 'registered', label: '미완료' },
   { value: 'field_processed', label: '현장처리' },
   { value: 'completed', label: '완료' },
 ];
-
-const localDate = () => {
-  const date = new Date();
-  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
-  return date.toISOString().slice(0, 10);
-};
 
 const supportedPhotoMime = (file: File) => {
   const declared = file.type.toLowerCase();
@@ -79,12 +76,10 @@ export const TransferList: React.FC = () => {
   const [ocrMessage, setOcrMessage] = useState('');
   const [ocrStatus, setOcrStatus] = useState<'pending' | 'succeeded' | 'failed'>('pending');
 
-  const [inspectionRequestedDate, setInspectionRequestedDate] = useState(localDate);
+  const [inspectionRequestedDate, setInspectionRequestedDate] = useState(koreaDate);
   const [newRegionId, setNewRegionId] = useState('');
   const [isUrgent, setIsUrgent] = useState(false);
   const [branchName, setBranchName] = useState('');
-  const [inspectionCompany, setInspectionCompany] = useState('유지텔레컴');
-  const [mediaType, setMediaType] = useState('CABLE');
   const [location, setLocation] = useState('');
   const [evidencePhotos, setEvidencePhotos] = useState<PendingPhoto[]>([]);
   const [evidenceViewerIndex, setEvidenceViewerIndex] = useState<number | null>(null);
@@ -95,6 +90,7 @@ export const TransferList: React.FC = () => {
   const ocrRequestId = useRef(0);
   const ocrAbortController = useRef<AbortController | null>(null);
   const ocrPreviewUrl = useRef('');
+  const inspectionDateEdited = useRef(false);
 
   const isManagerView = currentUser?.role === 'manager' || currentUser?.role === 'guest';
   const canRegister = currentUser?.role === 'admin' || currentUser?.role === 'public_official' || currentUser?.role === 'team_leader';
@@ -158,12 +154,11 @@ export const TransferList: React.FC = () => {
     ocrAbortController.current = null;
     if (ocrPreviewUrl.current) URL.revokeObjectURL(ocrPreviewUrl.current);
     ocrPreviewUrl.current = '';
-    setInspectionRequestedDate(localDate());
+    inspectionDateEdited.current = false;
+    setInspectionRequestedDate(koreaDate());
     setNewRegionId((currentUser?.role === 'team_leader' ? meta?.currentRegionId : '') || '');
     setIsUrgent(false);
     setBranchName('');
-    setInspectionCompany('유지텔레컴');
-    setMediaType('CABLE');
     setLocation('');
     setEvidencePhotos([]);
     setEvidenceViewerIndex(null);
@@ -231,20 +226,16 @@ export const TransferList: React.FC = () => {
       if (result.status === 'succeeded') {
         const recognizedBranch = result.fields.branchName.value;
         setBranchName(recognizedBranch);
-        if (result.fields.inspectionRequestedDate.validationStatus === 'valid') {
-          setInspectionRequestedDate(result.fields.inspectionRequestedDate.value);
-        }
-        setInspectionCompany(result.fields.inspectionCompany.value || '유지텔레컴');
-        setMediaType(result.fields.mediaType.value || 'CABLE');
         setLocation(result.fields.customerAddress.value);
         const regionMapped = applyRegionHint(recognizedBranch);
-        setOcrMessage(!recognizedBranch
+        const branchDecisionMessage = result.fields.branchName.warnings.find((warning) => warning.includes('고객주소'));
+        setOcrMessage(branchDecisionMessage || (!recognizedBranch
           ? 'OCR은 완료됐지만 지점명을 확정하지 못했습니다. 지점과 지역을 직접 선택해 주세요.'
           : !regionMapped && currentUser?.role !== 'team_leader'
             ? 'OCR은 완료됐습니다. 지점은 확인했지만 지역은 자동 확정하지 않았으니 직접 확인해 주세요.'
             : result.requiresReview
-              ? 'OCR 변환이 완료되었습니다. 6개 자동입력 항목을 확인해 주세요.'
-              : 'OCR 변환이 완료되었습니다. 저장 전 6개 항목을 확인해 주세요.');
+              ? 'OCR 변환이 완료되었습니다. 지점과 고객주소를 확인해 주세요.'
+              : 'OCR 변환이 완료되었습니다. 저장 전 지점과 고객주소를 확인해 주세요.'));
       } else {
         setOcrMessage(result.errorMessage || 'OCR 변환에 실패했습니다. 다른 갤러리 사진을 선택하거나 직접 입력해 주세요.');
       }
@@ -323,9 +314,9 @@ export const TransferList: React.FC = () => {
 
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!newRegionId || !branchName || !inspectionRequestedDate || !location.trim()
-      || !inspectionCompany.trim() || !mediaType.trim()) {
-      showToast('요청일, 지역, 지점, 점검작업업체, 매체구분, 고객주소는 필수입니다.', 'warning');
+    const submittedInspectionDate = resolveInspectionRequestedDate(inspectionRequestedDate, inspectionDateEdited.current);
+    if (!newRegionId || !branchName || !submittedInspectionDate || !location.trim()) {
+      showToast('요청일, 지역, 지점, 고객주소는 필수입니다.', 'warning');
       return;
     }
     if (evidencePhotos.length < 1 || evidencePhotos.length > 3) {
@@ -335,12 +326,12 @@ export const TransferList: React.FC = () => {
     setSubmitting(true);
     try {
       await transfersApi.create({
-        inspectionRequestedDate,
+        inspectionRequestedDate: submittedInspectionDate,
         regionId: newRegionId,
         isUrgent,
         branchName,
-        inspectionCompany: inspectionCompany.trim(),
-        mediaType: mediaType.trim(),
+        inspectionCompany: FIXED_INSPECTION_COMPANY,
+        mediaType: INTERNAL_MEDIA_TYPE,
         customerAddress: location.trim(),
         ocrStatus,
         ocrEngine: ocrResult?.engine || 'manual',
@@ -492,7 +483,7 @@ export const TransferList: React.FC = () => {
             <form onSubmit={handleCreate} className="space-y-4 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="font-bold text-slate-700">점검요청일 *
-                  <input type="date" required value={inspectionRequestedDate} onChange={(event) => setInspectionRequestedDate(event.target.value)} className="mt-1 w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl" />
+                  <input type="date" required value={inspectionRequestedDate} onChange={(event) => { inspectionDateEdited.current = true; setInspectionRequestedDate(event.target.value); }} className="mt-1 w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl" />
                 </label>
                 <label className="font-bold text-slate-700">지역 *
                   <select required disabled={currentUser?.role === 'team_leader'} value={newRegionId} onChange={(event) => setNewRegionId(event.target.value)} className="mt-1 w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl disabled:bg-slate-100">
@@ -530,10 +521,7 @@ export const TransferList: React.FC = () => {
                     </select>
                   </label>
                   <label className="font-bold text-slate-700">점검작업업체 *
-                    <input required value={inspectionCompany} onChange={(event) => setInspectionCompany(event.target.value)} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
-                  </label>
-                  <label className="font-bold text-slate-700">매체구분 *
-                    <input required value={mediaType} onChange={(event) => setMediaType(event.target.value)} className="mt-1 w-full h-10 px-3 bg-white border border-slate-200 rounded-xl" />
+                    <input readOnly value={FIXED_INSPECTION_COMPANY} aria-readonly="true" className="mt-1 w-full h-10 px-3 bg-slate-100 border border-slate-200 rounded-xl text-slate-700" />
                   </label>
                 </div>
                 <label className="block font-bold text-slate-700">고객주소 *

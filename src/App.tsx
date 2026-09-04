@@ -3,6 +3,7 @@ import { AppProvider, useApp } from './context/AppContext';
 import { ActiveView } from './app/ActiveView';
 import { Header } from './components/common/Header';
 import { BottomNav } from './components/common/BottomNav';
+import { DesktopSidebar } from './components/common/DesktopSidebar';
 import { Toast } from './components/common/Toast';
 import { LoginView } from './components/auth/LoginView';
 import telecomAppBackground from './assets/images/telecom-app-background.png';
@@ -35,10 +36,14 @@ const MainLayout: React.FC = () => {
       {/* Top Application Header */}
       <Header />
 
+      <DesktopSidebar />
+
       {/* Main Content Area */}
-      <main className="app-main-content flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
-        <ActiveView />
-      </main>
+      <div className="flex-1 lg:pl-[210px]">
+        <main className="app-main-content w-full max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
+          <ActiveView />
+        </main>
+      </div>
 
       {/* Mobile Fixed Bottom Navigation */}
       <BottomNav />

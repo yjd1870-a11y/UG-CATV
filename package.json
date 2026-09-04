@@ -22,6 +22,8 @@
     "test:cell-history": "tsx backend/tests/run-isolated.ts backend/tests/cell-history.ts",
     "test:ocr-validation": "tsx backend/tests/browser-ocr-validation.ts",
     "test:ocr-policy": "tsx backend/tests/browser-ocr-policy.ts",
+    "test:work-transfer-registration-policy": "tsx backend/tests/work-transfer-registration-policy.ts",
+    "test:desktop-navigation": "tsx backend/tests/desktop-navigation.ts",
     "test:pan-zoom": "tsx backend/tests/pan-zoom.ts",
     "test:security": "tsx backend/tests/run-isolated.ts backend/tests/security.integration.ts",
     "test:database-restart": "tsx backend/tests/run-isolated.ts backend/tests/database-restart.ts",

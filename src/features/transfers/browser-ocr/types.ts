@@ -1,11 +1,7 @@
 export type OcrValidationStatus = 'valid' | 'warning' | 'invalid';
 export type OcrQualityStatus = 'good' | 'acceptable' | 'poor';
 
-export type OcrFieldName =
-  | 'branchName' | 'requesterName' | 'inspectionCompany' | 'inspectionRequestedDate'
-  | 'customerAddress' | 'handoverReason' | 'mediaType' | 'tapRnLocation'
-  | 'poleNumber' | 'leadInLength' | 'preActionNotes' | 'inspectionRequestDetails'
-  | 'inspectionDate' | 'serviceNumber' | 'contactPhone' | 'address' | 'requestDetail';
+export type OcrFieldName = 'branchName' | 'customerAddress';
 
 export type OcrFieldResult = {
   raw: string;
