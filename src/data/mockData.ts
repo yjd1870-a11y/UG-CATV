@@ -571,7 +571,6 @@ export const MOCK_WORK_TRANSFERS: WorkTransfer[] = [
   {
     id: 'tr-001',
     serviceNo: 'SVC-2026-0810-042',
-    contractor: '유지텔레컴 (전송1팀)',
     requestDate: '2026-08-09 14:20',
     status: '대기',
     mediaType: 'HFC',
@@ -594,7 +593,6 @@ export const MOCK_WORK_TRANSFERS: WorkTransfer[] = [
   {
     id: 'tr-002',
     serviceNo: 'SVC-2026-0810-019',
-    contractor: '유지텔레컴 (전송1팀)',
     requestDate: '2026-08-09 10:15',
     status: '작업중',
     mediaType: 'HFC',
@@ -625,7 +623,6 @@ export const MOCK_WORK_TRANSFERS: WorkTransfer[] = [
   {
     id: 'tr-003',
     serviceNo: 'SVC-2026-0808-088',
-    contractor: '유지텔레컴 (전송2팀)',
     requestDate: '2026-08-08 16:40',
     status: '업무이관',
     mediaType: 'FTTH',
@@ -663,7 +660,6 @@ export const MOCK_WORK_TRANSFERS: WorkTransfer[] = [
   {
     id: 'tr-004',
     serviceNo: 'SVC-2026-0808-011',
-    contractor: '유지텔레컴 (전송1팀)',
     requestDate: '2026-08-08 09:00',
     status: '완료',
     mediaType: 'HFC',
@@ -702,7 +698,6 @@ export const MOCK_WORK_TRANSFERS: WorkTransfer[] = [
   {
     id: 'tr-005',
     serviceNo: 'SVC-2026-0809-105',
-    contractor: '유지텔레컴 (전송1팀)',
     requestDate: '2026-08-09 17:00',
     status: '대기',
     mediaType: 'HFC',

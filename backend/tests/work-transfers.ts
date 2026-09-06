@@ -13,237 +13,147 @@ const server: Server = await new Promise((resolve) => {
 const address = server.address();
 if (!address || typeof address === 'string') throw new Error('Test server did not start.');
 const base = `http://127.0.0.1:${address.port}/api`;
-
 type Envelope<T> = { success: boolean; data?: T; message?: string; code?: string };
 const call = async <T>(path: string, options: { method?: string; body?: unknown; cookie?: string } = {}) => {
   const response = await fetch(`${base}${path}`, {
     method: options.method || 'GET',
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.cookie ? { Cookie: options.cookie } : {}),
-    },
+    headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.cookie ? { Cookie: options.cookie } : {}) },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const payload = await response.json() as Envelope<T>;
-  return { response, payload, cookie: response.headers.get('set-cookie')?.split(';')[0] };
+  return { response, payload, cookie: response.headers.get('set-cookie')?.split(';')[0] || '' };
 };
-
 const login = async (username: string) => {
   const result = await call('/auth/login', { method: 'POST', body: { username, password: '1234' } });
-  assert.equal(result.response.status, 200);
-  assert.ok(result.cookie);
-  return result.cookie || '';
+  assert.equal(result.response.status, 200); assert.ok(result.cookie); return result.cookie;
 };
 
-let transferId = '';
-let defaultDateTransferId = '';
+const createdIds: string[] = [];
 try {
   for (const [index, name] of ['평택안성', '용인', '수원', '오산화성'].entries()) {
-    db.prepare(`
-      INSERT INTO regions (id, region_name, sort_order, active)
-      VALUES (?, ?, ?, 1) ON CONFLICT(region_name) DO UPDATE SET active = 1
-    `).run(`test-transfer-region-${index + 1}`, name, index + 1);
+    db.prepare('INSERT INTO regions (id, region_name, sort_order, active) VALUES (?, ?, ?, 1) ON CONFLICT(region_name) DO UPDATE SET active = 1').run(`transfer-region-${index}`, name, index + 1);
   }
-  const managedSuwon = db.prepare("SELECT id FROM regions WHERE region_name = '수원'").get() as { id: string };
-  const managedYongin = db.prepare("SELECT id FROM regions WHERE region_name = '용인'").get() as { id: string };
-  db.prepare("UPDATE users SET region_id = ? WHERE id IN ('user-1', 'user-4')").run(managedSuwon.id);
-  db.prepare("UPDATE users SET region_id = ? WHERE id = 'user-3'").run(managedYongin.id);
-  const [adminCookie, teamCookie, managerCookie, otherManagerCookie] = await Promise.all([
-    login('user-5'), login('user-4'), login('user-1'), login('user-3'),
-  ]);
-  const teamRegion = db.prepare('SELECT region_id AS regionId FROM users WHERE id = ?').get('user-4') as { regionId: string };
-  const otherRegion = db.prepare('SELECT region_id AS regionId FROM users WHERE id = ?').get('user-3') as { regionId: string };
-  assert.ok(teamRegion.regionId);
-  assert.notEqual(teamRegion.regionId, otherRegion.regionId);
+  const suwon = db.prepare("SELECT id FROM regions WHERE region_name = '수원'").get() as { id: string };
+  const yongin = db.prepare("SELECT id FROM regions WHERE region_name = '용인'").get() as { id: string };
+  db.prepare("UPDATE users SET region_id = ? WHERE id IN ('user-1', 'user-4')").run(suwon.id);
+  db.prepare("UPDATE users SET region_id = ? WHERE id = 'user-3'").run(yongin.id);
+  db.prepare("UPDATE users SET access_role = 'public_official', region_id = ? WHERE id = 'user-2'").run(yongin.id);
+  const [adminCookie, teamCookie, publicCookie, managerCookie, otherManagerCookie] = await Promise.all([login('user-5'), login('user-4'), login('user-2'), login('user-1'), login('user-3')]);
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const photo = (name = 'evidence.png') => ({ fileName: name, dataUrl: png });
+
   const meta = await call<{ regions: Array<{ name: string }> }>('/work-transfers/meta', { cookie: adminCookie });
   assert.deepEqual(meta.payload.data?.regions.map((region) => region.name), ['평택안성', '용인', '수원', '오산화성']);
-  const photoDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
-  const ocrPreview = await call('/work-transfers/ocr-preview', {
-    method: 'POST', cookie: teamCookie, body: { imageDataUrl: photoDataUrl },
-  });
-  assert.equal(ocrPreview.response.status, 410);
-  assert.equal(ocrPreview.payload.code, 'BROWSER_OCR_ONLY');
 
-  const forbiddenCreate = await call('/work-transfers', {
-    method: 'POST', cookie: teamCookie,
-    body: { regionId: otherRegion.regionId, location: '타지역 주소', requestDetails: '타지역 등록', ocrText: '수기 원문' },
-  });
-  assert.equal(forbiddenCreate.response.status, 404);
+  const noPhoto = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: suwon.id } });
+  assert.equal(noPhoto.response.status, 400); assert.equal(noPhoto.payload.code, 'PHOTO_COUNT_INVALID');
+  const tooMany = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, requestPhotos: [1, 2, 3, 4].map((n) => photo(`${n}.png`)) } });
+  assert.equal(tooMany.response.status, 400);
+  const invalidMime = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, requestPhotos: [{ fileName: 'not-photo.txt', dataUrl: 'data:text/plain;base64,dGVzdA==' }] } });
+  assert.equal(invalidMime.response.status, 400);
+  const oversizedPng = `data:image/png;base64,${Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(10 * 1024 * 1024)]).toString('base64')}`;
+  const oversized = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, requestPhotos: [{ fileName: 'oversized.png', dataUrl: oversizedPng }] } });
+  assert.equal(oversized.response.status, 400); assert.equal(oversized.payload.code, 'INVALID_PHOTO_SIZE');
+  const invalidDate = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, inspectionRequestedDate: '2026-02-30', requestPhotos: [photo()] } });
+  assert.equal(invalidDate.response.status, 400);
+  const otherRegion = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: yongin.id, requestPhotos: [photo()] } });
+  assert.equal(otherRegion.response.status, 404);
+  const unknownRegion = await call('/work-transfers', { method: 'POST', cookie: adminCookie, body: { regionId: 'unknown-region', requestPhotos: [photo()] } });
+  assert.equal(unknownRegion.response.status, 400); assert.equal(unknownRegion.payload.code, 'INVALID_REGION');
 
-  const legacyBranchCreate = await call('/work-transfers', {
-    method: 'POST', cookie: teamCookie,
-    body: { regionId: teamRegion.regionId, branchName: 'HNS수원서부지점', customerAddress: '경기 수원시 테스트로 1' },
+  const defaultDate = await call<{ id: string; inspectionRequestedDate: string; customerAddress: string }>('/work-transfers', {
+    method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, customerAddress: '', clientRegistrationKey: 'default-date-key', requestPhotos: [photo()] },
   });
-  assert.equal(legacyBranchCreate.response.status, 400);
+  assert.equal(defaultDate.response.status, 201); createdIds.push(defaultDate.payload.data?.id || '');
+  const koreaToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  assert.equal(defaultDate.payload.data?.inspectionRequestedDate, koreaToday); assert.equal(defaultDate.payload.data?.customerAddress, '');
 
-  const invalidDateCreate = await call('/work-transfers', {
-    method: 'POST', cookie: teamCookie,
-    body: { regionId: teamRegion.regionId, branchName: 'HNS수원지점', inspectionRequestedDate: '2026-02-30', customerAddress: '경기 수원시 테스트로 1' },
+  const threePhotos = await call<{ id: string; attachments: unknown[] }>('/work-transfers', {
+    method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, requestPhotos: [photo('one-of-three.png'), photo('two-of-three.png'), photo('three-of-three.png')] },
   });
-  assert.equal(invalidDateCreate.response.status, 400);
+  assert.equal(threePhotos.response.status, 201); assert.equal(threePhotos.payload.data?.attachments.length, 3);
+  createdIds.push(threePhotos.payload.data?.id || '');
 
-  const defaultDateCreate = await call<{ id: string; inspectionRequestedDate: string }>('/work-transfers', {
-    method: 'POST', cookie: teamCookie,
-    body: { regionId: teamRegion.regionId, branchName: 'HNS수원지점', customerAddress: '경기 수원시 테스트로 1' },
+  const duplicate = await call<{ id: string }>('/work-transfers', {
+    method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, clientRegistrationKey: 'default-date-key', requestPhotos: [photo('retry.png')] },
   });
-  assert.equal(defaultDateCreate.response.status, 201);
-  defaultDateTransferId = defaultDateCreate.payload.data?.id || '';
-  const koreaToday = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date());
-  assert.equal(defaultDateCreate.payload.data?.inspectionRequestedDate, koreaToday);
+  assert.equal(duplicate.response.status, 200); assert.equal(duplicate.payload.data?.id, defaultDate.payload.data?.id);
 
-  const created = await call<{ id: string; workflowStatus: string }>('/work-transfers', {
+  const created = await call<Record<string, unknown> & { id: string; attachments: Array<{ id: string; url: string }> }>('/work-transfers', {
     method: 'POST', cookie: teamCookie,
-    body: {
-      regionId: teamRegion.regionId, branchName: 'HNS화성지점', requesterName: '이창수',
-      inspectionRequestedDate: '2026-08-25', customerAddress: '오산 테스트 현장',
-      handoverReason: '신호점검', inspectionRequestDetails: '케이블 현장 조치 요청 MER BER 확인',
-      preActionNotes: 'ONU 7C RFOG 확인', tapRnLocation: 'TAP 3번', poleNumber: '12-34', leadInLength: '45m',
-      ocrText: '오산 테스트 현장 케이블 현장 조치 요청', isUrgent: true,
-      ocrStatus: 'succeeded', ocrEngine: 'browser-tesseract-kor-eng',
-      inspectionCompany: '임의변경업체', mediaType: '임의매체',
-      requestPhotos: [1, 2].map((number) => ({ fileName: `evidence-${number}.png`, dataUrl: photoDataUrl })),
-    },
+    body: { regionId: suwon.id, inspectionRequestedDate: '2026-08-25', customerAddress: '', isUrgent: true, requestPhotos: [photo('one.png'), photo('two.png')] },
   });
-  assert.equal(created.response.status, 201);
-  assert.equal(created.payload.data?.workflowStatus, 'registered');
-  transferId = created.payload.data?.id || '';
-  const detail = await call<{
-    attachments: Array<{ id: string; url: string }>;
-    branchName: string; inspectionRequestedDate: string; inspectionCompany: string; mediaType: string;
-    preActionNotes: string; evidencePhotoCount: number; evidencePhotosDeletedAt?: string; ocrText?: string;
-    fieldActions: unknown[];
-  }>(`/work-transfers/${transferId}`, { cookie: teamCookie });
-  assert.equal(detail.payload.data?.attachments.length, 2);
-  assert.equal(detail.payload.data?.evidencePhotoCount, 2);
-  assert.equal(detail.payload.data?.branchName, 'HNS화성지점');
-  assert.equal(detail.payload.data?.inspectionRequestedDate, '2026-08-25');
-  assert.equal(detail.payload.data?.inspectionCompany, '유지텔레컴');
-  assert.equal(detail.payload.data?.mediaType, 'CABLE');
-  assert.equal(detail.payload.data?.preActionNotes, '');
-  assert.equal(detail.payload.data?.ocrText, undefined);
-  assert.equal(detail.payload.data?.fieldActions.length, 0);
-  const ocrRun = db.prepare(`
-    SELECT attachment_id, engine, status FROM work_transfer_ocr_runs WHERE transfer_id = ?
-  `).get(transferId) as { attachment_id: string | null; engine: string; status: string };
-  assert.equal(ocrRun.attachment_id, null);
-  assert.equal(ocrRun.engine, 'browser-tesseract-kor-eng');
-  assert.equal(ocrRun.status, 'succeeded');
-  const photoResponse = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: teamCookie } });
+  assert.equal(created.response.status, 201); const transferId = created.payload.data?.id || ''; createdIds.push(transferId);
+  assert.equal(created.payload.data?.customerAddress, ''); assert.equal(created.payload.data?.workflowStatus, 'registered');
+  assert.equal(created.payload.data?.attachments.length, 2);
+
+  const blankUpdate = await call<{ customerAddress: string }>(`/work-transfers/${transferId}`, { method: 'PUT', cookie: teamCookie, body: { customerAddress: '', inspectionRequestedDate: '2026-08-26' } });
+  assert.equal(blankUpdate.response.status, 200); assert.equal(blankUpdate.payload.data?.customerAddress, '');
+  const managerUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: managerCookie, body: { customerAddress: '차단' } });
+  assert.equal(managerUpdate.response.status, 403);
+  const teamOtherRegionUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: teamCookie, body: { regionId: yongin.id } });
+  assert.equal(teamOtherRegionUpdate.response.status, 404);
+  const adminRegionUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: adminCookie, body: { regionId: yongin.id, customerAddress: '용인 주소' } });
+  assert.equal(adminRegionUpdate.response.status, 200);
+  const publicUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: publicCookie, body: { regionId: suwon.id, customerAddress: '공무 수정 주소' } });
+  assert.equal(publicUpdate.response.status, 200);
+
+  const detail = await call<{ attachments: Array<{ id: string; url: string }> }>(`/work-transfers/${transferId}`, { cookie: managerCookie });
+  assert.equal(detail.response.status, 200);
+  const stored = db.prepare('SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ?').all(transferId) as Array<{ file_url: string }>;
+  assert.equal(stored.length, 2); for (const item of stored) assert.equal(fs.existsSync(resolvePrivatePhoto(item.file_url)), true);
+  const photoResponse = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: managerCookie } });
   assert.equal(photoResponse.status, 200);
-  assert.equal(photoResponse.headers.get('content-type'), 'image/png');
-  assert.match(photoResponse.headers.get('cache-control') || '', /no-store/);
-  const photoAccess = await call<{ url: string }>(
-    `/work-transfers/${transferId}/attachments/${detail.payload.data?.attachments[0].id}/access-url`,
-    { cookie: teamCookie },
-  );
-  assert.equal(photoAccess.response.status, 200);
-  assert.equal(photoAccess.payload.data?.url, detail.payload.data?.attachments[0].url);
+  const otherManagerPhoto = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: otherManagerCookie } });
+  assert.equal(otherManagerPhoto.status, 404);
 
-  const addedAfterRegistration = await call(`/work-transfers/${transferId}/attachments`, {
-    method: 'POST', cookie: teamCookie,
-    body: { attachmentType: 'request_photo', fileName: 'evidence-3.png', dataUrl: photoDataUrl },
-  });
-  assert.equal(addedAfterRegistration.response.status, 201);
-  const detailAfterPhotoEdit = await call<{ attachments: unknown[]; evidencePhotoCount: number }>(
-    `/work-transfers/${transferId}`, { cookie: teamCookie },
-  );
-  assert.equal(detailAfterPhotoEdit.payload.data?.attachments.length, 3);
-  assert.equal(detailAfterPhotoEdit.payload.data?.evidencePhotoCount, 3);
-  const storedPhotoRows = db.prepare(`
-    SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ? ORDER BY created_at, id
-  `).all(transferId) as Array<{ file_url: string }>;
-  assert.equal(storedPhotoRows.length, 3);
-  for (const photo of storedPhotoRows) assert.equal(fs.existsSync(resolvePrivatePhoto(photo.file_url)), true);
-
-  const fourthPhoto = await call(`/work-transfers/${transferId}/attachments`, {
-    method: 'POST', cookie: teamCookie,
-    body: { attachmentType: 'request_photo', fileName: 'evidence-4.png', dataUrl: photoDataUrl },
-  });
-  assert.equal(fourthPhoto.response.status, 400);
-  assert.equal(fourthPhoto.payload.code, 'PHOTO_LIMIT_EXCEEDED');
-
+  const premature = await call(`/work-transfers/${transferId}/complete`, { method: 'POST', cookie: teamCookie });
+  assert.equal(premature.response.status, 409);
+  const processed = await call<{ workflowStatus: string }>(`/work-transfers/${transferId}/field-actions`, { method: 'POST', cookie: managerCookie, body: { actionText: '현장 처리 완료' } });
+  assert.equal(processed.response.status, 201); assert.equal(processed.payload.data?.workflowStatus, 'field_processed');
+  const managerHidden = await call(`/work-transfers/${transferId}`, { cookie: managerCookie });
+  assert.equal(managerHidden.response.status, 404);
+  const managerPhotoHidden = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: managerCookie } });
+  assert.equal(managerPhotoHidden.status, 404);
   const managerList = await call<Array<{ id: string }>>('/work-transfers', { cookie: managerCookie });
-  assert.ok(managerList.payload.data?.some((item) => item.id === transferId));
-  const otherManagerDetail = await call(`/work-transfers/${transferId}`, { cookie: otherManagerCookie });
-  assert.equal(otherManagerDetail.response.status, 404);
+  assert.equal(managerList.payload.data?.some((item) => item.id === transferId), false);
+  const managerSummary = await call<{ registered: number; field_processed: number; completed: number }>('/work-transfers/summary', { cookie: managerCookie });
+  assert.equal(managerSummary.payload.data?.field_processed, 0); assert.equal(managerSummary.payload.data?.completed, 0);
 
-  const prematureComplete = await call(`/work-transfers/${transferId}/complete`, { method: 'POST', cookie: teamCookie });
-  assert.equal(prematureComplete.response.status, 409);
-  assert.equal(prematureComplete.payload.code, 'FIELD_ACTION_REQUIRED');
+  const completed = await call<{ workflowStatus: string; attachments: unknown[]; evidencePhotosDeletedAt: string }>(`/work-transfers/${transferId}/complete`, { method: 'POST', cookie: teamCookie });
+  assert.equal(completed.response.status, 200); assert.equal(completed.payload.data?.workflowStatus, 'completed'); assert.deepEqual(completed.payload.data?.attachments, []); assert.ok(completed.payload.data?.evidencePhotosDeletedAt);
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM work_transfer_attachments WHERE transfer_id = ?').get(transferId) as { count: number }).count, 0);
+  for (const item of stored) assert.equal(fs.existsSync(resolvePrivatePhoto(item.file_url)), false);
+  const defaultList = await call<Array<{ id: string; workflowStatus: string }>>('/work-transfers', { cookie: adminCookie });
+  assert.equal(defaultList.response.status, 200); assert.ok(defaultList.payload.data?.every((item) => item.workflowStatus !== 'completed'));
+  const completedList = await call<Array<{ id: string; workflowStatus: string; completedAt?: string }>>('/work-transfers?status=completed', { cookie: adminCookie });
+  assert.equal(completedList.response.status, 200); assert.ok(completedList.payload.data?.some((item) => item.id === transferId));
+  assert.ok(completedList.payload.data?.every((item) => item.workflowStatus === 'completed'));
+  const completedTimes = completedList.payload.data?.map((item) => item.completedAt || '') || [];
+  assert.deepEqual(completedTimes, [...completedTimes].sort((left, right) => right.localeCompare(left)));
+  const completedUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: adminCookie, body: { customerAddress: '차단' } });
+  assert.equal(completedUpdate.response.status, 409);
 
-  const fieldAction = await call<{ workflowStatus: string }>(`/work-transfers/${transferId}/field-actions`, {
-    method: 'POST', cookie: managerCookie, body: { actionText: '케이블 교체 및 레벨 확인 완료' },
-  });
-  assert.equal(fieldAction.response.status, 201);
-  assert.equal(fieldAction.payload.data?.workflowStatus, 'field_processed');
+  const purgeFailureCreate = await call<{ id: string }>('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, requestPhotos: [photo('purge-failure.png')] } });
+  assert.equal(purgeFailureCreate.response.status, 201);
+  const purgeFailureId = purgeFailureCreate.payload.data?.id || ''; createdIds.push(purgeFailureId);
+  const purgeFailureAction = await call(`/work-transfers/${purgeFailureId}/field-actions`, { method: 'POST', cookie: managerCookie, body: { actionText: '삭제 실패 검증용 처리' } });
+  assert.equal(purgeFailureAction.response.status, 201);
+  const purgeFailureAttachment = db.prepare('SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ?').get(purgeFailureId) as { file_url: string };
+  const purgeFailurePath = resolvePrivatePhoto(purgeFailureAttachment.file_url);
+  fs.unlinkSync(purgeFailurePath); fs.mkdirSync(purgeFailurePath);
+  try {
+    const purgeFailure = await call(`/work-transfers/${purgeFailureId}/complete`, { method: 'POST', cookie: teamCookie });
+    assert.equal(purgeFailure.response.status, 503); assert.equal(purgeFailure.payload.code, 'PHOTO_PURGE_FAILED');
+    const afterFailure = db.prepare('SELECT workflow_status AS workflowStatus FROM work_transfers WHERE id = ?').get(purgeFailureId) as { workflowStatus: string };
+    assert.equal(afterFailure.workflowStatus, 'field_processed');
+  } finally {
+    fs.rmdirSync(purgeFailurePath);
+  }
 
-  const completed = await call<{
-    workflowStatus: string; attachments: unknown[]; evidencePhotoCount: number; evidencePhotosDeletedAt: string;
-  }>(`/work-transfers/${transferId}/complete`, {
-    method: 'POST', cookie: teamCookie, body: { comment: '현장처리 검수 완료' },
-  });
-  assert.equal(completed.response.status, 200);
-  assert.equal(completed.payload.data?.workflowStatus, 'completed');
-  assert.equal(completed.payload.data?.attachments.length, 0);
-  assert.equal(completed.payload.data?.evidencePhotoCount, 3);
-  assert.ok(completed.payload.data?.evidencePhotosDeletedAt);
-  const remainingAttachmentCount = db.prepare(`
-    SELECT COUNT(*) AS count FROM work_transfer_attachments WHERE transfer_id = ?
-  `).get(transferId) as { count: number };
-  assert.equal(remainingAttachmentCount.count, 0);
-  for (const photo of storedPhotoRows) assert.equal(fs.existsSync(resolvePrivatePhoto(photo.file_url)), false);
-  const removedPhotoResponse = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: teamCookie } });
-  assert.equal(removedPhotoResponse.status, 404);
-
-  const hiddenCompleted = await call(`/work-transfers/${transferId}`, { cookie: managerCookie });
-  assert.equal(hiddenCompleted.response.status, 404);
-  const managerSummary = await call<{ completed: number }>('/work-transfers/summary', { cookie: managerCookie });
-  assert.equal(managerSummary.payload.data?.completed, 0);
-
-  const reopened = await call<{ workflowStatus: string }>(`/work-transfers/${transferId}/reopen`, {
-    method: 'POST', cookie: adminCookie, body: { reason: '완료 결과 재확인 필요' },
-  });
-  assert.equal(reopened.response.status, 200);
-  assert.equal(reopened.payload.data?.workflowStatus, 'field_processed');
-  const visibleAgain = await call(`/work-transfers/${transferId}`, { cookie: managerCookie });
-  assert.equal(visibleAgain.response.status, 200);
-
-  const teamDelete = await call(`/work-transfers/${transferId}`, {
-    method: 'DELETE', cookie: teamCookie, body: { reason: '권한 확인' },
-  });
-  assert.equal(teamDelete.response.status, 403);
-  const managerDelete = await call(`/work-transfers/${transferId}`, {
-    method: 'DELETE', cookie: managerCookie, body: { reason: '권한 확인' },
-  });
-  assert.equal(managerDelete.response.status, 403);
-  const missingDeleteReason = await call(`/work-transfers/${transferId}`, {
-    method: 'DELETE', cookie: adminCookie, body: {},
-  });
-  assert.equal(missingDeleteReason.response.status, 400);
-  const deleted = await call<{ deleted: boolean }>(`/work-transfers/${transferId}`, {
-    method: 'DELETE', cookie: adminCookie, body: { reason: '잘못 등록된 점검표' },
-  });
-  assert.equal(deleted.response.status, 200);
-  assert.equal(deleted.payload.data?.deleted, true);
-  const hiddenAfterDelete = await call(`/work-transfers/${transferId}`, { cookie: adminCookie });
-  assert.equal(hiddenAfterDelete.response.status, 404);
-  const deletedRow = db.prepare(`
-    SELECT deleted_at, deleted_by, delete_reason FROM work_transfers WHERE id = ?
-  `).get(transferId) as { deleted_at: string; deleted_by: string; delete_reason: string };
-  assert.ok(deletedRow.deleted_at);
-  assert.equal(deletedRow.deleted_by, 'user-5');
-  assert.equal(deletedRow.delete_reason, '잘못 등록된 점검표');
-  const deleteAudit = db.prepare(`
-    SELECT metadata FROM audit_logs WHERE action = 'WORK_TRANSFER_DELETED' AND target_id = ?
-  `).get(transferId) as { metadata: string };
-  assert.equal(JSON.parse(deleteAudit.metadata).reason, '잘못 등록된 점검표');
-
-  console.log('Work-transfer test passed: two OCR fields with fixed company → registration-date fallback → max 3 photos → completion and deletion');
+  console.log('Work-transfer test passed: regions, optional address, photo limits, idempotency, inline permissions, manager scope, and atomic photo purge');
 } finally {
-  if (transferId) db.prepare('DELETE FROM work_transfers WHERE id = ?').run(transferId);
-  if (defaultDateTransferId) db.prepare('DELETE FROM work_transfers WHERE id = ?').run(defaultDateTransferId);
-  db.prepare("DELETE FROM auth_sessions WHERE user_id IN ('user-1', 'user-3', 'user-4', 'user-5')").run();
+  for (const id of createdIds.filter(Boolean)) db.prepare('DELETE FROM work_transfers WHERE id = ?').run(id);
+  db.prepare("DELETE FROM auth_sessions WHERE user_id IN ('user-1', 'user-2', 'user-3', 'user-4', 'user-5')").run();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

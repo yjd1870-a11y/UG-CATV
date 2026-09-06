@@ -57,8 +57,8 @@ db.prepare("UPDATE work_transfers SET workflow_status = 'completed'").run();
 const insertTransfer = db.prepare(`
   INSERT INTO work_transfers (
     id, transfer_date, status, title, description, extra_json,
-    region_id, workflow_status, is_urgent, ocr_status
-  ) VALUES (?, ?, 'pending', '홈 집계 테스트', '홈 집계 테스트', '{}', ?, ?, ?, 'pending')
+    region_id, workflow_status, is_urgent
+  ) VALUES (?, ?, 'pending', '홈 집계 테스트', '홈 집계 테스트', '{}', ?, ?, ?)
 `);
 insertTransfer.run(`${prefix}registered`, today, regionOne.id, 'registered', 0);
 insertTransfer.run(`${prefix}field`, today, regionOne.id, 'field_processed', 1);

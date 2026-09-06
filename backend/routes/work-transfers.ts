@@ -36,7 +36,6 @@ const registrationRoles = new Set(['admin', 'public_official', 'team_leader']);
 const completionRoles = new Set(['admin', 'public_official', 'team_leader']);
 const workflowStatuses = new Set(['registered', 'field_processed', 'completed']);
 const allowedAttachmentTypes = new Set(['request_photo', 'field_photo']);
-const currentHnsBranches = new Set(['HNS평택지점', 'HNS화성지점', 'HNS수원지점', 'HNS용인지점']);
 const maxEvidencePhotos = 3;
 
 type StoredAttachment = { id: string; file_url: string };
@@ -65,8 +64,10 @@ const requireRegion = (user: AuthUser) => {
 const scopeSql = (user: AuthUser, alias = 'wt') => {
   if (globalRoles.has(user.role)) return { sql: '', params: [] as Array<string | number> };
   const regionId = requireRegion(user);
-  const completedRule = user.role === 'manager' || user.role === 'guest' ? ` AND ${alias}.workflow_status <> 'completed'` : '';
-  return { sql: ` AND ${alias}.region_id = ?${completedRule}`, params: [regionId] as Array<string | number> };
+  const statusRule = user.role === 'manager'
+    ? ` AND ${alias}.workflow_status = 'registered'`
+    : user.role === 'guest' ? ` AND ${alias}.workflow_status <> 'completed'` : '';
+  return { sql: ` AND ${alias}.region_id = ?${statusRule}`, params: [regionId] as Array<string | number> };
 };
 
 const assertRegionPermission = (user: AuthUser, regionId: string) => {
@@ -117,14 +118,6 @@ const currentKoreaDay = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date());
 
-const normalizeNewBranch = (value: unknown) => {
-  const branch = asText(value, '지점', 100);
-  if (!currentHnsBranches.has(branch)) {
-    throw new ApiError(400, '지점은 HNS평택지점, HNS화성지점, HNS수원지점, HNS용인지점 중에서 선택해 주세요.', 'VALIDATION_ERROR');
-  }
-  return branch;
-};
-
 const listFilters = (req: Request, user: AuthUser) => {
   const clauses: string[] = [];
   const params: Array<string | number> = [];
@@ -157,11 +150,10 @@ const listFilters = (req: Request, user: AuthUser) => {
   }
   const query = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';
   if (query) {
-    clauses.push(`(wt.branch_name LIKE ? OR wt.customer_address LIKE ? OR wt.inspection_company LIKE ?
-      OR wt.media_type LIKE ? OR COALESCE(r.region_name, '') LIKE ?
+    clauses.push(`(wt.customer_address LIKE ? OR wt.media_type LIKE ? OR COALESCE(r.region_name, '') LIKE ?
       OR EXISTS (SELECT 1 FROM work_transfer_field_actions fa WHERE fa.transfer_id = wt.id AND (fa.action_text LIKE ? OR fa.processed_by_name LIKE ?)))`);
     const like = `%${query}%`;
-    params.push(...Array.from({ length: 7 }, () => like));
+    params.push(...Array.from({ length: 5 }, () => like));
   }
   const scope = scopeSql(user);
   return { sql: `${scope.sql}${clauses.length ? ` AND ${clauses.join(' AND ')}` : ''}`, params: [...scope.params, ...params] };
@@ -196,19 +188,17 @@ router.get('/summary', (req, res) => {
   success(res, counts);
 });
 
-router.post('/ocr-preview', (req, _res) => {
-  const user = authUser(req);
-  if (!registrationRoles.has(user.role)) throw new ApiError(403, 'OCR 등록을 수행할 권한이 없습니다.', 'FORBIDDEN');
-  throw new ApiError(410, 'OCR은 사진을 서버로 보내지 않고 브라우저에서만 실행됩니다.', 'BROWSER_OCR_ONLY');
-});
-
 router.get('/', (req, res) => {
   const user = authUser(req);
   const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
   const filters = listFilters(req, user);
-  const rows = db.prepare(`${transferSelect}${filters.sql}
-    ORDER BY wt.is_urgent DESC, date(COALESCE(wt.inspection_requested_date, wt.transfer_date)) ASC,
-             wt.created_at ASC LIMIT ?`
+  const requestedStatus = typeof req.query.status === 'string' ? req.query.status : '';
+  const defaultActiveOnly = requestedStatus ? '' : " AND wt.workflow_status <> 'completed'";
+  const orderBy = requestedStatus === 'completed'
+    ? 'datetime(COALESCE(wt.completed_at, wt.updated_at, wt.created_at)) DESC, wt.created_at DESC'
+    : 'wt.is_urgent DESC, date(COALESCE(wt.inspection_requested_date, wt.transfer_date)) ASC, wt.created_at ASC';
+  const rows = db.prepare(`${transferSelect}${filters.sql}${defaultActiveOnly}
+    ORDER BY ${orderBy} LIMIT ?`
   ).all(...filters.params, limit) as Array<Record<string, unknown>>;
   success(res, mapRows(rows));
 });
@@ -225,13 +215,10 @@ router.post('/', asyncRoute(async (req, res) => {
   const regionId = asText(req.body?.regionId, '지역', 100);
   assertRegionPermission(user, regionId);
   const region = regionById(regionId);
-  const branchName = normalizeNewBranch(req.body?.branchName);
   const inspectionDateInput = req.body?.inspectionRequestedDate
     ?? req.body?.inspectionDate ?? req.body?.requestDate ?? req.body?.transferDate;
   const inspectionRequestedDate = normalizeDay(inspectionDateInput, '점검요청일') || currentKoreaDay();
-  const location = asText(req.body?.customerAddress || req.body?.location || req.body?.address, '고객주소', 500);
-  // 신규 등록의 점검업체는 화면 입력이나 OCR 값을 신뢰하지 않고 정책값으로 고정한다.
-  const inspectionCompany = '유지텔레컴';
+  const location = optionalText(req.body?.customerAddress ?? req.body?.location ?? req.body?.address, 500) || '';
   const mediaType = 'CABLE';
   const title = '업무이관 사진 참조';
   const description = '상세내용은 완료 전 증빙사진에서 확인';
@@ -242,11 +229,18 @@ router.post('/', asyncRoute(async (req, res) => {
   `).get(cellName, cellName) as { id: string; cell_name: string } | undefined : undefined;
   if (cellName && !cell) throw new ApiError(404, '관련 CELL 정보를 찾을 수 없습니다.', 'NOT_FOUND');
   const photos = Array.isArray(req.body?.requestPhotos) ? req.body.requestPhotos as Array<Record<string, unknown>> : [];
-  if (photos.length > maxEvidencePhotos) {
-    throw new ApiError(400, `업무이관 사진은 최대 ${maxEvidencePhotos}장까지 등록할 수 있습니다.`, 'PHOTO_LIMIT_EXCEEDED');
+  if (photos.length < 1 || photos.length > maxEvidencePhotos) {
+    throw new ApiError(400, `업무이관 사진은 1~${maxEvidencePhotos}장 등록해 주세요.`, 'PHOTO_COUNT_INVALID');
   }
-  const requestedOcrStatus = req.body?.ocrStatus === 'succeeded'
-    ? 'succeeded' : req.body?.ocrStatus === 'failed' ? 'failed' : 'pending';
+  const clientRegistrationKey = optionalText(req.body?.clientRegistrationKey, 120);
+  if (clientRegistrationKey) {
+    const duplicate = db.prepare(`${transferSelect} AND wt.client_registration_key = ? AND wt.from_user_id = ?`)
+      .get(clientRegistrationKey, user.id) as Record<string, unknown> | undefined;
+    if (duplicate) {
+      success(res, mapTransferRow(duplicate));
+      return;
+    }
+  }
   const storedPhotos: Array<PendingPhoto & { objectKey: string; mimeType: string; size: number }> = [];
   let createdId = '';
   try {
@@ -260,20 +254,15 @@ router.post('/', asyncRoute(async (req, res) => {
     const id = randomUUID();
     createdId = id;
     const isUrgent = req.body?.isUrgent === true || req.body?.priority === 'urgent';
-    const ocrEngine = optionalText(req.body?.ocrEngine, 80) || (requestedOcrStatus === 'pending' ? 'manual' : 'browser-tesseract-kor-eng');
     const extra = {
       serviceNo: optionalText(req.body?.serviceNo, 100) || `TR-${Date.now()}`,
-      contractor: inspectionCompany,
-      inspectionCompany,
       requestDate: transferDate,
       status: '미완료',
       mediaType,
       cellName: cell?.cell_name || '', location, customerAddress: location,
-      branchName,
       registeredByName: user.name, regionId, regionName: region.region_name, isUrgent,
       inspectionDate: inspectionRequestedDate,
       inspectionRequestedDate,
-      ocrEngine,
     };
 
     db.exec('BEGIN IMMEDIATE');
@@ -281,15 +270,15 @@ router.post('/', asyncRoute(async (req, res) => {
       db.prepare(`
         INSERT INTO work_transfers (
           id, cell_id, title, description, from_user_id, priority, status, transfer_date,
-          extra_json, region_id, workflow_status, is_urgent, ocr_status, ocr_text,
-          branch_name, requester_name, inspection_company, inspection_requested_date,
+          extra_json, region_id, workflow_status, is_urgent, client_registration_key,
+          requester_name, inspection_requested_date,
           customer_address, handover_reason, media_type, tap_rn_location, pole_number,
           lead_in_length, pre_action_notes, inspection_request_details, evidence_photo_count
-        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 'registered', ?, ?, ?,
-          ?, '', ?, ?, ?, '', ?, '', '', '', '', '', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 'registered', ?, ?,
+          '', ?, ?, '', ?, '', '', '', '', '', ?)
       `).run(id, cell?.id || null, title, description, user.id, isUrgent ? 'urgent' : 'normal', transferDate,
-        JSON.stringify(extra), regionId, isUrgent ? 1 : 0, requestedOcrStatus, '',
-        branchName, inspectionCompany, inspectionRequestedDate, location, mediaType, storedPhotos.length);
+        JSON.stringify(extra), regionId, isUrgent ? 1 : 0, clientRegistrationKey || null,
+        inspectionRequestedDate, location, mediaType, storedPhotos.length);
       for (const photo of storedPhotos) {
         const attachmentId = randomUUID();
         db.prepare(`
@@ -297,13 +286,6 @@ router.post('/', asyncRoute(async (req, res) => {
             id, transfer_id, attachment_type, file_name, file_url, file_type, file_size, uploaded_by
           ) VALUES (?, ?, 'request_photo', ?, ?, ?, ?, ?)
         `).run(attachmentId, id, photo.fileName, photo.objectKey, photo.mimeType, photo.size, user.id);
-      }
-      if (requestedOcrStatus !== 'pending') {
-        db.prepare(`
-          INSERT INTO work_transfer_ocr_runs (
-            id, transfer_id, attachment_id, engine, status, extracted_text, error_message, requested_by, completed_at
-          ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
-        `).run(randomUUID(), id, ocrEngine, requestedOcrStatus, '', null, user.id, new Date().toISOString());
       }
       db.prepare(`
         INSERT INTO work_transfer_logs (transfer_id, author_user_id, author_name, to_status, comment, created_at)
@@ -338,42 +320,30 @@ router.put('/:id', (req, res) => {
   assertRegionPermission(user, nextRegionId);
   regionById(nextRegionId);
   const saved = JSON.parse(String(existing.extra_json || '{}')) as Record<string, unknown>;
-  const branchName = req.body?.branchName === undefined
-    ? String(existing.branch_name || saved.branchName || '')
-    : String(req.body.branchName) === String(existing.branch_name || saved.branchName || '')
-      ? String(existing.branch_name || saved.branchName || '')
-      : normalizeNewBranch(req.body.branchName);
   const locationInput = req.body?.customerAddress ?? req.body?.location;
   const location = locationInput === undefined
     ? String(existing.customer_address || saved.customerAddress || saved.location || '')
-    : asText(locationInput, '고객주소', 500);
+    : optionalText(locationInput, 500) || '';
   const inspectionRequestedDate = req.body?.inspectionRequestedDate === undefined
     ? String(existing.inspection_requested_date || existing.transfer_date).slice(0, 10)
     : normalizeDay(req.body.inspectionRequestedDate, '점검요청일');
   if (!inspectionRequestedDate) throw new ApiError(400, '점검요청일을 입력해 주세요.', 'VALIDATION_ERROR');
-  const inspectionCompany = req.body?.inspectionCompany === undefined
-    ? String(existing.inspection_company || saved.inspectionCompany || '유지텔레컴')
-    : asText(req.body.inspectionCompany, '점검작업업체', 200);
   const mediaType = req.body?.mediaType === undefined
     ? String(existing.media_type || saved.mediaType || 'CABLE')
     : asText(req.body.mediaType, '매체구분', 50);
   const isUrgent = req.body?.isUrgent === undefined ? Boolean(existing.is_urgent) : req.body.isUrgent === true;
   const nextExtra: Record<string, unknown> = {
-    ...saved, branchName, location, customerAddress: location,
+    ...saved, location, customerAddress: location,
     inspectionDate: inspectionRequestedDate, inspectionRequestedDate,
-    contractor: inspectionCompany, inspectionCompany, mediaType,
+    mediaType,
     regionId: nextRegionId, isUrgent,
   };
-  delete nextExtra.ocrText;
-  delete nextExtra.ocrQuality;
   db.prepare(`
-    UPDATE work_transfers SET region_id = ?, priority = ?, is_urgent = ?, ocr_text = '',
-      extra_json = ?, transfer_date = ?, branch_name = ?, inspection_company = ?,
-      inspection_requested_date = ?, customer_address = ?, media_type = ?,
+    UPDATE work_transfers SET region_id = ?, priority = ?, is_urgent = ?,
+      extra_json = ?, transfer_date = ?, inspection_requested_date = ?, customer_address = ?, media_type = ?,
       updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).run(nextRegionId, isUrgent ? 'urgent' : 'normal', isUrgent ? 1 : 0,
-    JSON.stringify(nextExtra), inspectionRequestedDate, branchName, inspectionCompany,
-    inspectionRequestedDate, location, mediaType, req.params.id);
+    JSON.stringify(nextExtra), inspectionRequestedDate, inspectionRequestedDate, location, mediaType, req.params.id);
   const now = new Date().toISOString();
   db.prepare(`
     INSERT INTO work_transfer_logs (transfer_id, author_user_id, author_name, from_status, to_status, comment, created_at)
@@ -408,7 +378,7 @@ router.delete('/:id', requireRoles('admin', 'public_official'), asyncRoute(async
       UPDATE work_transfers
          SET deleted_at = ?, deleted_by = ?, delete_reason = ?,
              evidence_photo_count = MAX(evidence_photo_count, ?),
-             evidence_photos_deleted_at = ?, ocr_text = '', updated_at = CURRENT_TIMESTAMP
+             evidence_photos_deleted_at = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND deleted_at IS NULL
     `).run(now, user.id, reason, attachments.length, now, req.params.id);
     db.exec('COMMIT');
@@ -421,7 +391,6 @@ router.delete('/:id', requireRoles('admin', 'public_official'), asyncRoute(async
     metadata: {
       reason,
       workflowStatus: existing.workflow_status,
-      branchName: existing.branch_name,
       customerAddress: existing.customer_address,
       inspectionRequestedDate: existing.inspection_requested_date,
       purgedPhotoCount: attachments.length,
@@ -507,13 +476,6 @@ router.get('/:id/attachments/:attachmentId/access-url', asyncRoute(async (req, r
   success(res, { url });
 }));
 
-router.post('/:id/ocr', (req, _res) => {
-  const user = authUser(req);
-  if (!registrationRoles.has(user.role)) throw new ApiError(403, 'OCR을 실행할 권한이 없습니다.', 'FORBIDDEN');
-  accessibleTransfer(req.params.id, user);
-  throw new ApiError(410, 'OCR은 사진을 서버로 보내지 않고 브라우저에서만 실행됩니다.', 'BROWSER_OCR_ONLY');
-});
-
 router.post('/:id/field-actions', (req, res) => {
   const user = authUser(req);
   const existing = accessibleTransfer(req.params.id, user);
@@ -546,6 +508,10 @@ router.post('/:id/field-actions', (req, res) => {
     throw error;
   }
   writeAuditLog(req, { action: 'WORK_TRANSFER_FIELD_PROCESSED', targetType: 'work_transfer', targetId: req.params.id, metadata: { fieldActionId: id } });
+  if (user.role === 'manager') {
+    success(res, { id: req.params.id, workflowStatus: 'field_processed', status: '현장처리' }, 201);
+    return;
+  }
   success(res, mapTransferRow(accessibleTransfer(req.params.id, user)), 201);
 });
 
@@ -573,7 +539,7 @@ router.post('/:id/complete', asyncRoute(async (req, res) => {
     db.prepare(`
       UPDATE work_transfers SET workflow_status = 'completed', status = 'completed', completed_at = ?,
         final_completed_by = ?, evidence_photo_count = MAX(evidence_photo_count, ?),
-        evidence_photos_deleted_at = ?, ocr_text = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        evidence_photos_deleted_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
     `).run(now, user.id, attachments.length, now, req.params.id);
     db.prepare(`
       INSERT INTO work_transfer_logs (transfer_id, author_user_id, author_name, from_status, to_status, comment, created_at)

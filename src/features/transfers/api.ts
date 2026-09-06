@@ -57,7 +57,7 @@ export type TransferAnalytics = {
   details: {
     metric: AnalyticsDetailMetric; page: number; limit: number; total: number;
     items: Array<{
-      id: string; receivedDate: string; regionName: string; branchName: string; customerAddress: string;
+      id: string; receivedDate: string; regionName: string; customerAddress: string;
       handoverReason: string; isUrgent: boolean; fieldProcessorName: string; fieldProcessedAt: string | null;
       completedAt: string | null; workflowStatus: string; processingHours: number | null;
     }>;

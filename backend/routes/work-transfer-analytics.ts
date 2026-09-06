@@ -153,7 +153,7 @@ const detailRows = (filter: SqlFilter, period: Period, metric: string, limit: nu
   SELECT wt.id,
          ${requestDateSql} AS received_date,
          COALESCE(r.region_name, '') AS region_name,
-         wt.branch_name, wt.customer_address, wt.handover_reason, wt.is_urgent,
+         wt.customer_address, wt.handover_reason, wt.is_urgent,
          COALESCE(field_user.name, '현장처리자 미지정') AS field_processor_name,
          wt.field_processed_at, wt.completed_at, wt.workflow_status,
          CASE WHEN wt.completed_at IS NOT NULL
@@ -305,7 +305,7 @@ const queryAnalytics = (req: Request, user: AuthUser) => {
   `).get(...filter.params, ...predicate.params) as { count: number }).count);
   const details = detailRows(filter, period, metric, detailLimit, (detailPage - 1) * detailLimit).map((row) => ({
     id: String(row.id), receivedDate: String(row.received_date), regionName: String(row.region_name),
-    branchName: String(row.branch_name || ''), customerAddress: String(row.customer_address || ''),
+    customerAddress: String(row.customer_address || ''),
     handoverReason: String(row.handover_reason || ''), isUrgent: Boolean(row.is_urgent),
     fieldProcessorName: String(row.field_processor_name), fieldProcessedAt: row.field_processed_at || null,
     completedAt: row.completed_at || null, workflowStatus: String(row.workflow_status),
@@ -357,10 +357,10 @@ router.get('/export', (req, res) => {
   const metric = typeof req.query.detailMetric === 'string' && detailMetrics.has(req.query.detailMetric) ? req.query.detailMetric : 'received';
   const rows = detailRows(filter, period, metric, 10_000, 0);
   const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-  const header = ['점검요청일', '지역', '지점', '주소', '이관사유', '긴급', '현장처리자', '현장처리일시', '완료일시', '상태', '처리시간(시간)'];
+  const header = ['점검요청일', '지역', '주소', '이관사유', '긴급', '현장처리자', '현장처리일시', '완료일시', '상태', '처리시간(시간)'];
   const statusLabels: Record<string, string> = { registered: '미완료', field_processed: '현장처리', completed: '완료' };
   const lines = rows.map((row) => [
-    row.received_date, row.region_name, row.branch_name, row.customer_address, row.handover_reason,
+    row.received_date, row.region_name, row.customer_address, row.handover_reason,
     row.is_urgent ? '긴급' : '일반', row.field_processor_name, row.field_processed_at, row.completed_at,
     statusLabels[String(row.workflow_status)] || row.workflow_status, row.processing_hours,
   ].map(escapeCsv).join(','));

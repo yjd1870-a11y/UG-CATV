@@ -98,10 +98,12 @@ try {
 
   const [manager, guestTransfers] = await Promise.all([
     login('user-1'),
-    call<Array<{ id: string }>>('/work-transfers', { cookie: guest.cookie }),
+    call<Array<{ id: string; workflowStatus: string }>>('/work-transfers', { cookie: guest.cookie }),
   ]);
-  const managerTransfers = await call<Array<{ id: string }>>('/work-transfers', { cookie: manager.cookie });
-  assert.deepEqual(guestTransfers.payload.data?.map((item) => item.id), managerTransfers.payload.data?.map((item) => item.id));
+  const managerTransfers = await call<Array<{ id: string; workflowStatus: string }>>('/work-transfers', { cookie: manager.cookie });
+  const guestIds = new Set(guestTransfers.payload.data?.map((item) => item.id));
+  assert.ok(managerTransfers.payload.data?.every((item) => item.workflowStatus === 'registered' && guestIds.has(item.id)));
+  assert.ok(guestTransfers.payload.data?.every((item) => item.workflowStatus !== 'completed'));
 
   const today = todayInSeoul();
   const month = today.slice(0, 7);
@@ -113,9 +115,9 @@ try {
   db.prepare(`
     INSERT INTO work_transfers (
       id, transfer_date, status, title, description, extra_json, region_id,
-      workflow_status, field_processed_by, field_processed_at, is_urgent, ocr_status
+      workflow_status, field_processed_by, field_processed_at, is_urgent
     ) VALUES (?, ?, 'transferred', '게스트 처리자 제외 테스트', '', '{}', ?,
-      'field_processed', ?, CURRENT_TIMESTAMP, 0, 'pending')
+      'field_processed', ?, CURRENT_TIMESTAMP, 0)
   `).run(guestTransferId, today, guestRegion.regionId, guestId);
   const analyticsAfter = await call<{
     summary: { received: number };

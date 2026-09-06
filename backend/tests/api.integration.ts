@@ -459,9 +459,10 @@ try {
     cookie: managerLogin.cookie,
     body: {
       serviceNo: `TEST-${suffix}`, cellName: legacyCellName, regionId: managerRegion.regionId,
-      branchName: 'HNS평택지점', inspectionRequestedDate: '2099-12-31',
+      inspectionRequestedDate: '2099-12-31',
       location: '통합테스트 현장 주소', transferReason: 'API 통합 테스트',
-      requestDetails: '업무이관 저장 확인', ocrText: '통합테스트 수기 OCR 원문',
+      requestDetails: '업무이관 저장 확인',
+      requestPhotos: [{ fileName: 'integration.png', dataUrl: floorImageDataUrl }],
     },
   });
   assert.equal(transfer.response.status, 201);

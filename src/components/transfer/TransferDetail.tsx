@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { transfersApi } from '../../features/transfers/api';
-import { HNS_BRANCHES } from '../../features/transfers/browser-ocr/validation';
 import { canProcessTransfer } from '../../shared/auth/permissions';
 import type { WorkTransfer } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
@@ -61,9 +60,7 @@ export const TransferDetail: React.FC = () => {
   const [fieldActionText, setFieldActionText] = useState('');
   const [processedAt, setProcessedAt] = useState(localDateTime);
   const [editing, setEditing] = useState(false);
-  const [editBranchName, setEditBranchName] = useState('');
   const [editInspectionDate, setEditInspectionDate] = useState('');
-  const [editInspectionCompany, setEditInspectionCompany] = useState('');
   const [editMediaType, setEditMediaType] = useState('');
   const [editLocation, setEditLocation] = useState('');
   const [editUrgent, setEditUrgent] = useState(false);
@@ -110,9 +107,7 @@ export const TransferDetail: React.FC = () => {
 
   useEffect(() => {
     if (!transfer) return;
-    setEditBranchName(transfer.branchName || '');
     setEditInspectionDate((transfer.inspectionRequestedDate || transfer.requestDate).slice(0, 10));
-    setEditInspectionCompany(transfer.inspectionCompany || '유지텔레컴');
     setEditMediaType(transfer.mediaType || 'CABLE');
     setEditLocation(transfer.location);
     setEditUrgent(Boolean(transfer.isUrgent));
@@ -156,6 +151,11 @@ export const TransferDetail: React.FC = () => {
       await transfersApi.addFieldAction(transfer.id, { actionText: fieldActionText.trim(), processedAt: processedAt.replace('T', ' ') });
       setFieldActionText('');
       showToast('현장처리가 등록되었습니다.', 'success');
+      if (currentUser?.role === 'manager') {
+        await reloadBusinessData();
+        navigateTo('transfer_list');
+        return;
+      }
       await Promise.all([loadDetail(), reloadBusinessData()]);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '현장처리 등록에 실패했습니다.', 'error');
@@ -195,14 +195,12 @@ export const TransferDetail: React.FC = () => {
   };
 
   const handleSaveEdit = async () => {
-    if (!transfer || !editBranchName || !editInspectionDate || !editLocation.trim()
-      || !editInspectionCompany.trim() || !editMediaType.trim()) return;
+    if (!transfer || !editInspectionDate || !editMediaType.trim()) return;
     setBusy(true);
     try {
       await transfersApi.update(transfer.id, {
-        branchName: editBranchName,
         inspectionRequestedDate: editInspectionDate, customerAddress: editLocation.trim(),
-        inspectionCompany: editInspectionCompany.trim(), mediaType: editMediaType.trim(),
+        mediaType: editMediaType.trim(),
         isUrgent: editUrgent,
       });
       for (const photo of editPhotos) {
@@ -258,7 +256,7 @@ export const TransferDetail: React.FC = () => {
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg sm:text-xl font-black text-[#173B57]">{transfer.branchName || transfer.serviceNo}</h1>
+              <h1 className="text-lg sm:text-xl font-black text-[#173B57]">{transfer.serviceNo}</h1>
               <StatusBadge status={transfer.status} size="md" />
               {transfer.isUrgent ? <span className="inline-flex items-center gap-1 text-xs font-bold text-red-700"><AlertTriangle className="w-4 h-4" />긴급</span> : null}
             </div>
@@ -272,12 +270,10 @@ export const TransferDetail: React.FC = () => {
         <section className="bg-white rounded-2xl p-4 sm:p-5 border border-blue-200 shadow-sm space-y-3">
           <h2 className="text-sm font-extrabold text-[#173B57]">등록정보 수정</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <label className="block text-xs font-bold text-slate-700">지점 *<select required value={editBranchName} onChange={(event) => setEditBranchName(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50"><option value="">지점 선택</option>{editBranchName && !(HNS_BRANCHES as readonly string[]).includes(editBranchName) ? <option value={editBranchName}>{editBranchName} (기존)</option> : null}{HNS_BRANCHES.map((branch) => <option key={branch} value={branch}>{branch}</option>)}</select></label>
             <label className="block text-xs font-bold text-slate-700">점검요청일 *<input type="date" required value={editInspectionDate} onChange={(event) => setEditInspectionDate(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" /></label>
-            <label className="block text-xs font-bold text-slate-700">점검작업업체 *<input required value={editInspectionCompany} onChange={(event) => setEditInspectionCompany(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" /></label>
             <label className="block text-xs font-bold text-slate-700">매체구분 *<input required value={editMediaType} onChange={(event) => setEditMediaType(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" /></label>
           </div>
-          <label className="block text-xs font-bold text-slate-700">고객주소 *<input required value={editLocation} onChange={(event) => setEditLocation(event.target.value)} className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" /></label>
+          <label className="block text-xs font-bold text-slate-700">고객주소<input value={editLocation} onChange={(event) => setEditLocation(event.target.value)} placeholder="공란으로 저장할 수 있습니다." className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 bg-slate-50" /></label>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
             <div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-slate-700">추가 업무이관 사진 ({evidencePhotos.length + editPhotos.length}/3)</span><span className="text-[10px] text-slate-400">장당 10MB</span></div>
             {evidencePhotos.length + editPhotos.length < 3 ? <label className="mt-2 flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-white text-xs font-bold text-[#2878B5]"><ImagePlus className="h-4 w-4" />갤러리에서 선택<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void handleEditPhotoSelection(event)} className="sr-only" /></label> : <p className="mt-2 text-[11px] font-bold text-amber-700">사진 3장이 모두 등록되어 추가할 수 없습니다.</p>}
@@ -293,9 +289,8 @@ export const TransferDetail: React.FC = () => {
         <dl className="grid grid-cols-[82px_1fr] gap-x-3 gap-y-3 text-xs">
           <dt className="font-bold text-slate-500 flex items-center gap-1"><Calendar className="w-3 h-3" />점검요청일</dt><dd className="font-semibold">{transfer.inspectionRequestedDate || transfer.requestDate}</dd>
           <dt className="font-bold text-slate-500">지역</dt><dd className="font-extrabold text-[#173B57]">{transfer.regionName || '-'}</dd>
-          <dt className="font-bold text-slate-500">지점</dt><dd className="font-extrabold text-[#173B57]">{transfer.branchName || '-'}</dd>
-          <dt className="font-bold text-slate-500">점검업체/매체</dt><dd className="font-medium">{transfer.inspectionCompany || '유지텔레컴'} / {transfer.mediaType || 'CABLE'}</dd>
-          <dt className="font-bold text-slate-500 flex items-center gap-1"><MapPin className="w-3 h-3" />주소</dt><dd className="font-medium">{transfer.location}</dd>
+          <dt className="font-bold text-slate-500">매체</dt><dd className="font-medium">{transfer.mediaType || 'CABLE'}</dd>
+          <dt className="font-bold text-slate-500 flex items-center gap-1"><MapPin className="w-3 h-3" />주소</dt><dd className="font-medium">{transfer.location || '주소 미입력'}</dd>
           <dt className="font-bold text-slate-500 flex items-center gap-1"><User className="w-3 h-3" />작업처리자</dt><dd className="font-semibold">{transfer.fieldProcessedByName || '미지정'}</dd>
         </dl>
       </section>
@@ -362,7 +357,7 @@ export const TransferDetail: React.FC = () => {
             <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
               <div>
                 <h2 id="transfer-action-title" className="font-extrabold text-[#173B57]">업무이관 {pendingAction === 'delete' ? '삭제' : '재오픈'}</h2>
-                <p className="mt-1 text-xs text-slate-500">{transfer.branchName || '지점 미확인'} · {transfer.location} · {transfer.inspectionRequestedDate || transfer.requestDate}</p>
+                <p className="mt-1 text-xs text-slate-500">{transfer.regionName || '지역 미확인'} · {transfer.location || '주소 미입력'} · {transfer.inspectionRequestedDate || transfer.requestDate}</p>
               </div>
               <button type="button" aria-label="사유 입력창 닫기" onClick={() => setPendingAction(null)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"><X className="h-5 w-5" /></button>
             </div>

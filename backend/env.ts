@@ -52,11 +52,6 @@ const cookieSameSite = (process.env.SESSION_COOKIE_SAME_SITE || 'strict').toLowe
 if (!['strict', 'lax', 'none'].includes(cookieSameSite)) {
   throw new Error('SESSION_COOKIE_SAME_SITE must be strict, lax, or none.');
 }
-const workTransferOcrExecutionMode = (process.env.OCR_EXECUTION_MODE || 'browser_only').toLowerCase();
-if (workTransferOcrExecutionMode !== 'browser_only') {
-  throw new Error('OCR_EXECUTION_MODE must be browser_only. Server or paid OCR is disabled.');
-}
-
 const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
   .split(',')
   .map((origin) => origin.trim().replace(/\/$/, ''))
@@ -106,7 +101,6 @@ export const env = {
   enforceHttps: booleanValue('ENFORCE_HTTPS', nodeEnv === 'production'),
   // 10MB 사진 3장의 Base64 오버헤드까지 한 요청에서 수용한다.
   jsonBodyLimit: process.env.JSON_BODY_LIMIT || '45mb',
-  workTransferOcrExecutionMode: workTransferOcrExecutionMode as 'browser_only',
   loginFailureLimit: numberValue('LOGIN_FAILURE_LIMIT', 5, 3, 50),
   loginWindowMinutes: numberValue('LOGIN_WINDOW_MINUTES', 10, 1, 1440),
   bootstrapAdminUsername: process.env.BOOTSTRAP_ADMIN_USERNAME || '',

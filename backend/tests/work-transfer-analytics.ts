@@ -60,9 +60,9 @@ try {
   const insert = db.prepare(`
     INSERT INTO work_transfers (
       id, title, description, priority, status, transfer_date, extra_json, region_id,
-      workflow_status, is_urgent, inspection_requested_date, branch_name, customer_address,
+      workflow_status, is_urgent, inspection_requested_date, customer_address,
       handover_reason, field_processed_by, field_processed_at, completed_at, deleted_at
-    ) VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const add = (id: string, input: {
     regionId: string; requested: string; workflow?: string; urgent?: number; processor?: string | null;
@@ -70,7 +70,7 @@ try {
   }) => insert.run(
     `${prefix}${id}`, `통계 테스트 ${id}`, `통계 테스트 ${id}`, input.urgent ? 'urgent' : 'normal',
     input.workflow === 'completed' ? 'completed' : 'pending', input.requested, input.regionId,
-    input.workflow || 'registered', input.urgent || 0, input.requested, 'HNS테스트지점',
+    input.workflow || 'registered', input.urgent || 0, input.requested,
     `테스트 주소 ${id}`, `테스트 사유 ${id}`, input.processor || null, input.processedAt || null,
     input.completedAt || null, input.deletedAt || null,
   );
@@ -133,7 +133,9 @@ try {
   const unassigned = await call<Analytics>(`/work-transfers/analytics${query}&fieldProcessorId=unassigned`, teamCookie);
   assert.equal(unassigned.payload.data?.summary.received, 2);
   const listByProcessor = await call<Array<{ id: string }>>('/work-transfers?from=2031-01-01&to=2031-01-31&fieldProcessorId=user-1', teamCookie);
-  assert.equal(listByProcessor.payload.data?.filter((row) => row.id.startsWith(prefix)).length, 2);
+  assert.equal(listByProcessor.payload.data?.filter((row) => row.id.startsWith(prefix)).length, 1);
+  const completedListByProcessor = await call<Array<{ id: string }>>('/work-transfers?from=2031-01-01&to=2031-01-31&fieldProcessorId=user-1&status=completed', teamCookie);
+  assert.equal(completedListByProcessor.payload.data?.filter((row) => row.id.startsWith(prefix)).length, 1);
 
   const completedInPeriod = await call<Analytics>(`/work-transfers/analytics${query}&detailMetric=completedInPeriod`, teamCookie);
   assert.equal(completedInPeriod.payload.data?.details.total, 1);

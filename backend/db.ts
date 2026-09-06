@@ -184,8 +184,29 @@ CREATE TABLE IF NOT EXISTS work_transfers (
   transfer_date TEXT NOT NULL,
   due_date TEXT,
   completed_at TEXT,
+  region_id TEXT,
+  workflow_status TEXT NOT NULL DEFAULT 'registered',
+  is_urgent INTEGER NOT NULL DEFAULT 0,
+  client_registration_key TEXT,
+  requester_name TEXT NOT NULL DEFAULT '',
+  inspection_requested_date TEXT,
+  customer_address TEXT NOT NULL DEFAULT '',
+  handover_reason TEXT NOT NULL DEFAULT '',
+  media_type TEXT NOT NULL DEFAULT 'CABLE',
+  tap_rn_location TEXT NOT NULL DEFAULT '',
+  pole_number TEXT NOT NULL DEFAULT '',
+  lead_in_length TEXT NOT NULL DEFAULT '',
+  pre_action_notes TEXT NOT NULL DEFAULT '',
+  inspection_request_details TEXT NOT NULL DEFAULT '',
   evidence_photo_count INTEGER NOT NULL DEFAULT 0,
   evidence_photos_deleted_at TEXT,
+  field_processed_at TEXT,
+  field_processed_by TEXT,
+  final_completed_by TEXT,
+  reopened_at TEXT,
+  reopened_by TEXT,
+  deleted_by TEXT,
+  delete_reason TEXT,
   extra_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -232,20 +253,6 @@ CREATE TABLE IF NOT EXISTS work_transfer_field_actions (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_work_transfer_field_actions_transfer ON work_transfer_field_actions(transfer_id, processed_at DESC);
-
-CREATE TABLE IF NOT EXISTS work_transfer_ocr_runs (
-  id TEXT PRIMARY KEY,
-  transfer_id TEXT NOT NULL REFERENCES work_transfers(id) ON DELETE CASCADE,
-  attachment_id TEXT REFERENCES work_transfer_attachments(id) ON DELETE SET NULL,
-  engine TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('processing', 'succeeded', 'failed')),
-  extracted_text TEXT NOT NULL DEFAULT '',
-  error_message TEXT,
-  requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  completed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_work_transfer_ocr_runs_transfer ON work_transfer_ocr_runs(transfer_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS daily_work (
   id TEXT PRIMARY KEY,
@@ -693,14 +700,43 @@ const syncRegionAssignments = () => {
        SET region_id = (SELECT id FROM regions WHERE region_name = users.department)
      WHERE region_id IS NULL OR region_id = ''
   `).run();
+  const demoRegionAssignments: Array<[string, string]> = [
+    ['user-1', '평택안성'],
+    ['user-2', '평택안성'],
+    ['user-3', '용인'],
+    ['user-4', '평택안성'],
+  ];
+  const assignDemoRegion = db.prepare(`
+    UPDATE users
+       SET region_id = (SELECT id FROM regions WHERE region_name = ?)
+     WHERE id = ?
+       AND department LIKE '전송망%'
+       AND (region_id IS NULL OR region_id = '' OR region_id NOT IN (
+         SELECT id FROM regions WHERE region_name IN (${workTransferRegionPlaceholders})
+       ))
+  `);
+  demoRegionAssignments.forEach(([userId, regionName]) => {
+    assignDemoRegion.run(regionName, userId, ...workTransferRegionParams);
+  });
   db.prepare(`
     UPDATE work_transfers
        SET region_id = (
-         SELECT r.id FROM cells c JOIN regions r ON r.region_name = c.region
+         SELECT r.id
+           FROM cells c
+           JOIN regions r ON r.region_name = CASE
+             WHEN c.region IN ('평택', '안성', '평택안성') THEN '평택안성'
+             WHEN c.region IN ('용인', '수지') THEN '용인'
+             WHEN c.region = '수원' THEN '수원'
+             WHEN c.region IN ('오산', '화성', '오산화성') THEN '오산화성'
+             ELSE c.region
+           END
           WHERE c.id = work_transfers.cell_id
        )
-     WHERE region_id IS NULL OR region_id = ''
-  `).run();
+     WHERE cell_id IS NOT NULL
+       AND (region_id IS NULL OR region_id = '' OR region_id NOT IN (
+         SELECT id FROM regions WHERE region_name IN (${workTransferRegionPlaceholders})
+       ))
+  `).run(...workTransferRegionParams);
   db.prepare(`
     UPDATE work_transfers
        SET workflow_status = CASE status
@@ -734,8 +770,7 @@ export const createSchema = () => {
   ensureColumn('work_transfers', 'region_id', 'TEXT');
   ensureColumn('work_transfers', 'workflow_status', "TEXT NOT NULL DEFAULT 'registered'");
   ensureColumn('work_transfers', 'is_urgent', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn('work_transfers', 'ocr_status', "TEXT NOT NULL DEFAULT 'pending'");
-  ensureColumn('work_transfers', 'ocr_text', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('work_transfers', 'client_registration_key', 'TEXT');
   ensureColumn('work_transfers', 'evidence_photo_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('work_transfers', 'evidence_photos_deleted_at', 'TEXT');
   ensureColumn('work_transfers', 'field_processed_at', 'TEXT');
@@ -743,9 +778,7 @@ export const createSchema = () => {
   ensureColumn('work_transfers', 'final_completed_by', 'TEXT');
   ensureColumn('work_transfers', 'reopened_at', 'TEXT');
   ensureColumn('work_transfers', 'reopened_by', 'TEXT');
-  ensureColumn('work_transfers', 'branch_name', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('work_transfers', 'requester_name', "TEXT NOT NULL DEFAULT ''");
-  ensureColumn('work_transfers', 'inspection_company', "TEXT NOT NULL DEFAULT '유지텔레컴'");
   ensureColumn('work_transfers', 'inspection_requested_date', 'TEXT');
   ensureColumn('work_transfers', 'customer_address', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('work_transfers', 'handover_reason', "TEXT NOT NULL DEFAULT ''");
@@ -797,16 +830,6 @@ export const createSchema = () => {
   ensureColumn('straight_map_jobs', 'total_tile_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('straight_map_jobs', 'total_artifact_bytes', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('straight_map_job_sheets', 'checkpoint_json', 'TEXT');
-  // OCR 원문은 업무 데이터로 누적하지 않는다. 기존 값도 배포 시 제거해
-  // 사진과 무관한 6개 확정 필드만 장기 보관한다.
-  db.prepare("UPDATE work_transfers SET ocr_text = '' WHERE ocr_text <> ''").run();
-  db.prepare("UPDATE work_transfer_ocr_runs SET extracted_text = '' WHERE extracted_text <> ''").run();
-  db.prepare(`
-    UPDATE work_transfers
-       SET extra_json = json_remove(extra_json, '$.ocrText', '$.ocrQuality')
-     WHERE json_valid(extra_json) = 1
-       AND (json_type(extra_json, '$.ocrText') IS NOT NULL OR json_type(extra_json, '$.ocrQuality') IS NOT NULL)
-  `).run();
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_station_key ON catv_b2c_lines(station_key);
     CREATE INDEX IF NOT EXISTS idx_catv_b2c_normalized_search ON catv_b2c_lines(normalized_search);
@@ -825,7 +848,8 @@ export const createSchema = () => {
     CREATE INDEX IF NOT EXISTS idx_work_transfers_workflow_inspection_date ON work_transfers(workflow_status, inspection_requested_date DESC);
     CREATE INDEX IF NOT EXISTS idx_work_transfers_completed_at ON work_transfers(completed_at DESC);
     CREATE INDEX IF NOT EXISTS idx_work_transfers_urgent_inspection_date ON work_transfers(is_urgent, inspection_requested_date DESC);
-    CREATE INDEX IF NOT EXISTS idx_work_transfers_branch ON work_transfers(branch_name);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_work_transfers_client_registration_key
+      ON work_transfers(client_registration_key) WHERE client_registration_key IS NOT NULL;
   `);
   db.prepare(`
     UPDATE users

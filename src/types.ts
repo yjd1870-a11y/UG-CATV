@@ -151,7 +151,6 @@ export interface CellInfo {
 
 export type TransferStatus = '미완료' | '현장처리' | '완료' | '대기' | '작업중' | '업무이관';
 export type TransferWorkflowStatus = 'registered' | 'field_processed' | 'completed';
-export type TransferOcrStatus = 'pending' | 'processing' | 'succeeded' | 'failed';
 export type MediaType = 'HFC' | 'FTTH' | 'RF' | '광복합' | 'CABLE';
 
 export interface TransferLog {
@@ -165,7 +164,6 @@ export interface TransferLog {
 export interface WorkTransfer {
   id: string;
   serviceNo: string;
-  contractor: string;
   requestDate: string;
   status: TransferStatus;
   mediaType: MediaType;
@@ -176,8 +174,6 @@ export interface WorkTransfer {
   preActionNotes: string;
   requestDetails: string;
   requesterName: string;
-  branchName?: string;
-  inspectionCompany?: string;
   inspectionRequestedDate?: string;
   customerAddress?: string;
   handoverReason?: string;
@@ -191,7 +187,6 @@ export interface WorkTransfer {
   regionId?: string;
   regionName?: string;
   isUrgent?: boolean;
-  ocrStatus?: TransferOcrStatus;
   evidencePhotoCount?: number;
   evidencePhotosDeletedAt?: string;
   fieldProcessedAt?: string;
