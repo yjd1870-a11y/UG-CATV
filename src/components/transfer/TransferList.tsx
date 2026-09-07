@@ -193,16 +193,21 @@ export const TransferList: React.FC = () => {
       return;
     }
     if (value === fieldValue(transfer, field)) { setEditingCell(null); setInlineValue(''); return; }
+    const scrollPosition = { left: window.scrollX, top: window.scrollY };
     setInlineSaving(true);
     try {
-      await transfersApi.update(transfer.id, { [field]: value });
+      const updatedTransfer = await transfersApi.update(transfer.id, { [field]: value });
+      setItems((current) => current.map((item) => item.id === updatedTransfer.id ? updatedTransfer : item));
       setEditingCell(null); setInlineValue('');
       showToast('업무이관 정보를 수정했습니다.', 'success');
-      await refreshBusinessData();
+      await reloadBusinessData();
     } catch (error) {
       setEditingCell(null); setInlineValue('');
       showToast(error instanceof Error ? error.message : '수정에 실패했습니다.', 'error');
-    } finally { setInlineSaving(false); }
+    } finally {
+      setInlineSaving(false);
+      window.requestAnimationFrame(() => window.scrollTo({ ...scrollPosition, behavior: 'auto' }));
+    }
   };
   const inlineKeyDown = (event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => {
     if (event.key === 'Escape') { event.preventDefault(); cancelInlineEdit(); }
