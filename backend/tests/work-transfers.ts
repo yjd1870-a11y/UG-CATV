@@ -44,6 +44,8 @@ try {
 
   const meta = await call<{ regions: Array<{ name: string }> }>('/work-transfers/meta', { cookie: adminCookie });
   assert.deepEqual(meta.payload.data?.regions.map((region) => region.name), ['평택안성', '용인', '수원', '오산화성']);
+  const teamMeta = await call<{ regions: Array<{ name: string }> }>('/work-transfers/meta', { cookie: teamCookie });
+  assert.deepEqual(teamMeta.payload.data?.regions.map((region) => region.name), ['평택안성', '용인', '수원', '오산화성']);
 
   const noPhoto = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: suwon.id } });
   assert.equal(noPhoto.response.status, 400); assert.equal(noPhoto.payload.code, 'PHOTO_COUNT_INVALID');
@@ -56,8 +58,8 @@ try {
   assert.equal(oversized.response.status, 400); assert.equal(oversized.payload.code, 'INVALID_PHOTO_SIZE');
   const invalidDate = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, inspectionRequestedDate: '2026-02-30', requestPhotos: [photo()] } });
   assert.equal(invalidDate.response.status, 400);
-  const otherRegion = await call('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: yongin.id, requestPhotos: [photo()] } });
-  assert.equal(otherRegion.response.status, 404);
+  const otherRegion = await call<{ id: string }>('/work-transfers', { method: 'POST', cookie: teamCookie, body: { regionId: yongin.id, requestPhotos: [photo()] } });
+  assert.equal(otherRegion.response.status, 201); createdIds.push(otherRegion.payload.data?.id || '');
   const unknownRegion = await call('/work-transfers', { method: 'POST', cookie: adminCookie, body: { regionId: 'unknown-region', requestPhotos: [photo()] } });
   assert.equal(unknownRegion.response.status, 400); assert.equal(unknownRegion.payload.code, 'INVALID_REGION');
 
@@ -92,7 +94,7 @@ try {
   const managerUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: managerCookie, body: { customerAddress: '차단' } });
   assert.equal(managerUpdate.response.status, 403);
   const teamOtherRegionUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: teamCookie, body: { regionId: yongin.id } });
-  assert.equal(teamOtherRegionUpdate.response.status, 404);
+  assert.equal(teamOtherRegionUpdate.response.status, 200);
   const adminRegionUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: adminCookie, body: { regionId: yongin.id, customerAddress: '용인 주소' } });
   assert.equal(adminRegionUpdate.response.status, 200);
   const publicUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: publicCookie, body: { regionId: suwon.id, customerAddress: '공무 수정 주소' } });

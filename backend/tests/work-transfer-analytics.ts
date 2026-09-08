@@ -110,11 +110,10 @@ try {
 
   const team = await call<Analytics>(`/work-transfers/analytics${query}`, teamCookie);
   assert.equal(team.response.status, 200);
-  assert.equal(team.payload.data?.summary.received, 4);
-  assert.equal(team.payload.data?.summary.completedFromReceived, 1);
-  assert.equal(team.payload.data?.summary.completedInPeriod, 1);
-  assert.equal(team.payload.data?.byRegion.length, 1);
-  assert.equal(team.payload.data?.byRegion[0].regionId, teamRegion.id);
+  assert.equal(team.payload.data?.summary.received, 5);
+  assert.equal(team.payload.data?.summary.completedFromReceived, 2);
+  assert.equal(team.payload.data?.summary.completedInPeriod, 2);
+  assert.equal(team.payload.data?.byRegion.length, 2);
   assert.equal(team.payload.data?.byFieldProcessor.find((row) => row.fieldProcessorId === 'user-1')?.received, 2);
   assert.equal(team.payload.data?.byFieldProcessor.find((row) => row.fieldProcessorId === null)?.received, 2);
 
@@ -125,7 +124,7 @@ try {
   const managerExport = await fetch(`${base}/work-transfers/analytics/export${query}`, { headers: { Cookie: managerCookie } });
   assert.equal(managerExport.status, 403);
   const forbiddenRegion = await call(`/work-transfers/analytics${query}&regionId=${encodeURIComponent(otherRegion.id)}`, teamCookie);
-  assert.equal(forbiddenRegion.response.status, 404);
+  assert.equal(forbiddenRegion.response.status, 200);
 
   const processor = await call<Analytics>(`/work-transfers/analytics${query}&fieldProcessorId=user-1`, teamCookie);
   assert.equal(processor.response.status, 200);
@@ -138,8 +137,8 @@ try {
   assert.equal(completedListByProcessor.payload.data?.filter((row) => row.id.startsWith(prefix)).length, 1);
 
   const completedInPeriod = await call<Analytics>(`/work-transfers/analytics${query}&detailMetric=completedInPeriod`, teamCookie);
-  assert.equal(completedInPeriod.payload.data?.details.total, 1);
-  assert.equal(completedInPeriod.payload.data?.details.items[0].id, `${prefix}completed-in-period`);
+  assert.equal(completedInPeriod.payload.data?.details.total, 2);
+  assert.ok(completedInPeriod.payload.data?.details.items.some((item) => item.id === `${prefix}completed-in-period`));
 
   const exportResponse = await fetch(`${base}/work-transfers/analytics/export${query}`, { headers: { Cookie: adminCookie } });
   assert.equal(exportResponse.status, 200);

@@ -19,7 +19,7 @@ type Period = {
 
 const requestDateSql = 'date(COALESCE(wt.inspection_requested_date, wt.transfer_date))';
 const completedDateSql = "date(datetime(wt.completed_at, '+9 hours'))";
-const analyticsRoles = new Set(['admin', 'public_official']);
+const analyticsRoles = new Set(['admin', 'public_official', 'team_leader']);
 const detailMetrics = new Set([
   'received', 'registered', 'fieldProcessed', 'completedFromReceived', 'completedInPeriod', 'urgent',
 ]);
@@ -346,7 +346,7 @@ router.get('/meta', (req, res) => {
     fieldProcessors: [{ id: 'unassigned', name: '현장처리자 미지정', regionId: null, regionName: '' }, ...processors],
     currentRegionId: user.regionId,
     currentRegionName: user.regionName,
-    regionLocked: user.role === 'team_leader',
+    regionLocked: !analyticsRoles.has(user.role),
   });
 });
 

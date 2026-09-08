@@ -31,7 +31,7 @@ const transferSelect = `
    WHERE wt.deleted_at IS NULL
 `;
 
-const globalRoles = new Set(['admin', 'public_official']);
+const globalRoles = new Set(['admin', 'public_official', 'team_leader']);
 const registrationRoles = new Set(['admin', 'public_official', 'team_leader']);
 const completionRoles = new Set(['admin', 'public_official', 'team_leader']);
 const workflowStatuses = new Set(['registered', 'field_processed', 'completed']);
