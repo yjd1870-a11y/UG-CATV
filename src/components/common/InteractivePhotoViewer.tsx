@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Maximize2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Move, X, ZoomIn, ZoomOut } from 'lucide-react';
 import {
   horizontalSwipeDirection,
   pinchView,
@@ -22,12 +22,16 @@ type Props = {
   title: string;
   ariaLabel: string;
   onClose: () => void;
+  desktopFloating?: boolean;
+  hostWindow?: Window;
 };
 
 type Gesture =
   | { kind: 'pan'; pointerId: number; startPoint: GesturePoint; startView: PanZoomView }
   | { kind: 'swipe'; pointerId: number; startPoint: GesturePoint; lastPoint: GesturePoint }
   | { kind: 'pinch'; startCenter: GesturePoint; startDistance: number; startView: PanZoomView };
+
+type WindowDrag = { pointerId: number; startX: number; startY: number; windowX: number; windowY: number };
 
 const defaultView: PanZoomView = { scale: 1, x: 0, y: 0 };
 
@@ -37,14 +41,25 @@ export const InteractivePhotoViewer: React.FC<Props> = ({
   title,
   ariaLabel,
   onClose,
+  desktopFloating = false,
+  hostWindow,
 }) => {
+  const browserWindow = hostWindow || window;
   const [index, setIndex] = useState(() => Math.min(Math.max(initialIndex, 0), Math.max(photos.length - 1, 0)));
   const [view, setView] = useState<PanZoomView>(defaultView);
   const viewRef = useRef<PanZoomView>(defaultView);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef(new Map<number, GesturePoint>());
   const gestureRef = useRef<Gesture | null>(null);
+  const windowDragRef = useRef<WindowDrag | null>(null);
+  const [desktopViewport, setDesktopViewport] = useState(() => browserWindow.matchMedia('(min-width: 768px)').matches);
+  const [windowPosition, setWindowPosition] = useState(() => ({
+    x: Math.max(16, browserWindow.innerWidth - 584),
+    y: Math.max(16, Math.min(72, browserWindow.innerHeight - 376)),
+  }));
   const photo = photos[index];
+  const isFloating = desktopFloating && desktopViewport;
 
   const applyView = useCallback((next: PanZoomView) => {
     const normalized = next.scale <= 1 ? defaultView : next;
@@ -74,9 +89,31 @@ export const InteractivePhotoViewer: React.FC<Props> = ({
       if (event.key === 'ArrowLeft') move(-1);
       if (event.key === 'ArrowRight') move(1);
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [move, onClose]);
+    browserWindow.addEventListener('keydown', handleKeyDown);
+    return () => browserWindow.removeEventListener('keydown', handleKeyDown);
+  }, [browserWindow, move, onClose]);
+
+  useEffect(() => {
+    const media = browserWindow.matchMedia('(min-width: 768px)');
+    const updateViewport = () => setDesktopViewport(media.matches);
+    media.addEventListener('change', updateViewport);
+    return () => media.removeEventListener('change', updateViewport);
+  }, [browserWindow]);
+
+  useEffect(() => {
+    if (!isFloating) return;
+    const keepWindowVisible = () => {
+      const bounds = dialogRef.current?.getBoundingClientRect();
+      if (!bounds) return;
+      setWindowPosition((current) => ({
+        x: Math.min(Math.max(0, current.x), Math.max(0, browserWindow.innerWidth - bounds.width)),
+        y: Math.min(Math.max(0, current.y), Math.max(0, browserWindow.innerHeight - bounds.height)),
+      }));
+    };
+    keepWindowVisible();
+    browserWindow.addEventListener('resize', keepWindowVisible);
+    return () => browserWindow.removeEventListener('resize', keepWindowVisible);
+  }, [browserWindow, isFloating]);
 
   if (!photo) return null;
 
@@ -89,12 +126,66 @@ export const InteractivePhotoViewer: React.FC<Props> = ({
     };
   };
 
+  const startWindowDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isFloating || (event.target as HTMLElement).closest('button')) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    windowDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      windowX: windowPosition.x,
+      windowY: windowPosition.y,
+    };
+  };
+
+  const moveWindow = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = windowDragRef.current;
+    if (!isFloating || !drag || drag.pointerId !== event.pointerId) return;
+    const bounds = dialogRef.current?.getBoundingClientRect();
+    const width = bounds?.width || 0;
+    const height = bounds?.height || 0;
+    setWindowPosition({
+      x: Math.min(Math.max(0, drag.windowX + event.clientX - drag.startX), Math.max(0, browserWindow.innerWidth - width)),
+      y: Math.min(Math.max(0, drag.windowY + event.clientY - drag.startY), Math.max(0, browserWindow.innerHeight - height)),
+    });
+  };
+
+  const endWindowDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (windowDragRef.current?.pointerId === event.pointerId) windowDragRef.current = null;
+  };
+
   return (
-    <div className="fixed inset-0 z-70 flex flex-col bg-black/90 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={ariaLabel}>
-      <div className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#173B57] px-3 text-white">
-        <div className="min-w-0">
+    <div
+      ref={dialogRef}
+      className={isFloating
+        ? 'fixed z-70 flex min-h-90 min-w-90 flex-col overflow-hidden rounded-2xl border border-slate-500 bg-black/95 shadow-2xl backdrop-blur-sm'
+        : 'fixed inset-0 z-70 flex flex-col bg-black/90 backdrop-blur-sm'}
+      style={isFloating ? {
+        left: windowPosition.x,
+        top: windowPosition.y,
+        width: 'min(560px, calc(100vw - 32px))',
+        height: 'min(680px, calc(100vh - 32px))',
+        maxWidth: 'calc(100vw - 16px)',
+        maxHeight: 'calc(100vh - 16px)',
+        resize: 'both',
+      } : undefined}
+      role="dialog"
+      aria-modal={isFloating ? undefined : true}
+      aria-label={ariaLabel}
+    >
+      <div
+        className={`flex h-14 shrink-0 touch-none select-none items-center justify-between gap-3 bg-[#173B57] px-3 text-white ${isFloating ? 'cursor-move' : ''}`}
+        onPointerDown={startWindowDrag}
+        onPointerMove={moveWindow}
+        onPointerUp={endWindowDrag}
+        onPointerCancel={endWindowDrag}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          {isFloating ? <Move className="h-4 w-4 shrink-0 text-blue-200" aria-hidden="true" /> : null}
+          <div className="min-w-0">
           <p className="truncate text-sm font-bold">{title}</p>
           <p className="truncate text-[10px] text-blue-100">{photo.label} · {index + 1} / {photos.length}</p>
+          </div>
         </div>
         <button type="button" onClick={onClose} aria-label="사진 확대 닫기" className="rounded-lg p-2 hover:bg-white/15"><X className="h-5 w-5" /></button>
       </div>
@@ -189,7 +280,7 @@ export const InteractivePhotoViewer: React.FC<Props> = ({
         <span className="w-14 text-center text-xs font-bold">{Math.round(view.scale * 100)}%</span>
         <button type="button" onClick={() => zoomAt(1.25)} disabled={view.scale >= 5} aria-label="확대" className="rounded-xl bg-white/10 p-2 disabled:opacity-40"><ZoomIn className="h-5 w-5" /></button>
         <button type="button" onClick={resetView} aria-label="원본 크기" className="rounded-xl bg-white/10 p-2"><Maximize2 className="h-5 w-5" /></button>
-        <span className="basis-full text-center text-[10px] text-slate-300 sm:basis-auto sm:pl-2">모바일: 두 손가락 확대 · 좌우 밀어 사진 전환 / PC: 마우스 휠 확대·축소</span>
+        <span className="basis-full text-center text-[10px] text-slate-300 sm:basis-auto sm:pl-2">{isFloating ? '상단 바를 드래그해 창 이동 · 창 모서리로 크기 조절 · 마우스 휠 확대·축소' : '모바일: 두 손가락 확대 · 좌우 밀어 사진 전환 / PC: 마우스 휠 확대·축소'}</span>
       </div>
     </div>
   );

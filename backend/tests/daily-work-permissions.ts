@@ -200,6 +200,19 @@ try {
   const publicGlobal = await call<{ rows: Array<{ userId: string }> }>(`/admin/daily-work/person?from=2020-01-10&to=2020-01-12`, { cookie: publicCookie });
   assert.ok(publicGlobal.payload.data?.rows.some((row) => row.userId === 'user-3'));
 
+  const adminMeta = await call<{ users: Array<{ role: string }>; regions: Array<{ id: string; name: string }> }>('/admin/daily-work/meta', { cookie: adminCookie });
+  assert.deepEqual(adminMeta.payload.data?.regions.map((region) => region.name), ['평택안성', '용인', '수원', '오산화성']);
+  assert.ok(adminMeta.payload.data?.users.length);
+  assert.ok(adminMeta.payload.data?.users.every((user) => user.role === 'manager'));
+
+  const regionFilteredPeople = await call<{ rows: Array<{ userId: string; regionId: string }> }>(
+    `/admin/daily-work/person?from=2020-01-10&to=2020-01-12&regionId=${encodeURIComponent(regionOne.id)}`,
+    { cookie: publicCookie },
+  );
+  assert.ok(regionFilteredPeople.payload.data?.rows.length);
+  assert.ok(regionFilteredPeople.payload.data?.rows.every((row) => row.regionId === regionOne.id));
+  assert.ok(regionFilteredPeople.payload.data?.rows.every((row) => row.userId !== 'user-3'));
+
   const teamScoped = await call<{ rows: Array<{ userId: string }> }>(`/admin/daily-work/person?from=2020-01-10&to=2020-01-12`, { cookie: teamCookie });
   assert.ok(teamScoped.payload.data?.rows.every((row) => row.userId !== 'user-3'));
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRightLeft, Calendar, CheckCircle2, ImagePlus, Images, MapPin, Plus, Search, Trash2, X, ChartNoAxesCombined } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { transfersApi, type TransferFilters, type TransferMeta, type TransferSummary } from '../../features/transfers/api';
@@ -50,6 +50,7 @@ export const TransferList: React.FC = () => {
   const [photoDragActive, setPhotoDragActive] = useState(false);
   const [pendingViewerIndex, setPendingViewerIndex] = useState<number | null>(null);
   const [listViewerPhotos, setListViewerPhotos] = useState<Array<{ id: string; url: string; fileName: string }> | null>(null);
+  const [listViewerWindow, setListViewerWindow] = useState<Window | null>(null);
   const [listPhotosLoadingId, setListPhotosLoadingId] = useState('');
   const [batchProgress, setBatchProgress] = useState({ completed: 0, total: 0, success: 0, failed: 0 });
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
@@ -59,6 +60,7 @@ export const TransferList: React.FC = () => {
   const inspectionDateEdited = useRef(false);
   const standardClientKey = useRef(newClientKey());
   const addressInputRef = useRef<HTMLInputElement>(null);
+  const listViewerWindowRef = useRef<Window | null>(null);
 
   const isManager = currentUser?.role === 'manager';
   const isGuest = currentUser?.role === 'guest';
@@ -87,6 +89,10 @@ export const TransferList: React.FC = () => {
     }).catch((error) => showToast(error instanceof Error ? error.message : '지역 정보를 불러오지 못했습니다.', 'error'));
   }, [currentUser?.id, currentUser?.role, isGuest, isManager, showToast]);
   useEffect(() => { const timer = window.setTimeout(() => { void loadTransfers(currentFilters); }, 250); return () => window.clearTimeout(timer); }, [currentFilters]);
+  useEffect(() => () => {
+    if (listViewerWindowRef.current && !listViewerWindowRef.current.closed) listViewerWindowRef.current.close();
+    listViewerWindowRef.current = null;
+  }, []);
 
   const resetRegistration = (preserveDateAndRegion = false) => {
     if (!preserveDateAndRegion) {
@@ -157,14 +163,47 @@ export const TransferList: React.FC = () => {
     showToast(failedCount ? `${successCount}건 등록, ${failedCount}건 실패했습니다. 실패한 사진만 다시 시도할 수 있습니다.` : `${successCount}건을 일괄 등록했습니다.`, failedCount ? 'warning' : 'success');
   };
 
+  const closeListViewer = useCallback(() => {
+    const popup = listViewerWindowRef.current;
+    listViewerWindowRef.current = null;
+    setListViewerWindow(null);
+    setListViewerPhotos(null);
+    if (popup && !popup.closed) popup.close();
+  }, []);
+  const handlePopupClosed = useCallback(() => {
+    listViewerWindowRef.current = null;
+    setListViewerWindow(null);
+    setListViewerPhotos(null);
+  }, []);
   const openListPhotos = async (event: React.MouseEvent, transfer: WorkTransfer) => {
     event.stopPropagation();
     if (transfer.workflowStatus === 'completed' || !(transfer.attachments || []).length) { showToast(transfer.workflowStatus === 'completed' ? '완료 시 사진이 삭제되었습니다.' : '등록된 사진이 없습니다.', 'info'); return; }
+    const wantsPopup = window.matchMedia('(min-width: 768px)').matches;
+    const popup = wantsPopup ? window.open('', 'catv-transfer-photo-viewer', 'popup=yes,width=960,height=820,resizable=yes,scrollbars=no') : null;
+    if (popup) {
+      const isExistingViewer = listViewerWindowRef.current === popup && !popup.closed;
+      listViewerWindowRef.current = popup;
+      setListViewerWindow(popup);
+      if (!isExistingViewer) {
+        popup.document.title = '업무이관 사진 불러오는 중...';
+        popup.document.body.style.cssText = 'margin:0;display:grid;place-items:center;min-height:100vh;background:#0f172a;color:white;font:600 14px system-ui,sans-serif';
+        popup.document.body.textContent = '업무이관 사진을 불러오는 중입니다.';
+      }
+      popup.focus();
+    } else if (wantsPopup) {
+      showToast('팝업이 차단되어 현재 화면의 이동 가능한 사진창으로 열었습니다.', 'info');
+    }
     setListPhotosLoadingId(transfer.id);
     try {
       const resolved = await Promise.all((transfer.attachments || []).map(async (photo) => ({ id: photo.id, fileName: photo.fileName, url: await transfersApi.attachmentAccessUrl(transfer.id, photo.id) })));
       setListViewerPhotos(resolved);
-    } catch (error) { showToast(error instanceof Error ? error.message : '사진을 불러오지 못했습니다.', 'error'); }
+      popup?.focus();
+    } catch (error) {
+      if (popup && !popup.closed) popup.close();
+      if (listViewerWindowRef.current === popup) listViewerWindowRef.current = null;
+      setListViewerWindow(null);
+      showToast(error instanceof Error ? error.message : '사진을 불러오지 못했습니다.', 'error');
+    }
     finally { setListPhotosLoadingId(''); }
   };
   const fieldValue = (transfer: WorkTransfer, field: InlineField) => {
@@ -253,6 +292,6 @@ export const TransferList: React.FC = () => {
       <div><div className="mb-2 flex items-center justify-between gap-2"><span className="font-bold text-slate-700">업무이관 사진 * ({photos.length}/{registrationMode === 'bulk' ? 10 : 3})</span><span className="text-[10px] text-slate-400">JPG/PNG/WEBP · 장당 10MB</span></div><label className="flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 font-bold text-slate-700"><Images className="h-4 w-4" />갤러리에서 선택<input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={submitting} onChange={(event) => { const selected: File[] = event.currentTarget.files ? Array.from(event.currentTarget.files) : []; event.currentTarget.value = ''; void processPhotos(selected); }} className="sr-only" /></label><div onDragEnter={(event) => { event.preventDefault(); setPhotoDragActive(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setPhotoDragActive(false)} onDrop={(event) => { event.preventDefault(); setPhotoDragActive(false); if (!submitting) void processPhotos(event.dataTransfer.files); }} className={`mt-2 hidden h-10 items-center justify-center gap-2 rounded-xl border border-dashed font-bold sm:flex ${photoDragActive ? 'border-[#2878B5] bg-blue-50 text-[#2878B5]' : 'border-slate-300 text-slate-500'}`}><ImagePlus className="h-4 w-4" />사진을 여기에 끌어놓을 수도 있습니다.</div>{photos.length ? <div className={`mt-3 grid gap-2 ${registrationMode === 'bulk' ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-3'}`}>{photos.map((photo, index) => <div key={photo.id} className={`relative overflow-hidden rounded-xl border bg-slate-50 ${photo.status === 'failed' ? 'border-red-300' : 'border-slate-200'}`}><button type="button" disabled={submitting} onClick={() => setPendingViewerIndex(index)} className="block w-full"><img src={photo.dataUrl} alt={photo.fileName} className="aspect-square w-full object-cover" /><span className="absolute top-1.5 left-1.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[10px] font-bold text-white">{index + 1}</span></button><button type="button" disabled={submitting} aria-label={`${index + 1}번 사진 삭제`} onClick={() => setPhotos((current) => current.filter((item) => item.id !== photo.id))} className="absolute top-1.5 right-1.5 rounded-md bg-red-600 p-1 text-white disabled:opacity-40"><Trash2 className="h-3.5 w-3.5" /></button><p className="truncate px-2 py-1 text-[9px] text-slate-500">{photo.status === 'uploading' ? '등록 중...' : photo.error || photo.fileName}</p></div>)}</div> : <p className="mt-2 text-[11px] text-amber-700">사진을 1장 이상 등록해 주세요.</p>}{batchProgress.total ? <div className="mt-3 rounded-xl bg-blue-50 p-3 font-bold text-blue-800">처리 중 {batchProgress.completed}/{batchProgress.total} · 성공 {batchProgress.success} · 실패 {batchProgress.failed}</div> : null}<p className="mt-2 rounded-lg bg-amber-50 p-2 text-[10px] font-medium text-amber-800">업무이관 완료 시 CATV에 업로드된 첨부사진은 자동으로 완전 삭제됩니다.</p></div></div>
       <div className="sticky bottom-0 z-10 grid grid-cols-2 gap-2 border-t border-slate-100 bg-white p-4 sm:grid-cols-4"><button type="button" disabled={submitting} onClick={closeRegistration} className="h-11 rounded-xl bg-slate-100 font-bold text-slate-700 disabled:opacity-50">취소</button><button type="button" disabled={submitting || registrationMode === 'bulk' || !inspectionRequestedDate || !newRegionId || photos.length < 1 || photos.length > 3} onClick={() => void submitSingle(false)} className="h-11 rounded-xl bg-[#F28C28] font-bold text-white disabled:opacity-40">저장 및 등록</button><button type="button" disabled={submitting || registrationMode === 'bulk' || !inspectionRequestedDate || !newRegionId || photos.length < 1 || photos.length > 3} onClick={() => void submitSingle(true)} className="h-11 rounded-xl bg-[#2878B5] font-bold text-white disabled:opacity-40">연속등록</button><button type="button" disabled={submitting || registrationMode !== 'bulk' || !inspectionRequestedDate || !newRegionId || photos.length < 1 || photos.length > 10} onClick={() => void submitBulk()} className="h-11 rounded-xl bg-emerald-600 font-bold text-white disabled:opacity-40">{submitting && registrationMode === 'bulk' ? '일괄등록 중' : '일괄등록'}</button></div></div></div> : null}
     {pendingViewerIndex !== null ? <TransferPhotoViewer photos={photos.map((photo) => ({ id: photo.id, url: photo.dataUrl, fileName: photo.fileName }))} initialIndex={pendingViewerIndex} onClose={() => setPendingViewerIndex(null)} /> : null}
-    {listViewerPhotos ? <TransferPhotoViewer photos={listViewerPhotos} initialIndex={0} onClose={() => setListViewerPhotos(null)} /> : null}
+    {listViewerPhotos ? <TransferPhotoViewer photos={listViewerPhotos} initialIndex={0} onClose={closeListViewer} desktopFloating={!listViewerWindow} targetWindow={listViewerWindow} onPopupClosed={handlePopupClosed} /> : null}
   </div>;
 };

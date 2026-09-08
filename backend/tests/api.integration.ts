@@ -77,6 +77,8 @@ try {
   assert.ok(pendingUsers.payload.data?.some((user) => user.id === testUserId));
   const approve = await call(`/admin/users/${testUserId}/approve`, { method: 'PUT', cookie: adminLogin.cookie });
   assert.equal(approve.response.status, 200);
+  const dailyWorkRegion = db.prepare("SELECT id FROM regions WHERE region_name = '평택안성'").get() as { id: string };
+  db.prepare('UPDATE users SET region_id = ? WHERE id = ?').run(dailyWorkRegion.id, testUserId);
 
   const workerLogin = await call('/auth/login', { method: 'POST', body: { username, password: 'Testpass123!' } });
   assert.equal(workerLogin.response.status, 200);

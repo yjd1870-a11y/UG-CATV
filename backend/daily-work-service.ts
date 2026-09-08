@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { db } from './db';
 import { ApiError } from './http';
+import { workTransferRegionParams, workTransferRegionPlaceholders } from './work-transfer-policy';
 
 const effectiveRoleSql = `COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END)`;
 
@@ -24,6 +25,8 @@ export type DailyWorkFilters = {
   categoryId?: string;
   sortBy?: string;
   sortOrder?: string;
+  workerRole?: string;
+  managedRegionsOnly?: boolean;
 };
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -162,6 +165,11 @@ const buildWhere = (filters: DailyWorkFilters) => {
   if (to) { clauses.push('d.work_date <= ?'); params.push(to); }
   if (filters.userId) { clauses.push('d.user_id = ?'); params.push(filters.userId); }
   if (filters.regionId) { clauses.push('d.region_id = ?'); params.push(filters.regionId); }
+  if (filters.workerRole) { clauses.push(`${effectiveRoleSql} = ?`); params.push(filters.workerRole); }
+  if (filters.managedRegionsOnly) {
+    clauses.push(`r.region_name IN (${workTransferRegionPlaceholders})`);
+    params.push(...workTransferRegionParams);
+  }
   if (filters.categoryId) {
     clauses.push('(c.code = ? OR c.id = ?)');
     params.push(filters.categoryId, filters.categoryId);
@@ -269,13 +277,19 @@ export const aggregateDailyWork = (dimension: AggregateDimension, filters: Daily
   return { categories, rows: resultRows, categoryTotals, grandTotal, from, to };
 };
 
-export const getDailyWorkMeta = (includeUsers = false, regionId?: string) => ({
+export const getDailyWorkMeta = (includeUsers = false, regionId?: string, workerRole?: string) => ({
   today: todayInSeoul(),
   categories: getWorkCategories(),
   regions: (db.prepare(`
     SELECT id, region_name AS name, sort_order AS sortOrder
-      FROM regions WHERE active = 1 ${regionId ? 'AND id = ?' : ''} ORDER BY sort_order, region_name
-  `).all(...(regionId ? [regionId] : [])) as Array<Record<string, unknown>>).map((row) => ({
+      FROM regions
+     WHERE active = 1
+       AND region_name IN (${workTransferRegionPlaceholders})
+       ${regionId ? 'AND id = ?' : ''}
+     ORDER BY CASE region_name
+       WHEN '평택안성' THEN 1 WHEN '용인' THEN 2 WHEN '수원' THEN 3 WHEN '오산화성' THEN 4
+       ELSE 99 END
+  `).all(...workTransferRegionParams, ...(regionId ? [regionId] : [])) as Array<Record<string, unknown>>).map((row) => ({
     id: String(row.id), name: String(row.name), sortOrder: Number(row.sortOrder),
   })),
   users: includeUsers
@@ -285,9 +299,10 @@ export const getDailyWorkMeta = (includeUsers = false, regionId?: string) => ({
           FROM users
          WHERE status = 'active' AND deleted_at IS NULL
            AND COALESCE(access_role, CASE role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) <> 'guest'
+           ${workerRole ? `AND COALESCE(access_role, CASE role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) = ?` : ''}
            ${regionId ? 'AND region_id = ?' : ''}
          ORDER BY name
-      `).all(...(regionId ? [regionId] : [])) as Array<Record<string, unknown>>).map((row) => ({
+      `).all(...(workerRole ? [workerRole] : []), ...(regionId ? [regionId] : [])) as Array<Record<string, unknown>>).map((row) => ({
         id: String(row.id), name: String(row.name), department: String(row.department),
         regionId: row.regionId ? String(row.regionId) : '', role: String(row.role),
       }))

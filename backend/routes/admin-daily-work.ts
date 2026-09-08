@@ -14,6 +14,7 @@ import {
 } from '../daily-work-service';
 import { ApiError, asText, success } from '../http';
 import { authUser, type AuthUser, requireAuth, requireRoles } from '../security/session';
+import { workTransferRegionParams, workTransferRegionPlaceholders } from '../work-transfer-policy';
 
 const router = Router();
 router.use(requireAuth, requireRoles('admin', 'public_official', 'team_leader'));
@@ -37,6 +38,8 @@ const filtersFromQuery = (query: Record<string, unknown>): DailyWorkFilters => (
 
 const scopedFilters = (user: AuthUser, query: Record<string, unknown>): DailyWorkFilters => ({
   ...filtersFromQuery(query),
+  workerRole: 'manager',
+  managedRegionsOnly: true,
   ...(user.role === 'team_leader' ? { regionId: requireRegion(user) } : {}),
 });
 
@@ -46,7 +49,7 @@ const aggregateHandler = (dimension: AggregateDimension) => (req: Request, res: 
 
 router.get('/meta', (req, res) => {
   const user = authUser(req);
-  success(res, getDailyWorkMeta(true, user.role === 'team_leader' ? requireRegion(user) : undefined));
+  success(res, getDailyWorkMeta(true, user.role === 'team_leader' ? requireRegion(user) : undefined, 'manager'));
 });
 
 router.get('/summary', (req, res) => {
@@ -58,24 +61,32 @@ router.get('/summary', (req, res) => {
     SELECT COALESCE(SUM(i.work_count), 0) AS total
       FROM daily_work d
       JOIN users u ON u.id = d.user_id
+      JOIN regions r ON r.id = d.region_id
       JOIN daily_work_items i ON i.daily_work_id = d.id
      WHERE d.deleted_at IS NULL AND d.work_date BETWEEN ? AND ?
-       AND COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) <> 'guest'
+       AND COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) = 'manager'
+       AND r.region_name IN (${workTransferRegionPlaceholders})
        ${regionId ? 'AND d.region_id = ?' : ''}
-  `).get(...(regionId ? [from, to, regionId] : [from, to])) as { total: number }).total);
+  `).get(from, to, ...workTransferRegionParams, ...(regionId ? [regionId] : [])) as { total: number }).total);
   const entered = Number((db.prepare(`
     SELECT COUNT(DISTINCT d.user_id) AS count
-      FROM daily_work d JOIN users u ON u.id = d.user_id
+      FROM daily_work d
+      JOIN users u ON u.id = d.user_id
+      JOIN regions r ON r.id = d.region_id
      WHERE d.deleted_at IS NULL AND d.work_date = ?
        AND COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) = 'manager'
+       AND r.region_name IN (${workTransferRegionPlaceholders})
        ${regionId ? 'AND u.region_id = ?' : ''}
-  `).get(...(regionId ? [today, regionId] : [today])) as { count: number }).count);
+  `).get(today, ...workTransferRegionParams, ...(regionId ? [regionId] : [])) as { count: number }).count);
   const target = Number((db.prepare(`
-    SELECT COUNT(*) AS count FROM users u
+    SELECT COUNT(*) AS count
+      FROM users u
+      JOIN regions r ON r.id = u.region_id
      WHERE u.status = 'active' AND u.deleted_at IS NULL
        AND COALESCE(u.access_role, CASE u.role WHEN 'admin' THEN 'admin' WHEN 'manager' THEN 'team_leader' ELSE 'manager' END) = 'manager'
+       AND r.region_name IN (${workTransferRegionPlaceholders})
        ${regionId ? 'AND u.region_id = ?' : ''}
-  `).get(...(regionId ? [regionId] : [])) as { count: number }).count);
+  `).get(...workTransferRegionParams, ...(regionId ? [regionId] : [])) as { count: number }).count);
   success(res, {
     today,
     todayTotal: totalFor(today, today),

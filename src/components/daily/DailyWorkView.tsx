@@ -189,6 +189,7 @@ export const DailyWorkView: React.FC = () => {
   const guestView = isGuest(currentUser?.role);
   const [mode, setMode] = useState<MainMode>(() => guestView ? 'my' : 'register');
   const [meta, setMeta] = useState<DailyWorkMeta | null>(null);
+  const [managementMeta, setManagementMeta] = useState<DailyWorkMeta | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [formDate, setFormDate] = useState('');
   const [formCounts, setFormCounts] = useState<Record<string, number>>({});
@@ -224,6 +225,10 @@ export const DailyWorkView: React.FC = () => {
 
   const total = useMemo(() => (Object.values(formCounts) as number[]).reduce((sum, count) => sum + Number(count || 0), 0), [formCounts]);
   const selectedTarget = meta?.users.find((user) => user.id === targetUserId);
+  const managementUsers = useMemo(
+    () => (managementMeta?.users || []).filter((user) => !regionId || user.regionId === regionId),
+    [managementMeta, regionId],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -240,13 +245,15 @@ export const DailyWorkView: React.FC = () => {
         setFormCounts(emptyCounts(loadedMeta.categories));
         setTargetUserId(currentUser?.id || '');
         if (canManageDailyWork) {
-          const [loadedSummary, initialAdmin] = await Promise.all([
+          const [loadedSummary, initialAdmin, loadedManagementMeta] = await Promise.all([
             adminDailyWorkApi.summary(),
             adminDailyWorkApi.query('period', { from: firstDayOfMonth(loadedMeta.today), to: loadedMeta.today, sortOrder: 'asc' }),
+            adminDailyWorkApi.meta(),
           ]);
           if (!mounted) return;
           setSummary(loadedSummary);
           setAdminData(initialAdmin);
+          setManagementMeta(loadedManagementMeta);
         }
       } catch (error) {
         showToast(error instanceof Error ? error.message : '일일업무 정보를 불러오지 못했습니다.', 'error');
@@ -256,6 +263,10 @@ export const DailyWorkView: React.FC = () => {
     })();
     return () => { mounted = false; };
   }, [canManageDailyWork, currentUser?.id]);
+
+  useEffect(() => {
+    if (userId && !managementUsers.some((user) => user.id === userId)) setUserId('');
+  }, [managementUsers, userId]);
 
   useEffect(() => {
     if (!meta || !formDate || !targetUserId) return;
@@ -314,7 +325,7 @@ export const DailyWorkView: React.FC = () => {
   const adminQuery = (): DailyWorkQuery => ({
     ...(adminMode === 'month' ? { year, month } : { from, to }),
     userId: adminMode === 'person' ? userId : undefined,
-    regionId: adminMode === 'region' || adminMode === 'period' ? regionId : undefined,
+    regionId: adminMode === 'person' || adminMode === 'region' || adminMode === 'period' ? regionId : undefined,
     categoryId,
     sortBy: 'work_date',
     sortOrder,
@@ -327,7 +338,7 @@ export const DailyWorkView: React.FC = () => {
       const query = {
         ...(requestedMode === 'month' ? { year, month } : { from, to }),
         userId: requestedMode === 'person' ? userId : undefined,
-        regionId: requestedMode === 'region' || requestedMode === 'period' ? regionId : undefined,
+        regionId: requestedMode === 'person' || requestedMode === 'region' || requestedMode === 'period' ? regionId : undefined,
         categoryId,
         sortBy: 'work_date',
         sortOrder,
@@ -589,8 +600,8 @@ export const DailyWorkView: React.FC = () => {
                   <label className="text-xs font-bold text-slate-500">종료일<input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="mt-1.5 h-10 w-full rounded-xl border border-slate-200 px-3" /></label>
                 </>
               )}
-              {adminMode === 'person' && <label className="text-xs font-bold text-slate-500">담당자<select value={userId} onChange={(event) => setUserId(event.target.value)} className="mt-1.5 h-10 w-full rounded-xl border border-slate-200 px-3"><option value="">전체 담당자</option>{meta.users.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.department}</option>)}</select></label>}
-              {(adminMode === 'region' || adminMode === 'period') && <label className="text-xs font-bold text-slate-500">지역<select value={regionId} onChange={(event) => setRegionId(event.target.value)} className="mt-1.5 h-10 w-full rounded-xl border border-slate-200 px-3"><option value="">전체 지역</option>{meta.regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}</select></label>}
+              {adminMode === 'person' && <label className="text-xs font-bold text-slate-500">담당자<select value={userId} onChange={(event) => setUserId(event.target.value)} className="mt-1.5 h-10 w-full rounded-xl border border-slate-200 px-3"><option value="">전체 담당자</option>{managementUsers.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.department}</option>)}</select></label>}
+              {(adminMode === 'person' || adminMode === 'region' || adminMode === 'period') && <label className="text-xs font-bold text-slate-500">지역<select value={regionId} onChange={(event) => setRegionId(event.target.value)} className="mt-1.5 h-10 w-full rounded-xl border border-slate-200 px-3"><option value="">전체 지역</option>{(managementMeta || meta).regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}</select></label>}
               <label className="text-xs font-bold text-slate-500">업무구분<select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} className="mt-1.5 h-10 w-full rounded-xl border border-slate-200 px-3"><option value="">전체</option>{meta.categories.map((category) => <option key={category.code} value={category.code}>{category.name}</option>)}</select></label>
               <label className="text-xs font-bold text-slate-500">정렬<select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as 'asc' | 'desc')} className="mt-1.5 h-10 w-full rounded-xl border border-slate-200 px-3"><option value="asc">날짜 오름차순</option><option value="desc">날짜 내림차순</option></select></label>
             </div>
