@@ -2,12 +2,12 @@ const CACHE_NAME = 'catv-work-management-v5-workhub-branding';
 const APP_SHELL = [
   './',
   './manifest.webmanifest',
-  './icons/ca-ip-192.png',
-  './icons/ca-ip-512.png',
-  './icons/ca-ip-1024.png',
-  './icons/ca-ip-maskable-512.png',
-  './icons/ca-ip-apple-180.png',
-  './icons/ca-ip-favicon-48.png',
+  './icons/ca-ip-192.png?v=workhub-20260909',
+  './icons/ca-ip-512.png?v=workhub-20260909',
+  './icons/ca-ip-1024.png?v=workhub-20260909',
+  './icons/ca-ip-maskable-512.png?v=workhub-20260909',
+  './icons/ca-ip-apple-180.png?v=workhub-20260909',
+  './icons/ca-ip-favicon-48.png?v=workhub-20260909',
 ];
 
 self.addEventListener('install', (event) => {

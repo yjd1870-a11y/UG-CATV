@@ -14,25 +14,25 @@
   "categories": ["business", "productivity", "utilities"],
   "icons": [
     {
-      "src": "icons/ca-ip-192.png",
+      "src": "icons/ca-ip-192.png?v=workhub-20260909",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icons/ca-ip-512.png",
+      "src": "icons/ca-ip-512.png?v=workhub-20260909",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icons/ca-ip-1024.png",
+      "src": "icons/ca-ip-1024.png?v=workhub-20260909",
       "sizes": "1024x1024",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icons/ca-ip-maskable-512.png",
+      "src": "icons/ca-ip-maskable-512.png?v=workhub-20260909",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
