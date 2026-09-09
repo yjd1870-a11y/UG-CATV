@@ -1,7 +1,7 @@
-const CACHE_NAME = 'catv-work-management-v5-workhub-branding';
+const CACHE_NAME = 'catv-work-management-v6-workhub-name';
 const APP_SHELL = [
   './',
-  './manifest.webmanifest',
+  './manifest.webmanifest?v=workhub-name-20260909',
   './icons/ca-ip-192.png?v=workhub-20260909',
   './icons/ca-ip-512.png?v=workhub-20260909',
   './icons/ca-ip-1024.png?v=workhub-20260909',
