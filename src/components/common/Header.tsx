@@ -9,6 +9,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { StatusBadge } from './StatusBadge';
 import telecomBg from '../../assets/images/telecom_network_bg_1786338007517.jpg';
+import headerWorkhubLogo from '../../assets/images/header-workhub-logo.png';
 
 export const Header: React.FC = () => {
   const {
@@ -38,24 +39,18 @@ export const Header: React.FC = () => {
           backgroundPosition: 'right center',
         }}
       >
-        <div className="max-w-7xl w-full mx-auto flex items-center justify-between">
+        <div className="flex w-full items-center justify-between">
           {/* Brand Logo & Name */}
           <button
             id="header-brand-btn"
             onClick={() => navigateTo('home')}
-            className="flex items-center gap-2.5 text-left focus:outline-none focus:ring-2 focus:ring-[#F28C28] rounded-xl p-1 transition cursor-pointer"
+            className="flex shrink-0 cursor-pointer items-center rounded-xl p-1 text-left transition focus:outline-none focus:ring-2 focus:ring-[#F28C28]"
           >
-            <div className="w-8 h-8 bg-[#F28C28] rounded-lg flex items-center justify-center font-black text-lg text-white shadow-sm">
-              U
-            </div>
-            <div>
-              <h1 className="text-base sm:text-xl font-bold tracking-tight text-white flex items-baseline">
-                유지텔레컴
-                <span className="ml-1.5 hidden text-sm font-normal opacity-80 md:inline">
-                  CATV 업무관리
-                </span>
-              </h1>
-            </div>
+            <img
+              src={headerWorkhubLogo}
+              alt="UG 유지텔레컴 WORKHUB"
+              className="h-auto w-[120px] min-[430px]:w-[150px] sm:w-[220px] md:w-[280px] lg:w-[330px]"
+            />
           </button>
 
           {/* Right Action: Login Info, Notifications & Logout */}

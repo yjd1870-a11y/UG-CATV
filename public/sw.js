@@ -1,4 +1,4 @@
-const CACHE_NAME = 'catv-work-management-v4-transfer-registration';
+const CACHE_NAME = 'catv-work-management-v5-workhub-branding';
 const APP_SHELL = [
   './',
   './manifest.webmanifest',

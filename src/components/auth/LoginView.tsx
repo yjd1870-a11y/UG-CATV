@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ApiClientError } from '../../shared/api/client';
 import loginBackground from '../../assets/images/login-network-bg.png';
-import loginAppIcon from '../../assets/images/login-app-icon.png';
+import loginWorkhubLogo from '../../assets/images/login-workhub-logo.png';
 
 export const LoginView: React.FC = () => {
   const { login } = useApp();
@@ -45,23 +45,17 @@ export const LoginView: React.FC = () => {
     >
       <section
         id="login-card"
-        aria-labelledby="login-title"
+        aria-label="CATV 업무관리 로그인"
         className="relative z-10 w-full max-w-[440px] rounded-3xl border border-white/60 bg-white/95 px-6 py-9 shadow-[0_24px_80px_rgba(0,12,24,0.42)] backdrop-blur-md sm:px-10 sm:py-11"
       >
         <div className="mb-8 text-center">
           <img
-            src={loginAppIcon}
-            alt="CATV 업무관리 아이콘"
-            className="mx-auto mb-5 h-20 w-20 rounded-[22px] object-cover shadow-[0_10px_24px_rgba(0,76,180,0.28)] sm:h-24 sm:w-24"
+            src={loginWorkhubLogo}
+            alt="UG WORKHUB 로고"
+            className="mx-auto h-auto w-full max-w-[300px] sm:max-w-[330px]"
           />
-          <h1
-            id="login-title"
-            className="text-2xl font-extrabold tracking-tight text-[#173B57] sm:text-[28px]"
-          >
-            CATV 업무 관리 시스템
-          </h1>
-          <p className="mx-auto mt-3 max-w-[340px] text-sm leading-6 text-slate-500">
-            CATV 현장 작업자가 모바일에서 필요한 정보를 빠르게 조회하고 업무 내용을 간편하게 기록할 수 있는 통합 관리시스템
+          <p className="mx-auto mt-4 max-w-[340px] text-sm leading-6 text-slate-500">
+            작업자가 필요한 현장정보를 신속히 조회 현장업무를 관리할수 있는 통합 관리시스템
           </p>
         </div>
 

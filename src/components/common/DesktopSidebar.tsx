@@ -40,7 +40,7 @@ export const DesktopSidebar: React.FC = () => {
         })}
       </nav>
       <div className="border-t border-slate-100 px-4 py-4 text-[10px] font-semibold leading-relaxed text-slate-400">
-        CATV/HFC 현장업무 관리
+        CATV 업무관리
       </div>
     </aside>
   );
