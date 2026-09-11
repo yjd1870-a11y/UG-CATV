@@ -8,6 +8,7 @@ const header = fs.readFileSync(path.join(root, 'src/components/common/Header.tsx
 const sidebar = fs.readFileSync(path.join(root, 'src/components/common/DesktopSidebar.tsx'), 'utf8');
 const bottomNav = fs.readFileSync(path.join(root, 'src/components/common/BottomNav.tsx'), 'utf8');
 const navigation = fs.readFileSync(path.join(root, 'src/components/common/primary-navigation.ts'), 'utf8');
+const appContext = fs.readFileSync(path.join(root, 'src/context/AppContext.tsx'), 'utf8');
 const styles = fs.readFileSync(path.join(root, 'src/index.css'), 'utf8');
 
 assert.match(app, /<DesktopSidebar \/>/);
@@ -19,8 +20,12 @@ assert.match(sidebar, /hidden w-\[210px\][\s\S]*lg:flex/);
 assert.match(sidebar, /aria-current=\{active \? 'page'/);
 assert.match(bottomNav, /lg:hidden/);
 assert.match(bottomNav, /primaryNavigationItems\(notificationCount\)/);
+assert.doesNotMatch(appContext, /if \(!isMobile\) return/);
+assert.match(appContext, /if \(historyReadyRef\.current\)[\s\S]*window\.history\.pushState/);
+assert.match(appContext, /if \(isMobile && state\.mobileBase && activeViewRef\.current === 'home'\)/);
+assert.match(appContext, /종료하려면 뒤로가기를 한 번 더 누르세요\./);
 for (const label of ['홈', 'CELL', '업무이관', '일일업무', '자재']) assert.match(navigation, new RegExp(`label: '${label}'`));
 assert.match(styles, /padding-bottom: calc\(6\.25rem \+ env\(safe-area-inset-bottom\)\)/);
 assert.match(styles, /@media \(min-width: 1024px\)[\s\S]*padding-bottom: 2rem/);
 
-console.log('Desktop navigation test passed: fixed desktop sidebar and unchanged mobile bottom navigation');
+console.log('Desktop navigation test passed: desktop history, fixed sidebar, and mobile exit guard');

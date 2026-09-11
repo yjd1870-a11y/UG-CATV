@@ -90,7 +90,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [catvManpower, setCatvManpower] = useState<CatvManpowerStatus>(INITIAL_CATV_MANPOWER);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const activeViewRef = useRef<AppView>('home');
-  const mobileHistoryReadyRef = useRef(false);
+  const historyReadyRef = useRef(false);
   const restoringMobileGuardRef = useRef(false);
   const lastMobileBackRef = useRef(0);
 
@@ -131,25 +131,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentUser?.id]);
 
   useEffect(() => {
-    if (!currentUser || mobileHistoryReadyRef.current) return;
+    if (!currentUser || historyReadyRef.current) return;
     const isMobile = navigator.maxTouchPoints > 0 && window.matchMedia('(pointer: coarse)').matches;
-    if (!isMobile) return;
-    mobileHistoryReadyRef.current = true;
-    const baseState = { catvApp: true, mobileBase: true, view: 'home' as AppView };
-    window.history.replaceState(baseState, '');
-    window.history.pushState({ catvApp: true, view: activeViewRef.current }, '');
+    historyReadyRef.current = true;
+    if (isMobile) {
+      const baseState = { catvApp: true, mobileBase: true, view: 'home' as AppView };
+      window.history.replaceState(baseState, '');
+      window.history.pushState({ catvApp: true, view: activeViewRef.current }, '');
+    } else {
+      window.history.replaceState({ catvApp: true, view: activeViewRef.current }, '');
+    }
 
     const onPopState = (event: PopStateEvent) => {
-      if (restoringMobileGuardRef.current) {
+      if (isMobile && restoringMobileGuardRef.current) {
         restoringMobileGuardRef.current = false;
         return;
       }
       const state = event.state as { catvApp?: boolean; mobileBase?: boolean; view?: AppView; cellId?: string; transferId?: string } | null;
       if (!state?.catvApp) return;
-      if (state.mobileBase && activeViewRef.current === 'home') {
+      if (isMobile && state.mobileBase && activeViewRef.current === 'home') {
         const now = Date.now();
         if (now - lastMobileBackRef.current <= 2_000) {
-          mobileHistoryReadyRef.current = false;
+          historyReadyRef.current = false;
           window.history.back();
           return;
         }
@@ -170,7 +173,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     window.addEventListener('popstate', onPopState);
     return () => {
       window.removeEventListener('popstate', onPopState);
-      mobileHistoryReadyRef.current = false;
+      historyReadyRef.current = false;
     };
   }, [currentUser?.id, showToast]);
 
@@ -238,7 +241,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setDailyRecords([]);
       setMaterialUsage([]);
       setActiveView('home');
-      mobileHistoryReadyRef.current = false;
+      historyReadyRef.current = false;
       showToast('로그아웃되었습니다.', 'info');
     }
   };
@@ -261,7 +264,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (params?.transferId) setSelectedTransferId(params.transferId);
     setActiveView(view);
     activeViewRef.current = view;
-    if (mobileHistoryReadyRef.current) {
+    if (historyReadyRef.current) {
       window.history.pushState({ catvApp: true, view, cellId: params?.cellId, transferId: params?.transferId }, '');
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
