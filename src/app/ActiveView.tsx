@@ -2,14 +2,14 @@ import React, { lazy, Suspense } from 'react';
 import { HomeDashboard } from '../components/home/HomeDashboard';
 import { useApp } from '../context/AppContext';
 
-const CellList = lazy(() => import('../features/cells/views').then((module) => ({ default: module.CellList })));
-const CellDetail = lazy(() => import('../features/cells/views').then((module) => ({ default: module.CellDetail })));
-const TransferList = lazy(() => import('../features/transfers/views').then((module) => ({ default: module.TransferList })));
-const TransferAnalytics = lazy(() => import('../features/transfers/views').then((module) => ({ default: module.TransferAnalytics })));
-const TransferDetail = lazy(() => import('../features/transfers/views').then((module) => ({ default: module.TransferDetail })));
-const DailyWorkView = lazy(() => import('../features/daily-work/view').then((module) => ({ default: module.DailyWorkView })));
-const MaterialView = lazy(() => import('../features/materials/view').then((module) => ({ default: module.MaterialView })));
-const AdminUsersView = lazy(() => import('../features/admin/view').then((module) => ({ default: module.AdminUsersView })));
+const CellList = lazy(() => import('../components/cell/CellList').then((module) => ({ default: module.CellList })));
+const CellDetail = lazy(() => import('../components/cell/CellDetail').then((module) => ({ default: module.CellDetail })));
+const TransferList = lazy(() => import('../components/transfer/TransferList').then((module) => ({ default: module.TransferList })));
+const TransferAnalytics = lazy(() => import('../components/transfer/TransferAnalytics').then((module) => ({ default: module.TransferAnalytics })));
+const TransferDetail = lazy(() => import('../components/transfer/TransferDetail').then((module) => ({ default: module.TransferDetail })));
+const DailyWorkView = lazy(() => import('../components/daily/DailyWorkView').then((module) => ({ default: module.DailyWorkView })));
+const MaterialView = lazy(() => import('../components/material/MaterialView').then((module) => ({ default: module.MaterialView })));
+const AdminUsersView = lazy(() => import('../components/admin/AdminUsersView').then((module) => ({ default: module.AdminUsersView })));
 
 const ViewLoading = () => (
   <div className="flex min-h-48 items-center justify-center text-sm font-semibold text-[#173B57]" role="status">

@@ -32,9 +32,9 @@ services:
       - key: SESSION_SECRET
         sync: false
       - key: CORS_ALLOWED_ORIGINS
-        sync: false
+        value: https://ugt-transmission-network.pages.dev
       - key: ADMIN_MUTATION_ALLOWED_ORIGINS
-        sync: false
+        value: https://ugt-transmission-network.pages.dev
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID

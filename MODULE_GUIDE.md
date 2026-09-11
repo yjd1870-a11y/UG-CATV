@@ -12,7 +12,7 @@
 | 업무 이관 | `src/components/transfer` | `src/features/transfers` | `backend/routes/work-transfers.ts` |
 | 일일 업무 | `src/components/daily` | `src/features/daily-work` | `backend/routes/daily-work.ts`, `admin-daily-work.ts` |
 | 자재·사용 내역 | `src/components/material` | `src/features/materials` | `backend/routes/materials.ts` |
-| 관리자·DB 업로드 | `src/components/admin` | `src/features/admin` | `backend/routes/admin.ts` |
+| 관리자·DB 업로드 | `src/components/admin` | `src/features/admin` | `backend/routes/admin.ts`, `backend/routes/admin/*` |
 
 ## 전체 구조
 
@@ -21,7 +21,7 @@ CATV 업무관리/
 ├─ src/
 │  ├─ app/ActiveView.tsx       # 메뉴에 따라 기능 화면을 여는 곳
 │  ├─ components/              # 사용자가 실제로 보는 화면
-│  ├─ features/                # 기능별 API와 화면 진입점
+│  ├─ features/                # 기능별 브라우저 API
 │  │  ├─ auth/
 │  │  ├─ cells/
 │  │  ├─ transfers/
@@ -30,16 +30,16 @@ CATV 업무관리/
 │  │  ├─ notices/
 │  │  ├─ home/
 │  │  └─ admin/
-│  ├─ shared/api/client.ts     # 모든 기능이 함께 쓰는 통신 처리
-│  └─ services/api.ts          # 이전 코드 호환용(새 코드는 features 사용)
+│  └─ shared/api/client.ts     # 모든 기능이 함께 쓰는 통신 처리
 └─ backend/
+   ├─ database/                # 스키마 마이그레이션 등 DB 초기화 책임
    ├─ modules/                 # 서버 기능 묶음과 URL 등록부
    │  ├─ auth.ts               # 인증
    │  ├─ network.ts            # CELL/B2C/평면도/직선도
    │  ├─ operations.ts         # 공지/이관/일일업무/자재
    │  ├─ administration.ts     # 관리자
    │  └─ registry.ts           # 위 기능을 서버에 한 번에 연결
-   ├─ routes/                  # 실제 API 업무 규칙
+   ├─ routes/                  # 실제 API 업무 규칙(관리자 하위 기능은 routes/admin)
    └─ security/                # 로그인 세션과 보안 정책
 ```
 
@@ -60,4 +60,4 @@ CATV 업무관리/
 5. 새 메뉴 화면이면 `src/app/ActiveView.tsx`에 연결합니다.
 6. `npm run lint`, `npm run build`, 관련 API 테스트를 실행합니다.
 
-`src/services/api.ts`는 기존 파일이 갑자기 깨지지 않도록 남겨 둔 호환 통로입니다. 앞으로 작성하는 코드는 이 파일 대신 해당 `src/features` 모듈을 직접 사용하면 됩니다.
+화면은 `ActiveView.tsx`에서 각 컴포넌트를 직접 지연 로딩합니다. 무거운 Excel 처리 라이브러리는 관리자 업로드·내보내기 기능을 실제로 사용할 때만 내려받습니다.

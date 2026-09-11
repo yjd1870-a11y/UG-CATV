@@ -46,8 +46,8 @@ Cloudflare의 Git 연동이 `main` 커밋을 자동 빌드·배포합니다. Git
 운영 출처는 와일드카드 없이 정확히 지정합니다.
 
 ```env
-CORS_ALLOWED_ORIGINS=https://ratis-transmission-webapp-yjd1870.onrender.com,https://ugt-transmission-network.pages.dev,https://ugt-transmission-network.com,https://www.ugt-transmission-network.com
-ADMIN_MUTATION_ALLOWED_ORIGINS=https://ratis-transmission-webapp-yjd1870.onrender.com,https://ugt-transmission-network.pages.dev,https://ugt-transmission-network.com,https://www.ugt-transmission-network.com
+CORS_ALLOWED_ORIGINS=https://ugt-transmission-network.pages.dev
+ADMIN_MUTATION_ALLOWED_ORIGINS=https://ugt-transmission-network.pages.dev
 ```
 
 세션 쿠키는 HTTPS 교차 출처 요청에서 동작하도록 `Secure`와 `SameSite=None`을 유지해야 합니다. 프론트엔드 요청은 `credentials: 'include'`를 사용합니다.
@@ -64,8 +64,6 @@ R2 CORS에는 실제 프론트엔드 주소만 허용합니다. 적용 예시는
 
 ```text
 https://ugt-transmission-network.pages.dev
-https://ugt-transmission-network.com
-https://www.ugt-transmission-network.com
 ```
 
 주요 객체 경로:
