@@ -6,7 +6,7 @@
 Cloudflare Pages (React/Vite)
   https://ugt-transmission-network.pages.dev
         |
-        | HTTPS + credentialed CORS
+        | same-origin /api proxy (Pages Functions)
         v
 Render Web Service (Express API)
   https://ratis-transmission-webapp-yjd1870.onrender.com/api
@@ -27,7 +27,8 @@ Render Web Service (Express API)
 - 빌드 환경 변수(`wrangler.jsonc`이 구성의 기준 파일):
 
 ```env
-VITE_API_BASE_URL=https://ratis-transmission-webapp-yjd1870.onrender.com/api
+VITE_API_BASE_URL=/api
+API_ORIGIN=https://ratis-transmission-webapp-yjd1870.onrender.com
 ```
 
 Cloudflare의 Git 연동이 `main` 커밋을 자동 빌드·배포합니다. GitHub Actions는 별도로 배포하지 않고 린트와 Pages 산출물만 검증합니다.
@@ -50,7 +51,7 @@ CORS_ALLOWED_ORIGINS=https://ugt-transmission-network.pages.dev
 ADMIN_MUTATION_ALLOWED_ORIGINS=https://ugt-transmission-network.pages.dev
 ```
 
-세션 쿠키는 HTTPS 교차 출처 요청에서 동작하도록 `Secure`와 `SameSite=None`을 유지해야 합니다. 프론트엔드 요청은 `credentials: 'include'`를 사용합니다.
+브라우저의 API 요청은 Pages Functions의 동일 출처 `/api/*` 프록시를 통과합니다. 프록시는 요청·응답 본문을 버퍼링하지 않고 스트리밍하며 쿠키, Origin, Range, SSE 관련 헤더를 보존합니다. Render API와 R2 presigned URL은 기존 운영 로직을 유지합니다.
 
 ## Cloudflare R2
 

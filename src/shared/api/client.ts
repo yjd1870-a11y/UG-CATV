@@ -14,8 +14,7 @@ export class ApiClientError extends Error {
   }
 }
 
-const DEFAULT_PRODUCTION_API_BASE = 'https://ratis-transmission-webapp-yjd1870.onrender.com/api';
-const defaultApiBase = import.meta.env.PROD ? DEFAULT_PRODUCTION_API_BASE : '/api';
+const defaultApiBase = '/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || defaultApiBase).replace(/\/$/, '');
 
