@@ -35,7 +35,7 @@ export const mapTransferRow = (row: Record<string, unknown>) => {
      WHERE transfer_id = ? ORDER BY created_at DESC, id DESC
   `).all(String(row.id)) as Array<Record<string, unknown>>;
   const attachments = db.prepare(`
-    SELECT id, attachment_type, file_name, file_type, file_size, uploaded_by, created_at
+    SELECT id, attachment_type, file_name, file_type, file_size, uploaded_by, created_at, thumbnail_url
       FROM work_transfer_attachments
      WHERE transfer_id = ? AND deleted_at IS NULL ORDER BY created_at, id
   `).all(String(row.id)) as Array<Record<string, unknown>>;
@@ -88,6 +88,9 @@ export const mapTransferRow = (row: Record<string, unknown>) => {
       uploadedBy: attachment.uploaded_by || undefined,
       createdAt: attachment.created_at,
       url: `/work-transfers/${row.id}/attachments/${attachment.id}/file`,
+      thumbnailUrl: attachment.thumbnail_url
+        ? `/work-transfers/${row.id}/attachments/${attachment.id}/file?variant=thumbnail`
+        : `/work-transfers/${row.id}/attachments/${attachment.id}/file`,
     })),
     fieldActions: fieldActions.map((action) => ({
       id: action.id,

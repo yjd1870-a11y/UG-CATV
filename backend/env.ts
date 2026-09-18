@@ -90,6 +90,7 @@ export const env = {
   straightMapUploadConcurrency: numberValue('STRAIGHT_MAP_UPLOAD_CONCURRENCY', 6, 1, 8),
   straightMapDirectR2UploadEnabled: booleanValue('STRAIGHT_MAP_DIRECT_R2_UPLOAD_ENABLED', true),
   straightMapLeaseSeconds: numberValue('STRAIGHT_MAP_LEASE_SECONDS', 600, 300, 900),
+  materialManagementEnabled: booleanValue('MATERIAL_MANAGEMENT_ENABLED', false),
   sessionSecret: process.env.SESSION_SECRET || 'development-only-change-me',
   sessionTtlHours: numberValue('SESSION_TTL_HOURS', 12, 1, 168),
   cookieName: process.env.SESSION_COOKIE_NAME || 'catv_session',

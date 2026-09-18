@@ -88,7 +88,11 @@ export const TransferDetail: React.FC = () => {
         ? []
         : await Promise.all((detail.attachments || []).map(async (photo) => {
           try {
-            return { ...photo, url: await transfersApi.attachmentAccessUrl(detail.id, photo.id) };
+            const [url, thumbnailUrl] = await Promise.all([
+              transfersApi.attachmentAccessUrl(detail.id, photo.id),
+              transfersApi.attachmentAccessUrl(detail.id, photo.id, 'thumbnail'),
+            ]);
+            return { ...photo, url, thumbnailUrl };
           } catch {
             return { ...photo, url: '' };
           }
@@ -311,7 +315,7 @@ export const TransferDetail: React.FC = () => {
               <span>사진을 불러오지 못했습니다.</span>
               <button type="button" onClick={() => void loadDetail()} className="mt-1 rounded-lg bg-white px-2 py-1 text-[#2878B5] shadow-sm">다시 불러오기</button>
             </div> : <button key={photo.id} type="button" onClick={() => setPhotoViewerIndex(index)} className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
-              <img src={photo.url} alt={photo.fileName} onError={() => setFailedPhotoIds((current) => current.includes(photo.id) ? current : [...current, photo.id])} className="w-full aspect-video object-cover transition group-hover:scale-105" />
+              <img loading="lazy" src={photo.thumbnailUrl || photo.url} alt={photo.fileName} onError={() => setFailedPhotoIds((current) => current.includes(photo.id) ? current : [...current, photo.id])} className="w-full aspect-video object-cover transition group-hover:scale-105" />
               <span className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-2 py-1.5 text-left text-[10px] font-bold text-white">{index + 1}. {photo.fileName}</span>
             </button>;
           })}</div>

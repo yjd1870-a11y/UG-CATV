@@ -1,6 +1,7 @@
 import React, { lazy, Suspense } from 'react';
 import { HomeDashboard } from '../components/home/HomeDashboard';
 import { useApp } from '../context/AppContext';
+import { materialManagementEnabled } from '../config/features';
 
 const CellList = lazy(() => import('../components/cell/CellList').then((module) => ({ default: module.CellList })));
 const CellDetail = lazy(() => import('../components/cell/CellDetail').then((module) => ({ default: module.CellDetail })));
@@ -38,7 +39,8 @@ export const ActiveView: React.FC = () => {
         return <DailyWorkView />;
       case 'material_list':
       case 'material_register':
-        return <MaterialView />;
+      case 'station_spares':
+        return materialManagementEnabled ? <MaterialView /> : <HomeDashboard />;
       case 'admin_users':
         return <AdminUsersView />;
       default:

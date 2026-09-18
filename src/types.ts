@@ -42,6 +42,7 @@ export interface CellPhoto {
   date: string;
   author: string;
   url: string;
+  masterUrl?: string;
   description: string;
 }
 
@@ -210,6 +211,7 @@ export interface WorkTransferAttachment {
   uploadedBy?: string;
   createdAt: string;
   url: string;
+  thumbnailUrl?: string;
 }
 
 export interface WorkTransferFieldAction {
@@ -365,6 +367,7 @@ export type AppView =
   | 'daily_lookup'
   | 'material_list'
   | 'material_register'
+  | 'station_spares'
   | 'admin_users';
 
 export interface ToastMessage {

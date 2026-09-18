@@ -114,6 +114,20 @@ try {
   assert.equal(managerPast.response.status, 403);
   assert.equal(managerPast.payload.code, 'PAST_WORK_LOCKED');
 
+  const managerHistoricalSeed = await call<{ id: string; updatedAt: string }>('/daily-work', {
+    method: 'POST', cookie: adminCookie,
+    body: { date: '2020-01-15', userId: 'user-1', counts: { WORK01: 1 } },
+  });
+  assert.equal(managerHistoricalSeed.response.status, 201);
+  const managerHistoricalId = managerHistoricalSeed.payload.data?.id || '';
+  createdIds.push(managerHistoricalId);
+  const managerHistoricalMove = await call(`/daily-work/${managerHistoricalId}`, {
+    method: 'PUT', cookie: managerCookie,
+    body: { date: today, counts: { WORK01: 2 }, updatedAt: managerHistoricalSeed.payload.data?.updatedAt },
+  });
+  assert.equal(managerHistoricalMove.response.status, 403);
+  assert.equal(managerHistoricalMove.payload.code, 'PAST_WORK_LOCKED');
+
   const managerDelegated = await call('/daily-work', {
     method: 'POST', cookie: managerCookie,
     body: { date: today, userId: 'user-3', counts: { WORK01: 1 } },

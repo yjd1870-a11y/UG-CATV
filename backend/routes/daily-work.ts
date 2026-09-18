@@ -274,6 +274,9 @@ router.put('/:id', (req, res) => {
   const before = getDailyWorkRecord(req.params.id);
   const workDate = normalizeWorkDate(req.body?.date || req.body?.workDate || before.workDate);
   const target = activeTarget(before.userId);
+  // A manager must not bypass the historical-record lock by moving an old
+  // record to today. Both the stored date and requested date are protected.
+  assertCanEdit(user, target, before.workDate);
   assertCanEdit(user, target, workDate);
   if (req.body?.updatedAt && String(req.body.updatedAt) !== before.updatedAt) {
     throw new ApiError(409, '다른 사용자가 먼저 수정했습니다. 최신 내용을 다시 불러와 주세요.', 'STALE_UPDATE');

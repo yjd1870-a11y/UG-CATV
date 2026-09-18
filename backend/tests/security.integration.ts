@@ -105,7 +105,7 @@ try {
   photoId = validPhoto.payload?.data?.id || '';
   const privatePhoto = await call(`/cells/${cellId}/photos/${photoId}/content`, { cookie: workerLogin.cookie });
   assert.equal(privatePhoto.response.status, 200);
-  assert.equal(privatePhoto.response.headers.get('content-type'), 'image/png');
+  assert.equal(privatePhoto.response.headers.get('content-type'), 'image/jpeg');
   assert.match(privatePhoto.response.headers.get('cache-control') || '', /private/);
   const anonymousPhoto = await call(`/cells/${cellId}/photos/${photoId}/content`);
   assert.equal(anonymousPhoto.response.status, 401);
@@ -164,10 +164,11 @@ try {
   console.log('Security integration test passed: auth/RBAC, SQL binding, upload signatures, private photos, CSRF origin, lockout, headers, audit');
 } finally {
   if (photoId) {
-    const row = db.prepare('SELECT file_url FROM field_photos WHERE id = ?').get(photoId) as { file_url: string } | undefined;
+    const row = db.prepare('SELECT file_url, thumbnail_url FROM field_photos WHERE id = ?').get(photoId) as { file_url: string; thumbnail_url: string | null } | undefined;
     if (row) {
       const { removePrivatePhoto } = await import('../photo-storage');
-      removePrivatePhoto(row.file_url);
+      await removePrivatePhoto(row.file_url);
+      if (row.thumbnail_url) await removePrivatePhoto(row.thumbnail_url);
     }
     db.prepare('DELETE FROM field_photos WHERE id = ?').run(photoId);
   }

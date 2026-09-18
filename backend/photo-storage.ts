@@ -3,10 +3,12 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ApiError } from './http';
 import { env } from './env';
+import { decodePhotoDataUrl, processUploadedImage, type ImageProfile } from './image-processing';
 import {
   deleteR2Object,
   putR2Object,
   r2SignedUrlExpiresAt,
+  readR2Object,
   signedR2DownloadUrl,
   signedR2UploadUrl,
   usesR2Storage,
@@ -19,18 +21,23 @@ const extensionByMime = new Map([
   ['image/png', '.png'],
   ['image/webp', '.webp'],
 ]);
-const photoKeyPattern = /^photos\/[0-9]{4}\/[0-9]{2}\/(?:[a-z0-9_-]+\/)?[0-9a-f-]+\.(?:jpg|png|webp)$/i;
+const legacyPattern = /^photos\/[0-9]{4}\/[0-9]{2}\/(?:[a-z0-9_-]+\/)?[0-9a-f-]+\.(?:jpg|png|webp)$/i;
+const managedPattern = /^(?:cell-photos|work-transfer-photos)\/(?:master|thumbnails)\/[0-9]{4}\/[0-9]{2}\/[a-z0-9_-]+\/[0-9a-f-]+\.jpg$/i;
+const quarantinePattern = /^photo-quarantine\/cell\/[0-9]{4}\/[0-9]{2}\/[a-z0-9_-]+\/[0-9a-f-]+\.(?:jpg|png|webp)$/i;
 
-const hasValidSignature = (buffer: Buffer, mime: string) => {
-  if (mime === 'image/jpeg') return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
-  if (mime === 'image/png') return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  if (mime === 'image/webp') return buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
-  return false;
+const allowedKey = (key: string) => legacyPattern.test(key) || managedPattern.test(key) || quarantinePattern.test(key);
+const safeUploader = (value: string) => value.replace(/[^a-z0-9_-]/gi, '').slice(0, 64) || 'unknown';
+const monthParts = () => {
+  const date = new Date();
+  return [String(date.getUTCFullYear()), String(date.getUTCMonth() + 1).padStart(2, '0')];
 };
 
 export const validatePhotoUpload = (mimeType: string, size: number) => {
   const normalizedMime = mimeType.toLowerCase();
   const extension = extensionByMime.get(normalizedMime);
+  if (normalizedMime === 'image/heic' || normalizedMime === 'image/heif') {
+    throw new ApiError(400, 'HEIC 사진은 아직 지원하지 않습니다. JPG로 변환 후 다시 등록해 주세요.', 'HEIC_NOT_SUPPORTED');
+  }
   if (!extension) throw new ApiError(400, 'JPG, PNG, WEBP 사진만 업로드할 수 있습니다.', 'INVALID_PHOTO_TYPE');
   if (!Number.isSafeInteger(size) || size <= 0 || size > maxPhotoBytes) {
     throw new ApiError(400, '사진 크기는 10MB 이하여야 합니다.', 'INVALID_PHOTO_SIZE');
@@ -38,68 +45,114 @@ export const validatePhotoUpload = (mimeType: string, size: number) => {
   return { mimeType: normalizedMime, extension };
 };
 
+/** CELL direct uploads always land in quarantine and are never served from there. */
 export const createPhotoObjectKey = (mimeType: string, uploadedBy = '') => {
   const { extension } = validatePhotoUpload(mimeType, 1);
-  const date = new Date();
-  const safeUploader = uploadedBy.replace(/[^a-z0-9_-]/gi, '').slice(0, 64);
-  const uploaderPrefix = safeUploader ? `${safeUploader}/` : '';
-  return `photos/${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${uploaderPrefix}${randomUUID()}${extension}`;
+  const [year, month] = monthParts();
+  return `photo-quarantine/cell/${year}/${month}/${safeUploader(uploadedBy)}/${randomUUID()}${extension}`;
 };
 
-export const savePrivatePhoto = async (dataUrl: string, uploadedBy = '') => {
-  const match = /^data:(image\/(?:jpeg|png|webp));base64,([a-z0-9+/=\r\n]+)$/i.exec(dataUrl);
-  if (!match) throw new ApiError(400, 'JPG, PNG, WEBP 사진만 업로드할 수 있습니다.', 'INVALID_PHOTO_TYPE');
-  const mimeType = match[1].toLowerCase();
-  const buffer = Buffer.from(match[2], 'base64');
-  validatePhotoUpload(mimeType, buffer.length);
-  if (!hasValidSignature(buffer, mimeType)) {
-    throw new ApiError(400, '사진의 실제 파일 형식과 MIME 형식이 일치하지 않습니다.', 'INVALID_PHOTO_SIGNATURE');
-  }
-  const objectKey = createPhotoObjectKey(mimeType, uploadedBy);
-  if (usesR2Storage) {
-    await putR2Object(objectKey, buffer, mimeType, {}, 'private, no-store, max-age=0');
-  } else {
-    const absolutePath = resolvePrivatePhoto(objectKey);
-    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-    fs.writeFileSync(absolutePath, buffer, { flag: 'wx', mode: 0o600 });
-  }
-  return { objectKey, mimeType, size: buffer.length };
-};
-
-export const resolvePrivatePhoto = (objectKey: string) => {
-  if (!photoKeyPattern.test(objectKey)) {
-    throw new ApiError(400, '사진 저장 경로가 올바르지 않습니다.', 'INVALID_PHOTO_PATH');
-  }
+const localPath = (objectKey: string) => {
+  if (!allowedKey(objectKey)) throw new ApiError(400, '사진 저장 경로가 올바르지 않습니다.', 'INVALID_PHOTO_PATH');
   const absoluteRoot = path.resolve(root);
-  const absolutePath = path.resolve(absoluteRoot, objectKey.replace(/^photos\//, ''));
+  const relative = legacyPattern.test(objectKey) ? objectKey.replace(/^photos\//, '') : objectKey;
+  const absolutePath = path.resolve(absoluteRoot, relative);
   if (!absolutePath.startsWith(absoluteRoot + path.sep)) {
     throw new ApiError(400, '사진 저장 경로가 올바르지 않습니다.', 'INVALID_PHOTO_PATH');
   }
   return absolutePath;
 };
 
+const putObject = async (key: string, body: Buffer, metadata: Record<string, string>) => {
+  if (usesR2Storage) {
+    await putR2Object(key, body, 'image/jpeg', metadata, 'private, no-store, max-age=0');
+    return;
+  }
+  const target = localPath(key);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, body, { flag: 'wx', mode: 0o600 });
+};
+
+const readObject = async (key: string) => usesR2Storage
+  ? (await readR2Object(key)).body
+  : fs.readFileSync(localPath(key));
+
+const saveProcessed = async (source: Buffer, mimeType: string, uploadedBy: string, profile: ImageProfile) => {
+  const processed = await processUploadedImage(source, mimeType, profile);
+  const [year, month] = monthParts();
+  const basePrefix = profile === 'work-transfer' ? 'work-transfer-photos' : 'cell-photos';
+  const id = randomUUID();
+  const suffix = `${year}/${month}/${safeUploader(uploadedBy)}/${id}.jpg`;
+  const objectKey = `${basePrefix}/master/${suffix}`;
+  const thumbnailObjectKey = `${basePrefix}/thumbnails/${suffix}`;
+  const metadata = { sha256: processed.sha256, profile };
+  try {
+    await putObject(objectKey, processed.master, metadata);
+    await putObject(thumbnailObjectKey, processed.thumbnail, { sha256: processed.thumbnailSha256, profile });
+  } catch (error) {
+    await removePrivatePhoto(objectKey).catch(() => undefined);
+    await removePrivatePhoto(thumbnailObjectKey).catch(() => undefined);
+    throw error;
+  }
+  return {
+    objectKey,
+    thumbnailObjectKey,
+    mimeType: processed.mimeType,
+    size: processed.master.length,
+    thumbnailSize: processed.thumbnail.length,
+    width: processed.width,
+    height: processed.height,
+    thumbnailWidth: processed.thumbnailWidth,
+    thumbnailHeight: processed.thumbnailHeight,
+    sha256: processed.sha256,
+    thumbnailSha256: processed.thumbnailSha256,
+  };
+};
+
+export const savePrivatePhoto = async (
+  dataUrl: string,
+  uploadedBy = '',
+  profile: 'cell' | 'work-transfer' = 'cell',
+) => {
+  const decoded = decodePhotoDataUrl(dataUrl);
+  return saveProcessed(decoded.buffer, decoded.mimeType, uploadedBy, profile);
+};
+
+export const promoteQuarantinedCellPhoto = async (objectKey: string, mimeType: string, uploadedBy: string) => {
+  if (!quarantinePattern.test(objectKey)) throw new ApiError(400, '격리 사진 경로가 올바르지 않습니다.', 'INVALID_PHOTO_PATH');
+  const source = await readObject(objectKey);
+  try {
+    return await saveProcessed(source, mimeType, uploadedBy, 'cell');
+  } finally {
+    await removePrivatePhoto(objectKey).catch(() => undefined);
+  }
+};
+
+export const resolvePrivatePhoto = (objectKey: string) => localPath(objectKey);
+
 export const removePrivatePhoto = async (objectKey: string) => {
-  if (!photoKeyPattern.test(objectKey)) return;
+  if (!allowedKey(objectKey)) return;
   if (usesR2Storage) {
     await deleteR2Object(objectKey);
     return;
   }
-  const absolutePath = resolvePrivatePhoto(objectKey);
-  if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
+  fs.rmSync(localPath(objectKey), { force: true });
 };
 
 export const privatePhotoDownloadUrl = (objectKey: string) => {
-  if (!photoKeyPattern.test(objectKey)) throw new ApiError(400, '사진 저장 경로가 올바르지 않습니다.', 'INVALID_PHOTO_PATH');
+  if (!allowedKey(objectKey) || quarantinePattern.test(objectKey)) {
+    throw new ApiError(400, '사진 저장 경로가 올바르지 않습니다.', 'INVALID_PHOTO_PATH');
+  }
   return signedR2DownloadUrl(objectKey);
 };
 
 export const privatePhotoUploadUrl = async (objectKey: string, mimeType: string, size: number) => {
-  if (!usesR2Storage || !photoKeyPattern.test(objectKey)) {
+  if (!usesR2Storage || !quarantinePattern.test(objectKey)) {
     throw new ApiError(400, '직접 업로드를 사용할 수 없습니다.', 'DIRECT_UPLOAD_UNAVAILABLE');
   }
   validatePhotoUpload(mimeType, size);
   return {
-    uploadUrl: await signedR2UploadUrl(objectKey, mimeType, size),
+    uploadUrl: await signedR2UploadUrl(objectKey, mimeType, size, { quarantine: 'cell-photo' }),
     expiresAt: r2SignedUrlExpiresAt(),
   };
 };

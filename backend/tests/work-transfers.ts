@@ -102,8 +102,12 @@ try {
 
   const detail = await call<{ attachments: Array<{ id: string; url: string }> }>(`/work-transfers/${transferId}`, { cookie: managerCookie });
   assert.equal(detail.response.status, 200);
-  const stored = db.prepare('SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ?').all(transferId) as Array<{ file_url: string }>;
-  assert.equal(stored.length, 2); for (const item of stored) assert.equal(fs.existsSync(resolvePrivatePhoto(item.file_url)), true);
+  const stored = db.prepare('SELECT file_url, thumbnail_url FROM work_transfer_attachments WHERE transfer_id = ?').all(transferId) as Array<{ file_url: string; thumbnail_url: string }>;
+  assert.equal(stored.length, 2);
+  for (const item of stored) {
+    assert.equal(fs.existsSync(resolvePrivatePhoto(item.file_url)), true);
+    assert.equal(fs.existsSync(resolvePrivatePhoto(item.thumbnail_url)), true);
+  }
   const photoResponse = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: managerCookie } });
   assert.equal(photoResponse.status, 200);
   const otherManagerPhoto = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: otherManagerCookie } });
@@ -125,7 +129,26 @@ try {
   const completed = await call<{ workflowStatus: string; attachments: unknown[]; evidencePhotosDeletedAt: string }>(`/work-transfers/${transferId}/complete`, { method: 'POST', cookie: teamCookie });
   assert.equal(completed.response.status, 200); assert.equal(completed.payload.data?.workflowStatus, 'completed'); assert.deepEqual(completed.payload.data?.attachments, []); assert.ok(completed.payload.data?.evidencePhotosDeletedAt);
   assert.equal((db.prepare('SELECT COUNT(*) AS count FROM work_transfer_attachments WHERE transfer_id = ?').get(transferId) as { count: number }).count, 0);
-  for (const item of stored) assert.equal(fs.existsSync(resolvePrivatePhoto(item.file_url)), false);
+  for (const item of stored) {
+    assert.equal(fs.existsSync(resolvePrivatePhoto(item.file_url)), false);
+    assert.equal(fs.existsSync(resolvePrivatePhoto(item.thumbnail_url)), false);
+  }
+  const completedPhotoBlocked = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: teamCookie } });
+  assert.equal(completedPhotoBlocked.status, 404);
+  const duplicateComplete = await call<{ workflowStatus: string; attachments: unknown[] }>(`/work-transfers/${transferId}/complete`, { method: 'POST', cookie: teamCookie });
+  assert.equal(duplicateComplete.response.status, 200);
+  assert.equal(duplicateComplete.payload.data?.workflowStatus, 'completed');
+  assert.deepEqual(duplicateComplete.payload.data?.attachments, []);
+  const reopened = await call<{ workflowStatus: string; attachments: unknown[] }>(`/work-transfers/${transferId}/reopen`, {
+    method: 'POST', cookie: adminCookie, body: { reason: '재오픈 사진 비복구 확인' },
+  });
+  assert.equal(reopened.response.status, 200);
+  assert.equal(reopened.payload.data?.workflowStatus, 'field_processed');
+  assert.deepEqual(reopened.payload.data?.attachments, []);
+  const recompleted = await call<{ workflowStatus: string; attachments: unknown[] }>(`/work-transfers/${transferId}/complete`, { method: 'POST', cookie: teamCookie });
+  assert.equal(recompleted.response.status, 200);
+  assert.equal(recompleted.payload.data?.workflowStatus, 'completed');
+  assert.deepEqual(recompleted.payload.data?.attachments, []);
   const defaultList = await call<Array<{ id: string; workflowStatus: string }>>('/work-transfers', { cookie: adminCookie });
   assert.equal(defaultList.response.status, 200); assert.ok(defaultList.payload.data?.every((item) => item.workflowStatus !== 'completed'));
   const completedList = await call<Array<{ id: string; workflowStatus: string; completedAt?: string }>>('/work-transfers?status=completed', { cookie: adminCookie });
@@ -141,17 +164,87 @@ try {
   const purgeFailureId = purgeFailureCreate.payload.data?.id || ''; createdIds.push(purgeFailureId);
   const purgeFailureAction = await call(`/work-transfers/${purgeFailureId}/field-actions`, { method: 'POST', cookie: managerCookie, body: { actionText: '삭제 실패 검증용 처리' } });
   assert.equal(purgeFailureAction.response.status, 201);
-  const purgeFailureAttachment = db.prepare('SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ?').get(purgeFailureId) as { file_url: string };
-  const purgeFailurePath = resolvePrivatePhoto(purgeFailureAttachment.file_url);
+  const purgeFailureAttachment = db.prepare('SELECT file_url, thumbnail_url FROM work_transfer_attachments WHERE transfer_id = ?').get(purgeFailureId) as { file_url: string; thumbnail_url: string };
+  const purgeFailurePath = resolvePrivatePhoto(purgeFailureAttachment.thumbnail_url);
   fs.unlinkSync(purgeFailurePath); fs.mkdirSync(purgeFailurePath);
   try {
     const purgeFailure = await call(`/work-transfers/${purgeFailureId}/complete`, { method: 'POST', cookie: teamCookie });
     assert.equal(purgeFailure.response.status, 503); assert.equal(purgeFailure.payload.code, 'PHOTO_PURGE_FAILED');
     const afterFailure = db.prepare('SELECT workflow_status AS workflowStatus FROM work_transfers WHERE id = ?').get(purgeFailureId) as { workflowStatus: string };
     assert.equal(afterFailure.workflowStatus, 'field_processed');
+    assert.equal(fs.existsSync(resolvePrivatePhoto(purgeFailureAttachment.file_url)), false, 'master deletion before thumbnail failure is retained for retry');
   } finally {
     fs.rmdirSync(purgeFailurePath);
   }
+
+  const purgeRetry = await call<{ workflowStatus: string }>(`/work-transfers/${purgeFailureId}/complete`, { method: 'POST', cookie: teamCookie });
+  assert.equal(purgeRetry.response.status, 200);
+  assert.equal(purgeRetry.payload.data?.workflowStatus, 'completed');
+  const failedAttempt = db.prepare(`
+    SELECT status, last_error AS lastError FROM work_transfer_photo_purge_attempts
+     WHERE transfer_id = ? ORDER BY created_at LIMIT 1
+  `).get(purgeFailureId) as { status: string; lastError: string };
+  assert.equal(failedAttempt.status, 'FAILED');
+  assert.ok(failedAttempt.lastError);
+
+  const firstFailureCreate = await call<{ id: string }>('/work-transfers', {
+    method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, requestPhotos: [photo('first-failure.png')] },
+  });
+  const firstFailureId = firstFailureCreate.payload.data?.id || '';
+  createdIds.push(firstFailureId);
+  assert.equal((await call(`/work-transfers/${firstFailureId}/field-actions`, {
+    method: 'POST', cookie: managerCookie, body: { actionText: '첫 객체 실패 검증' },
+  })).response.status, 201);
+  const firstFailureObject = db.prepare('SELECT file_url FROM work_transfer_attachments WHERE transfer_id = ?').get(firstFailureId) as { file_url: string };
+  const firstFailurePath = resolvePrivatePhoto(firstFailureObject.file_url);
+  fs.unlinkSync(firstFailurePath);
+  fs.mkdirSync(firstFailurePath);
+  try {
+    const firstFailure = await call(`/work-transfers/${firstFailureId}/complete`, { method: 'POST', cookie: teamCookie });
+    assert.equal(firstFailure.response.status, 503);
+    assert.equal(firstFailure.payload.code, 'PHOTO_PURGE_FAILED');
+    const state = db.prepare('SELECT workflow_status AS status FROM work_transfers WHERE id = ?').get(firstFailureId) as { status: string };
+    assert.equal(state.status, 'field_processed');
+  } finally {
+    fs.rmdirSync(firstFailurePath);
+  }
+  assert.equal((await call(`/work-transfers/${firstFailureId}/complete`, { method: 'POST', cookie: teamCookie })).response.status, 200);
+
+  const dbFailureCreate = await call<{ id: string }>('/work-transfers', {
+    method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, requestPhotos: [photo('db-failure.png')] },
+  });
+  assert.equal(dbFailureCreate.response.status, 201);
+  const dbFailureId = dbFailureCreate.payload.data?.id || '';
+  createdIds.push(dbFailureId);
+  assert.equal((await call(`/work-transfers/${dbFailureId}/field-actions`, {
+    method: 'POST', cookie: managerCookie, body: { actionText: 'DB 커밋 실패 복구 검증' },
+  })).response.status, 201);
+  const dbFailureObjects = db.prepare(`
+    SELECT file_url, thumbnail_url FROM work_transfer_attachments WHERE transfer_id = ?
+  `).get(dbFailureId) as { file_url: string; thumbnail_url: string };
+  db.exec(`
+    CREATE TRIGGER test_fail_transfer_complete
+    BEFORE UPDATE OF workflow_status ON work_transfers
+    WHEN NEW.id = '${dbFailureId}' AND NEW.workflow_status = 'completed'
+    BEGIN SELECT RAISE(ABORT, 'simulated commit failure'); END
+  `);
+  try {
+    const dbFailure = await call(`/work-transfers/${dbFailureId}/complete`, { method: 'POST', cookie: teamCookie });
+    assert.equal(dbFailure.response.status, 500);
+    const state = db.prepare('SELECT workflow_status AS status FROM work_transfers WHERE id = ?').get(dbFailureId) as { status: string };
+    assert.equal(state.status, 'field_processed');
+    assert.equal(fs.existsSync(resolvePrivatePhoto(dbFailureObjects.file_url)), false);
+    assert.equal(fs.existsSync(resolvePrivatePhoto(dbFailureObjects.thumbnail_url)), false);
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS test_fail_transfer_complete');
+  }
+  const dbFailureRetry = await call<{ workflowStatus: string }>(`/work-transfers/${dbFailureId}/complete`, { method: 'POST', cookie: teamCookie });
+  assert.equal(dbFailureRetry.response.status, 200);
+  assert.equal(dbFailureRetry.payload.data?.workflowStatus, 'completed');
+  assert.equal((db.prepare(`
+    SELECT COUNT(*) AS count FROM work_transfer_photo_purge_attempts
+     WHERE transfer_id = ? AND status = 'PENDING'
+  `).get(dbFailureId) as { count: number }).count, 0);
 
   console.log('Work-transfer test passed: regions, optional address, photo limits, idempotency, inline permissions, manager scope, and atomic photo purge');
 } finally {

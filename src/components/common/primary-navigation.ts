@@ -1,6 +1,7 @@
 import type React from 'react';
 import { ArrowRightLeft, Boxes, ClipboardCheck, Home, Radio } from 'lucide-react';
 import type { AppView } from '../../types';
+import { materialManagementEnabled } from '../../config/features';
 
 export type PrimaryNavItem = {
   key: AppView;
@@ -21,5 +22,7 @@ export const primaryNavigationItems = (notificationCount: number): PrimaryNavIte
     badgeCount: notificationCount,
   },
   { key: 'daily_work', matchViews: ['daily_work', 'daily_lookup'], label: '일일업무', icon: ClipboardCheck },
-  { key: 'material_list', matchViews: ['material_list', 'material_register'], label: '자재', icon: Boxes },
+  ...(materialManagementEnabled
+    ? [{ key: 'material_list' as AppView, matchViews: ['material_list', 'material_register', 'station_spares'] as AppView[], label: '자재', icon: Boxes }]
+    : []),
 ];

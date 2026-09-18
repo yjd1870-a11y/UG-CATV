@@ -127,6 +127,7 @@ export const PhotoGalleryModal: React.FC<PhotoGalleryProps> = ({
               {/* Photo Thumbnail */}
               <div className="relative aspect-video bg-slate-900 overflow-hidden">
                 <img
+                  loading="lazy"
                   src={photo.url}
                   alt={photo.title}
                   referrerPolicy="no-referrer"
@@ -188,7 +189,7 @@ export const PhotoGalleryModal: React.FC<PhotoGalleryProps> = ({
             {/* Modal Image */}
             <div className="bg-slate-950 flex items-center justify-center max-h-[60vh] overflow-hidden">
               <img
-                src={selectedPhoto.url}
+                src={selectedPhoto.masterUrl || selectedPhoto.url}
                 alt={selectedPhoto.title}
                 referrerPolicy="no-referrer"
                 className="max-h-[60vh] w-auto object-contain"

@@ -23,5 +23,6 @@ fs.rmSync(runtimeRoot, { recursive: true, force: true });
 fs.mkdirSync(storagePath, { recursive: true });
 process.env.DATABASE_PATH = databasePath;
 process.env.PRIVATE_STORAGE_PATH = storagePath;
+process.env.MATERIAL_MANAGEMENT_ENABLED = 'true';
 
 await import(pathToFileURL(testPath).href);

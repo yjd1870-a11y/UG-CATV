@@ -145,7 +145,16 @@ CREATE TABLE IF NOT EXISTS field_photos (
   work_id TEXT,
   file_name TEXT NOT NULL,
   file_url TEXT NOT NULL,
+  thumbnail_url TEXT,
   file_type TEXT,
+  file_size INTEGER,
+  thumbnail_size INTEGER,
+  width INTEGER,
+  height INTEGER,
+  thumbnail_width INTEGER,
+  thumbnail_height INTEGER,
+  sha256 TEXT,
+  thumbnail_sha256 TEXT,
   uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   memo TEXT,
@@ -231,13 +240,45 @@ CREATE TABLE IF NOT EXISTS work_transfer_attachments (
   attachment_type TEXT NOT NULL CHECK (attachment_type IN ('request_photo', 'field_photo')),
   file_name TEXT NOT NULL,
   file_url TEXT NOT NULL,
+  thumbnail_url TEXT,
   file_type TEXT NOT NULL,
   file_size INTEGER NOT NULL,
+  thumbnail_size INTEGER,
+  width INTEGER,
+  height INTEGER,
+  thumbnail_width INTEGER,
+  thumbnail_height INTEGER,
+  sha256 TEXT,
+  thumbnail_sha256 TEXT,
   uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_work_transfer_attachments_transfer ON work_transfer_attachments(transfer_id, attachment_type, created_at);
+
+CREATE TABLE IF NOT EXISTS work_transfer_photo_purge_attempts (
+  id TEXT PRIMARY KEY,
+  transfer_id TEXT NOT NULL REFERENCES work_transfers(id) ON DELETE CASCADE,
+  requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('COMPLETE', 'DELETE')),
+  status TEXT NOT NULL CHECK (status IN ('PENDING', 'FAILED', 'SUCCEEDED')),
+  object_count INTEGER NOT NULL DEFAULT 0,
+  deleted_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_work_transfer_photo_purge_attempts_transfer
+  ON work_transfer_photo_purge_attempts(transfer_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS work_transfer_photo_purge_items (
+  attempt_id TEXT NOT NULL REFERENCES work_transfer_photo_purge_attempts(id) ON DELETE CASCADE,
+  object_key TEXT NOT NULL,
+  deleted_at TEXT,
+  last_error TEXT,
+  PRIMARY KEY (attempt_id, object_key)
+);
 
 CREATE TABLE IF NOT EXISTS work_transfer_field_actions (
   id TEXT PRIMARY KEY,
@@ -363,6 +404,213 @@ CREATE INDEX IF NOT EXISTS idx_material_usage_material ON material_usage(materia
 CREATE INDEX IF NOT EXISTS idx_material_usage_user ON material_usage(user_id);
 CREATE INDEX IF NOT EXISTS idx_material_usage_cell ON material_usage(cell_id);
 CREATE INDEX IF NOT EXISTS idx_material_usage_date ON material_usage(usage_date);
+
+CREATE TABLE IF NOT EXISTS field_material_categories (
+  id TEXT PRIMARY KEY,
+  category_name TEXT NOT NULL UNIQUE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS field_material_models (
+  id TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL REFERENCES field_material_categories(id) ON DELETE RESTRICT,
+  model_name TEXT NOT NULL,
+  manufacturer TEXT NOT NULL DEFAULT '',
+  unit TEXT NOT NULL DEFAULT 'EA',
+  material_kind TEXT NOT NULL DEFAULT 'PASSIVE' CHECK (material_kind IN ('ACTIVE', 'PASSIVE')),
+  notes TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(category_id, model_name)
+);
+CREATE INDEX IF NOT EXISTS idx_field_material_models_category ON field_material_models(category_id, active, model_name);
+
+CREATE TABLE IF NOT EXISTS spare_stations (
+  id TEXT PRIMARY KEY,
+  region_name TEXT NOT NULL,
+  station_name TEXT NOT NULL,
+  normalized_key TEXT NOT NULL UNIQUE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(region_name, station_name)
+);
+
+CREATE TABLE IF NOT EXISTS spare_models (
+  id TEXT PRIMARY KEY,
+  manufacturer TEXT NOT NULL DEFAULT '',
+  item_type TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'EA',
+  notes TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(manufacturer, model_name)
+);
+CREATE INDEX IF NOT EXISTS idx_spare_models_type ON spare_models(item_type, active, model_name);
+
+CREATE TABLE IF NOT EXISTS inventory_month_closures (
+  id TEXT PRIMARY KEY,
+  period_key TEXT NOT NULL UNIQUE,
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'CLOSED' CHECK (status IN ('CLOSED', 'CANCELLED')),
+  summary_json TEXT NOT NULL DEFAULT '{}',
+  confirmed_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  confirmed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  cancelled_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  cancelled_at TEXT,
+  cancel_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS inventory_transactions (
+  id TEXT PRIMARY KEY,
+  transaction_number TEXT NOT NULL UNIQUE,
+  domain TEXT NOT NULL CHECK (domain IN ('FIELD', 'STATION')),
+  transaction_type TEXT NOT NULL,
+  effective_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'POSTED' CHECK (status IN ('POSTED', 'REVERSED')),
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  region_id TEXT REFERENCES regions(id) ON DELETE SET NULL,
+  cell_id TEXT REFERENCES cells(id) ON DELETE SET NULL,
+  work_id TEXT REFERENCES daily_work(id) ON DELETE SET NULL,
+  source_station_id TEXT REFERENCES spare_stations(id) ON DELETE RESTRICT,
+  destination_station_id TEXT REFERENCES spare_stations(id) ON DELETE RESTRICT,
+  company_name TEXT,
+  source_worker_name TEXT,
+  work_category TEXT,
+  source_report_year INTEGER,
+  source_sheet_name TEXT,
+  source_row_number INTEGER,
+  source_effective_date TEXT,
+  location_text TEXT,
+  purpose TEXT,
+  work_details TEXT,
+  memo TEXT,
+  reason TEXT,
+  original_transaction_id TEXT REFERENCES inventory_transactions(id) ON DELETE RESTRICT,
+  closure_id TEXT REFERENCES inventory_month_closures(id) ON DELETE RESTRICT,
+  idempotency_key TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reversed_at TEXT,
+  UNIQUE(created_by, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_transactions_domain_date ON inventory_transactions(domain, effective_date DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_transactions_creator ON inventory_transactions(created_by, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_transactions_original ON inventory_transactions(original_transaction_id);
+
+CREATE TABLE IF NOT EXISTS field_material_entries (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL REFERENCES inventory_transactions(id) ON DELETE RESTRICT,
+  model_id TEXT NOT NULL REFERENCES field_material_models(id) ON DELETE RESTRICT,
+  stock_state TEXT NOT NULL CHECK (stock_state IN ('NORMAL', 'BAD')),
+  signed_quantity REAL NOT NULL CHECK (signed_quantity <> 0),
+  unit_snapshot TEXT NOT NULL,
+  model_name_snapshot TEXT NOT NULL,
+  category_name_snapshot TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_field_entries_balance ON field_material_entries(model_id, stock_state);
+CREATE INDEX IF NOT EXISTS idx_field_entries_transaction ON field_material_entries(transaction_id);
+
+CREATE TABLE IF NOT EXISTS spare_entries (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL REFERENCES inventory_transactions(id) ON DELETE RESTRICT,
+  station_id TEXT NOT NULL REFERENCES spare_stations(id) ON DELETE RESTRICT,
+  model_id TEXT NOT NULL REFERENCES spare_models(id) ON DELETE RESTRICT,
+  stock_state TEXT NOT NULL CHECK (stock_state IN ('NEW', 'SERVICEABLE', 'DEFECTIVE', 'IN_REPAIR')),
+  signed_quantity REAL NOT NULL CHECK (signed_quantity <> 0),
+  unit_snapshot TEXT NOT NULL,
+  model_name_snapshot TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_spare_entries_balance ON spare_entries(station_id, model_id, stock_state);
+CREATE INDEX IF NOT EXISTS idx_spare_entries_transaction ON spare_entries(transaction_id);
+
+CREATE TABLE IF NOT EXISTS spare_repair_cases (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL REFERENCES spare_models(id) ON DELETE RESTRICT,
+  station_id TEXT NOT NULL REFERENCES spare_stations(id) ON DELETE RESTRICT,
+  outbound_transaction_id TEXT NOT NULL UNIQUE REFERENCES inventory_transactions(id) ON DELETE RESTRICT,
+  outbound_quantity REAL NOT NULL CHECK (outbound_quantity > 0),
+  resolved_quantity REAL NOT NULL DEFAULT 0 CHECK (resolved_quantity >= 0),
+  vendor_name TEXT,
+  fault_details TEXT,
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'PARTIAL', 'CLOSED')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS material_photo_assets (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL REFERENCES inventory_transactions(id) ON DELETE RESTRICT,
+  photo_slot TEXT NOT NULL CHECK (photo_slot IN ('BEFORE', 'AFTER')),
+  object_key TEXT NOT NULL UNIQUE,
+  thumbnail_object_key TEXT,
+  mime_type TEXT NOT NULL,
+  file_size INTEGER NOT NULL CHECK (file_size > 0),
+  thumbnail_size INTEGER,
+  width INTEGER NOT NULL CHECK (width > 0),
+  height INTEGER NOT NULL CHECK (height > 0),
+  thumbnail_width INTEGER,
+  thumbnail_height INTEGER,
+  sha256 TEXT NOT NULL,
+  thumbnail_sha256 TEXT,
+  archive_status TEXT NOT NULL DEFAULT 'PENDING' CHECK (archive_status IN ('PENDING', 'EXPORTED', 'DELETED')),
+  exported_at TEXT,
+  delete_after TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(transaction_id, photo_slot),
+  UNIQUE(transaction_id, sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_material_photos_retention ON material_photo_assets(archive_status, delete_after);
+
+CREATE TABLE IF NOT EXISTS inventory_audit_logs (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL REFERENCES inventory_transactions(id) ON DELETE RESTRICT,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT,
+  before_json TEXT NOT NULL DEFAULT '{}',
+  after_json TEXT NOT NULL DEFAULT '{}',
+  request_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_audit_transaction ON inventory_audit_logs(transaction_id, created_at);
+
+CREATE TABLE IF NOT EXISTS inventory_official_workbooks (
+  report_year INTEGER PRIMARY KEY,
+  source_file TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  workbook_blob BLOB NOT NULL,
+  field_audit_rowid INTEGER NOT NULL,
+  imported_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS inventory_import_rows (
+  id TEXT PRIMARY KEY,
+  domain TEXT NOT NULL CHECK (domain IN ('FIELD', 'STATION')),
+  source_file TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  sheet_name TEXT NOT NULL,
+  row_number INTEGER NOT NULL,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IMPORTED', 'REVIEW', 'REJECTED')),
+  issue_code TEXT,
+  imported_transaction_id TEXT REFERENCES inventory_transactions(id) ON DELETE SET NULL,
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source_hash, sheet_name, row_number)
+);
 
 CREATE TABLE IF NOT EXISTS db_upload_history (
   id TEXT PRIMARY KEY,
@@ -636,6 +884,48 @@ export const createSchema = () => {
   ensureColumn('users', 'zone', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('users', 'region_id', 'TEXT');
   ensureColumn('users', 'access_role', 'TEXT');
+  ensureColumn('inventory_transactions', 'source_worker_name', 'TEXT');
+  ensureColumn('inventory_transactions', 'work_category', 'TEXT');
+  ensureColumn('inventory_transactions', 'source_report_year', 'INTEGER');
+  ensureColumn('inventory_transactions', 'source_sheet_name', 'TEXT');
+  ensureColumn('inventory_transactions', 'source_row_number', 'INTEGER');
+  ensureColumn('inventory_transactions', 'source_effective_date', 'TEXT');
+  ensureColumn('field_material_entries', 'category_name_snapshot', 'TEXT');
+  const legacyOfficialRows = db.prepare(`
+    SELECT id,effective_date AS effectiveDate,memo
+      FROM inventory_transactions
+     WHERE source_sheet_name IS NULL AND memo LIKE '원본:% / %행'
+  `).all() as Array<{ id: string; effectiveDate: string; memo: string }>;
+  const parsedOfficialRows = legacyOfficialRows.flatMap((row) => {
+    const match = row.memo.match(/^원본: (.+) \/ (.+) (\d+)행$/);
+    return match ? [{ ...row, sourceFile: match[1], sourceSheetName: match[2], sourceRowNumber: Number(match[3]) }] : [];
+  });
+  const reportYearBySourceFile = new Map<string, number>();
+  for (const row of parsedOfficialRows) {
+    const explicit = [...row.sourceFile.matchAll(/(?:^|\D)(20\d{2}|\d{2})년/g)]
+      .map((match) => Number(match[1].length === 2 ? `20${match[1]}` : match[1]));
+    const effectiveYear = Number(row.effectiveDate.slice(0, 4));
+    const reportYear = explicit.length ? Math.max(...explicit) : effectiveYear;
+    reportYearBySourceFile.set(row.sourceFile, Math.max(reportYearBySourceFile.get(row.sourceFile) || 0, reportYear));
+  }
+  const updateOfficialSource = db.prepare(`
+    UPDATE inventory_transactions
+       SET source_report_year=?,source_sheet_name=?,source_row_number=?
+     WHERE id=?
+  `);
+  for (const row of parsedOfficialRows) {
+    updateOfficialSource.run(reportYearBySourceFile.get(row.sourceFile), row.sourceSheetName, row.sourceRowNumber, row.id);
+  }
+  db.prepare(`
+    UPDATE field_material_entries
+       SET category_name_snapshot=(
+         SELECT c.category_name
+           FROM field_material_models m
+           JOIN field_material_categories c ON c.id=m.category_id
+          WHERE m.id=field_material_entries.model_id
+       )
+     WHERE category_name_snapshot IS NULL
+  `).run();
   ensureColumn('users', 'password_updated_at', 'TEXT');
   ensureColumn('daily_work', 'region_id', 'TEXT');
   ensureColumn('daily_work', 'created_by', 'TEXT');
@@ -663,6 +953,28 @@ export const createSchema = () => {
   ensureColumn('work_transfers', 'inspection_request_details', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('work_transfers', 'deleted_by', 'TEXT');
   ensureColumn('work_transfers', 'delete_reason', 'TEXT');
+  ensureColumn('field_photos', 'thumbnail_url', 'TEXT');
+  ensureColumn('field_photos', 'file_size', 'INTEGER');
+  ensureColumn('field_photos', 'thumbnail_size', 'INTEGER');
+  ensureColumn('field_photos', 'width', 'INTEGER');
+  ensureColumn('field_photos', 'height', 'INTEGER');
+  ensureColumn('field_photos', 'thumbnail_width', 'INTEGER');
+  ensureColumn('field_photos', 'thumbnail_height', 'INTEGER');
+  ensureColumn('field_photos', 'sha256', 'TEXT');
+  ensureColumn('field_photos', 'thumbnail_sha256', 'TEXT');
+  ensureColumn('work_transfer_attachments', 'thumbnail_url', 'TEXT');
+  ensureColumn('work_transfer_attachments', 'thumbnail_size', 'INTEGER');
+  ensureColumn('work_transfer_attachments', 'width', 'INTEGER');
+  ensureColumn('work_transfer_attachments', 'height', 'INTEGER');
+  ensureColumn('work_transfer_attachments', 'thumbnail_width', 'INTEGER');
+  ensureColumn('work_transfer_attachments', 'thumbnail_height', 'INTEGER');
+  ensureColumn('work_transfer_attachments', 'sha256', 'TEXT');
+  ensureColumn('work_transfer_attachments', 'thumbnail_sha256', 'TEXT');
+  ensureColumn('material_photo_assets', 'thumbnail_object_key', 'TEXT');
+  ensureColumn('material_photo_assets', 'thumbnail_size', 'INTEGER');
+  ensureColumn('material_photo_assets', 'thumbnail_width', 'INTEGER');
+  ensureColumn('material_photo_assets', 'thumbnail_height', 'INTEGER');
+  ensureColumn('material_photo_assets', 'thumbnail_sha256', 'TEXT');
   ensureColumn('catv_b2c_lines', 'station_key', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('catv_b2c_lines', 'core', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('catv_b2c_lines', 'service_line_number', "TEXT NOT NULL DEFAULT ''");
@@ -723,6 +1035,8 @@ export const createSchema = () => {
     CREATE INDEX IF NOT EXISTS idx_work_transfers_urgent_inspection_date ON work_transfers(is_urgent, inspection_requested_date DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_work_transfers_client_registration_key
       ON work_transfers(client_registration_key) WHERE client_registration_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_inventory_transactions_source_report
+      ON inventory_transactions(source_report_year, source_sheet_name, source_row_number);
   `);
   db.prepare(`
     UPDATE users
@@ -1214,6 +1528,111 @@ const migrateLegacyAdminAssets = async () => {
   }
 };
 
+const seedInventoryMasters = () => {
+  const activeCategories = new Set(['ONU', '간선증폭기', '구내증폭기', '연장증폭기', '선로증폭기', '전원공급기_PS', '전원공급기_UPS']);
+  const categoryNames = [...activeCategories, '동축케이블', '광케이블', 'Connector', 'TAP', 'Splitter', 'AMP', '광모듈', '수동소자', '기타'];
+  const insertCategory = db.prepare(`
+    INSERT INTO field_material_categories (id, category_name, sort_order)
+    VALUES (?, ?, ?) ON CONFLICT(category_name) DO NOTHING
+  `);
+  categoryNames.forEach((name, index) => insertCategory.run(`field-category-${index + 1}`, name, index + 1));
+
+  const stationSeeds: Array<[string, string]> = [
+    ['기남', '평택국사'], ['기남', '송탄국사'], ['기남', '안성국사'], ['기남', '안중국사'],
+    ['기남', '수지국사'], ['기남', '신갈국사'], ['기남', '마평국사'],
+    ['수원', '오산국사'], ['수원', '남양국사'], ['수원', '발안국사'], ['수원', '봉담국사'],
+    ['수원', '조암국사'], ['수원', '우만국사'], ['수원', '매산국사'],
+  ];
+  const insertStation = db.prepare(`
+    INSERT INTO spare_stations (id, region_name, station_name, normalized_key, sort_order)
+    VALUES (?, ?, ?, ?, ?) ON CONFLICT(normalized_key) DO NOTHING
+  `);
+  stationSeeds.forEach(([region, station], index) => insertStation.run(`spare-station-${index + 1}`, region, station, normalizeStationName(station), index + 1));
+
+  if (env.isProduction) return;
+  const modelCount = Number((db.prepare('SELECT COUNT(*) AS count FROM field_material_models').get() as { count: number }).count);
+  if (modelCount > 0) return;
+  const legacyRows = db.prepare('SELECT id, material_name, specification, unit, stock_quantity FROM materials WHERE deleted_at IS NULL ORDER BY material_name').all() as Array<Record<string, unknown>>;
+  const categoryByName = new Map((db.prepare('SELECT id, category_name FROM field_material_categories').all() as Array<{ id: string; category_name: string }>).map((row) => [row.category_name, row.id]));
+  const insertModel = db.prepare(`
+    INSERT INTO field_material_models (id, category_id, model_name, unit, material_kind, notes)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of legacyRows) {
+    const categoryName = String(row.material_name);
+    const categoryId = categoryByName.get(categoryName) || categoryByName.get('기타');
+    if (!categoryId) continue;
+    insertModel.run(`field-model-${row.id}`, categoryId, String(row.specification || row.material_name), String(row.unit || 'EA'), activeCategories.has(categoryName) ? 'ACTIVE' : 'PASSIVE', '로컬 기존 자재 화면 호환 모델');
+  }
+};
+
+const migratePassiveMaterialCategories = () => {
+  const targetNames = ['수동소자(옥외용)', '수동소자(옥내용)', '열수축관'] as const;
+  const targetIds = new Map<string,string>();
+  const insertCategory = db.prepare('INSERT INTO field_material_categories (id,category_name,sort_order) VALUES (?,?,?) ON CONFLICT(category_name) DO NOTHING');
+  targetNames.forEach((name,index)=>insertCategory.run(`field-category-passive-${index+1}`,name,15+index));
+  (db.prepare(`SELECT id,category_name FROM field_material_categories WHERE category_name IN ('수동소자(옥외용)','수동소자(옥내용)','열수축관')`).all() as Array<{id:string;category_name:string}>).forEach((row)=>targetIds.set(row.category_name,row.id));
+  const indoorModels = new Set(['AS-772B','TV8-14','TV8-17','TV8-20','SV8']);
+  const heatShrinkModels = new Set(['7C-PIN용(15CM*1개)','12C-PIN용 (20Cm*1개)','D.K (스터브케이블용)']);
+  const legacyModels = db.prepare(`
+    SELECT m.id,m.model_name AS modelName,m.active
+      FROM field_material_models m JOIN field_material_categories c ON c.id=m.category_id
+     WHERE c.category_name IN ('수동소자류','수동소자')
+  `).all() as Array<{id:string;modelName:string;active:number}>;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const model of legacyModels) {
+      const targetName = heatShrinkModels.has(model.modelName) ? '열수축관' : indoorModels.has(model.modelName) ? '수동소자(옥내용)' : '수동소자(옥외용)';
+      const targetCategoryId = targetIds.get(targetName);
+      if (!targetCategoryId) continue;
+      const canonical = db.prepare('SELECT id FROM field_material_models WHERE category_id=? AND model_name=? COLLATE NOCASE AND active=1 AND id<>? ORDER BY created_at LIMIT 1')
+        .get(targetCategoryId,model.modelName,model.id) as {id:string}|undefined;
+      if (canonical) {
+        db.prepare('UPDATE field_material_entries SET model_id=? WHERE model_id=?').run(canonical.id,model.id);
+        db.prepare('UPDATE field_material_models SET active=0,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(model.id);
+      } else {
+        db.prepare('UPDATE field_material_models SET category_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(targetCategoryId,model.id);
+      }
+    }
+    db.prepare("UPDATE field_material_categories SET active=0,updated_at=CURRENT_TIMESTAMP WHERE category_name IN ('수동소자류','수동소자')").run();
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+};
+
+const migratePowerSupplyMaterialCategories = () => {
+  const aliases: Array<[string, string]> = [
+    ['전원공급기_PS', '전원공급기( PS )'],
+    ['전원공급기_UPS', '전원공급기( UPS )'],
+  ];
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const [canonicalName, aliasName] of aliases) {
+      const canonical = db.prepare('SELECT id FROM field_material_categories WHERE category_name=?').get(canonicalName) as { id: string } | undefined;
+      const alias = db.prepare('SELECT id FROM field_material_categories WHERE category_name=?').get(aliasName) as { id: string } | undefined;
+      if (!canonical || !alias || canonical.id === alias.id) continue;
+      const models = db.prepare('SELECT id,model_name AS modelName FROM field_material_models WHERE category_id=?').all(alias.id) as Array<{ id: string; modelName: string }>;
+      for (const model of models) {
+        const duplicate = db.prepare('SELECT id FROM field_material_models WHERE category_id=? AND model_name=? COLLATE NOCASE AND id<>? ORDER BY active DESC,created_at LIMIT 1')
+          .get(canonical.id, model.modelName, model.id) as { id: string } | undefined;
+        if (duplicate) {
+          db.prepare('UPDATE field_material_entries SET model_id=? WHERE model_id=?').run(duplicate.id, model.id);
+          db.prepare('UPDATE field_material_models SET active=0,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(model.id);
+        } else {
+          db.prepare('UPDATE field_material_models SET category_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(canonical.id, model.id);
+        }
+      }
+      db.prepare('UPDATE field_material_categories SET active=0,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(alias.id);
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+};
+
 const linkLegacyFloorPlanAssets = () => {
   const assets = db.prepare(`
     SELECT id, floor_plan_id, station_name, uploaded_at
@@ -1259,6 +1678,9 @@ const removeLegacyFloorPlanNodeCoordinates = () => {
 export const initializeDatabase = async () => {
   createSchema();
   await seedDatabase();
+  seedInventoryMasters();
+  migratePowerSupplyMaterialCategories();
+  migratePassiveMaterialCategories();
   syncRegionAssignments();
   syncCatvCellsFromLegacy();
   syncRegionAssignments();

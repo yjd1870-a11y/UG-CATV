@@ -49,6 +49,14 @@ export const asPositiveNumber = (value: unknown, field: string): number => {
   return numberValue;
 };
 
+export const asPositiveInteger = (value: unknown, field: string): number => {
+  const numberValue = Number(value);
+  if (!Number.isInteger(numberValue) || numberValue <= 0) {
+    throw new ApiError(400, `${field} 항목은 1 이상의 정수여야 합니다.`, 'VALIDATION_ERROR');
+  }
+  return numberValue;
+};
+
 export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   if (error instanceof ApiError) {
     fail(res, error.message, error.status, error.code);

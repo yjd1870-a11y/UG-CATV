@@ -111,8 +111,9 @@ export const transfersApi = {
     request<{ id: string }>(`/work-transfers/${encodeURIComponent(id)}/attachments`, {
       method: 'POST', body: JSON.stringify(input),
     }),
-  attachmentAccessUrl: async (id: string, attachmentId: string) => {
-    const result = await request<{ url: string }>(`/work-transfers/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}/access-url`);
+  attachmentAccessUrl: async (id: string, attachmentId: string, variant: 'master' | 'thumbnail' = 'master') => {
+    const suffix = variant === 'thumbnail' ? '?variant=thumbnail' : '';
+    const result = await request<{ url: string }>(`/work-transfers/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}/access-url${suffix}`);
     return apiResourceUrl(result.url);
   },
   addFieldAction: (id: string, input: { actionText: string; processedAt?: string }) =>

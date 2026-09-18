@@ -11,6 +11,7 @@ import {
   privatePhotoDownloadUrl,
   privatePhotoMime,
   privatePhotoUploadUrl,
+  promoteQuarantinedCellPhoto,
   removePrivatePhoto,
   resolvePrivatePhoto,
   savePrivatePhoto,
@@ -149,7 +150,10 @@ router.get('/:id', (req, res) => {
       category: memo.category || '국사설비',
       date: String(photo.uploaded_at),
       author: String(photo.author_name || '관리자'),
-      url: String(photo.file_url).startsWith('photos/')
+      url: String(photo.file_url).match(/^(?:photos|cell-photos)\//)
+        ? `/api/cells/${encodeURIComponent(req.params.id)}/photos/${encodeURIComponent(String(photo.id))}/content?variant=thumbnail`
+        : String(photo.file_url),
+      masterUrl: String(photo.file_url).match(/^(?:photos|cell-photos)\//)
         ? `/api/cells/${encodeURIComponent(req.params.id)}/photos/${encodeURIComponent(String(photo.id))}/content`
         : String(photo.file_url),
       description: memo.description || '',
@@ -266,30 +270,50 @@ router.post('/:id/photos/complete', asyncRoute(async (req, res) => {
   if (!cell) throw new ApiError(404, 'CELL 정보를 찾을 수 없습니다.', 'NOT_FOUND');
   const objectKey = asText(req.body?.objectKey, 'R2 객체 키', 512);
   const safeUserId = user.id.replace(/[^a-z0-9_-]/gi, '').slice(0, 64);
-  if (!objectKey.startsWith('photos/') || !objectKey.includes(`/${safeUserId}/`)) {
+  if (!objectKey.startsWith('photo-quarantine/cell/') || !objectKey.includes(`/${safeUserId}/`)) {
     throw new ApiError(400, '사진 객체 키가 현재 사용자에게 발급된 키가 아닙니다.', 'INVALID_PHOTO_PATH');
   }
-  const object = await headR2Object(objectKey);
-  validatePhotoUpload(object.contentType, object.size);
+  let object: Awaited<ReturnType<typeof headR2Object>>;
+  let stored: Awaited<ReturnType<typeof promoteQuarantinedCellPhoto>>;
+  try {
+    object = await headR2Object(objectKey);
+    validatePhotoUpload(object.contentType, object.size);
+    stored = await promoteQuarantinedCellPhoto(objectKey, object.contentType, user.id);
+  } catch (error) {
+    await removePrivatePhoto(objectKey).catch(() => undefined);
+    throw error;
+  }
   const id = randomUUID();
   const fileName = asText(req.body?.title || req.body?.fileName, '사진 제목', 160);
   try {
     db.prepare(`
       INSERT INTO field_photos (
-        id, cell_id, work_id, file_name, file_url, file_type, uploaded_by, memo
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        id, cell_id, work_id, file_name, file_url, thumbnail_url, file_type,
+        file_size, thumbnail_size, width, height, thumbnail_width, thumbnail_height,
+        sha256, thumbnail_sha256, uploaded_by, memo
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       req.params.id,
       req.body?.workId || null,
       fileName,
-      objectKey,
-      object.contentType,
+      stored.objectKey,
+      stored.thumbnailObjectKey,
+      stored.mimeType,
+      stored.size,
+      stored.thumbnailSize,
+      stored.width,
+      stored.height,
+      stored.thumbnailWidth,
+      stored.thumbnailHeight,
+      stored.sha256,
+      stored.thumbnailSha256,
       user.id,
       JSON.stringify({ category: req.body?.category || '구사설비', description: req.body?.description || '' })
     );
   } catch (error) {
-    await removePrivatePhoto(objectKey).catch(() => undefined);
+    await Promise.all([stored.objectKey, stored.thumbnailObjectKey]
+      .map((key) => removePrivatePhoto(key).catch(() => undefined)));
     throw error;
   }
   writeAuditLog(req, {
@@ -312,20 +336,32 @@ router.post('/:id/photos', asyncRoute(async (req, res) => {
   try {
     db.prepare(`
       INSERT INTO field_photos (
-        id, cell_id, work_id, file_name, file_url, file_type, uploaded_by, memo
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        id, cell_id, work_id, file_name, file_url, thumbnail_url, file_type,
+        file_size, thumbnail_size, width, height, thumbnail_width, thumbnail_height,
+        sha256, thumbnail_sha256, uploaded_by, memo
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       req.params.id,
       req.body?.workId || null,
       fileName,
       stored.objectKey,
+      stored.thumbnailObjectKey,
       stored.mimeType,
+      stored.size,
+      stored.thumbnailSize,
+      stored.width,
+      stored.height,
+      stored.thumbnailWidth,
+      stored.thumbnailHeight,
+      stored.sha256,
+      stored.thumbnailSha256,
       user.id,
       JSON.stringify({ category: req.body?.category || '국사설비', description: req.body?.description || '' })
     );
   } catch (error) {
-    await removePrivatePhoto(stored.objectKey).catch(() => undefined);
+    await Promise.all([stored.objectKey, stored.thumbnailObjectKey]
+      .map((key) => removePrivatePhoto(key).catch(() => undefined)));
     throw error;
   }
   writeAuditLog(req, {
@@ -339,17 +375,18 @@ router.post('/:id/photos', asyncRoute(async (req, res) => {
 
 router.get('/:id/photos/:photoId/content', asyncRoute(async (req, res) => {
   const photo = db.prepare(`
-    SELECT file_url FROM field_photos
+    SELECT file_url, thumbnail_url FROM field_photos
      WHERE id = ? AND cell_id = ? AND deleted_at IS NULL
-  `).get(req.params.photoId, req.params.id) as { file_url: string } | undefined;
-  if (!photo || !photo.file_url.startsWith('photos/')) throw new ApiError(404, '사진을 찾을 수 없습니다.', 'NOT_FOUND');
+  `).get(req.params.photoId, req.params.id) as { file_url: string; thumbnail_url: string | null } | undefined;
+  if (!photo || !photo.file_url.match(/^(?:photos|cell-photos)\//)) throw new ApiError(404, '사진을 찾을 수 없습니다.', 'NOT_FOUND');
+  const objectKey = req.query.variant === 'thumbnail' && photo.thumbnail_url ? photo.thumbnail_url : photo.file_url;
   if (usesR2Storage) {
-    res.redirect(302, await privatePhotoDownloadUrl(photo.file_url));
+    res.redirect(302, await privatePhotoDownloadUrl(objectKey));
     return;
   }
-  const absolutePath = resolvePrivatePhoto(photo.file_url);
+  const absolutePath = resolvePrivatePhoto(objectKey);
   if (!fs.existsSync(absolutePath)) throw new ApiError(404, '사진 파일을 찾을 수 없습니다.', 'NOT_FOUND');
-  res.setHeader('Content-Type', privatePhotoMime(photo.file_url));
+  res.setHeader('Content-Type', privatePhotoMime(objectKey));
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.sendFile(absolutePath);
@@ -357,11 +394,12 @@ router.get('/:id/photos/:photoId/content', asyncRoute(async (req, res) => {
 
 router.delete('/:id/photos/:photoId', requireRoles('admin'), asyncRoute(async (req, res) => {
   const photo = db.prepare(`
-    SELECT file_url FROM field_photos
+    SELECT file_url, thumbnail_url FROM field_photos
      WHERE id = ? AND cell_id = ? AND deleted_at IS NULL
-  `).get(req.params.photoId, req.params.id) as { file_url: string } | undefined;
+  `).get(req.params.photoId, req.params.id) as { file_url: string; thumbnail_url: string | null } | undefined;
   if (!photo) throw new ApiError(404, '사진을 찾을 수 없습니다.', 'NOT_FOUND');
   await removePrivatePhoto(photo.file_url);
+  if (photo.thumbnail_url) await removePrivatePhoto(photo.thumbnail_url);
   db.prepare('UPDATE field_photos SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND cell_id = ?')
     .run(req.params.photoId, req.params.id);
   writeAuditLog(req, { action: 'PHOTO_DELETED', targetType: 'field_photo', targetId: req.params.photoId, metadata: { cellId: req.params.id } });

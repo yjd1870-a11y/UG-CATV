@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { proxyApiRequest } from '../../functions/api/[[path]]';
+
+const projectRoot = path.resolve(import.meta.dirname, '../..');
+const routes = JSON.parse(fs.readFileSync(path.join(projectRoot, 'public/_routes.json'), 'utf8')) as { include: string[] };
+const redirects = fs.readFileSync(path.join(projectRoot, 'public/_redirects'), 'utf8');
+assert.deepEqual(routes.include, ['/api/*']);
+assert.match(redirects, /^\/\* \/index\.html 200/m);
 
 let capturedUrl = '';
 let capturedInit: RequestInit | undefined;

@@ -24,8 +24,8 @@ export const BottomNav: React.FC = () => {
               onClick={() => navigateTo(item.key)}
               className={`relative flex flex-col items-center justify-center h-full transition-all focus:outline-none select-none cursor-pointer active:scale-95 ${
                 isActive
-                  ? 'text-[#2878B5]'
-                  : 'text-[#9CA3AF] hover:text-[#173B57]'
+                  ? 'text-[#1D6091]'
+                  : 'text-[#64748B] hover:text-[#173B57]'
               }`}
             >
               {/* Active Indicator Top Bar */}
@@ -37,7 +37,7 @@ export const BottomNav: React.FC = () => {
               <div className="relative mb-0.5">
                 <div
                   className={`p-1 rounded-xl transition-transform ${
-                    isActive ? 'scale-110 text-[#2878B5]' : ''
+                    isActive ? 'scale-110 text-[#1D6091]' : ''
                   }`}
                 >
                   <Icon className="w-5 h-5" />
@@ -52,7 +52,7 @@ export const BottomNav: React.FC = () => {
               {/* Label */}
               <span
                 className={`text-[10px] sm:text-[11px] leading-tight tracking-tight whitespace-nowrap ${
-                  isActive ? 'font-bold text-[#2878B5]' : 'font-semibold text-[#9CA3AF]'
+                  isActive ? 'font-bold text-[#1D6091]' : 'font-semibold text-[#64748B]'
                 }`}
               >
                 {item.label}

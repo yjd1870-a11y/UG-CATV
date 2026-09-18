@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { INITIAL_CATV_MANPOWER } from '../data/mockData';
+import { materialManagementEnabled } from '../config/features';
 import { authApi, type SignupInput } from '../features/auth/api';
 import { cellsApi } from '../features/cells/api';
 import { dailyWorkApi } from '../features/daily-work/api';
@@ -76,7 +77,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<AppView>('home');
+  const initialView = (): AppView => {
+    if (materialManagementEnabled && ['/materials', '/material-management'].includes(window.location.pathname)) return 'material_list';
+    if (materialManagementEnabled && window.location.pathname === '/station-spares') return 'station_spares';
+    return 'home';
+  };
+  const [activeView, setActiveView] = useState<AppView>(initialView);
   const [selectedCellId, setSelectedCellId] = useState<string | null>(null);
   const [selectedTransferId, setSelectedTransferId] = useState<string | null>(null);
   const [cells, setCells] = useState<CellInfo[]>([]);
@@ -89,7 +95,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [catvManpower, setCatvManpower] = useState<CatvManpowerStatus>(INITIAL_CATV_MANPOWER);
   const [toast, setToast] = useState<ToastMessage | null>(null);
-  const activeViewRef = useRef<AppView>('home');
+  const activeViewRef = useRef<AppView>(activeView);
   const historyReadyRef = useRef(false);
   const restoringMobileGuardRef = useRef(false);
   const lastMobileBackRef = useRef(0);
@@ -221,7 +227,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const user = await authApi.login(username, password);
     setCurrentUser(user);
     await reloadBusinessData();
-    setActiveView('home');
+    const destination = initialView();
+    setActiveView(destination);
+    activeViewRef.current = destination;
     showToast(`${user.name} (${user.roleLabel}) 로그인되었습니다.`, 'success');
     return true;
   };
@@ -260,12 +268,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const navigateTo = (view: AppView, params?: { cellId?: string; transferId?: string }) => {
+    const targetView = !materialManagementEnabled && ['material_list', 'material_register', 'station_spares'].includes(view)
+      ? 'home'
+      : view;
     if (params?.cellId) setSelectedCellId(params.cellId);
     if (params?.transferId) setSelectedTransferId(params.transferId);
-    setActiveView(view);
-    activeViewRef.current = view;
+    setActiveView(targetView);
+    activeViewRef.current = targetView;
     if (historyReadyRef.current) {
-      window.history.pushState({ catvApp: true, view, cellId: params?.cellId, transferId: params?.transferId }, '');
+      const path = targetView === 'material_list' || targetView === 'material_register'
+        ? '/material-management'
+        : targetView === 'station_spares' ? '/station-spares' : ['/materials', '/material-management', '/station-spares'].includes(window.location.pathname) ? '/' : window.location.pathname;
+      window.history.pushState({ catvApp: true, view: targetView, cellId: params?.cellId, transferId: params?.transferId }, '', path);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };

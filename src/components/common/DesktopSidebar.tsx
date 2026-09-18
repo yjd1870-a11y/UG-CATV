@@ -23,12 +23,12 @@ export const DesktopSidebar: React.FC = () => {
               aria-current={active ? 'page' : undefined}
               className={`group relative flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition ${
                 active
-                  ? 'bg-blue-50 font-extrabold text-[#2878B5] shadow-sm'
+                  ? 'bg-blue-50 font-extrabold text-[#1D6091] shadow-sm'
                   : 'font-bold text-slate-500 hover:bg-slate-50 hover:text-[#173B57]'
               }`}
             >
               {active ? <span className="absolute -left-3 h-8 w-1 rounded-r-full bg-[#2878B5]" /> : null}
-              <Icon className={`h-5 w-5 shrink-0 ${active ? 'text-[#2878B5]' : 'text-slate-400 group-hover:text-[#2878B5]'}`} />
+              <Icon className={`h-5 w-5 shrink-0 ${active ? 'text-[#1D6091]' : 'text-slate-400 group-hover:text-[#1D6091]'}`} />
               <span>{item.label}</span>
               {item.badgeCount !== undefined && item.badgeCount > 0 ? (
                 <span className="ml-auto flex min-w-5 items-center justify-center rounded-full bg-[#F28C28] px-1.5 py-0.5 text-[10px] font-black text-white shadow-sm">

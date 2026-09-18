@@ -15,6 +15,11 @@ import { authUser, type AuthUser, requireAuth, requireRoles } from '../security/
 import { writeAuditLog } from '../security/audit';
 import { usesR2Storage } from '../object-storage';
 import { workTransferRegionParams, workTransferRegionPlaceholders } from '../work-transfer-policy';
+import {
+  markWorkTransferPurgeSucceeded,
+  purgeWorkTransferPhotosNow,
+  workTransferAttachmentsForPurge,
+} from '../work-transfer-photo-purge';
 
 const router = Router();
 router.use(requireAuth);
@@ -37,24 +42,6 @@ const completionRoles = new Set(['admin', 'public_official', 'team_leader']);
 const workflowStatuses = new Set(['registered', 'field_processed', 'completed']);
 const allowedAttachmentTypes = new Set(['request_photo', 'field_photo']);
 const maxEvidencePhotos = 3;
-
-type StoredAttachment = { id: string; file_url: string };
-
-const storedAttachments = (transferId: string) => db.prepare(`
-  SELECT id, file_url FROM work_transfer_attachments WHERE transfer_id = ?
-`).all(transferId) as StoredAttachment[];
-
-const removeStoredAttachmentFiles = async (attachments: StoredAttachment[]) => {
-  try {
-    for (const attachment of attachments) await removePrivatePhoto(attachment.file_url);
-  } catch {
-    throw new ApiError(
-      503,
-      '첨부사진을 완전히 삭제하지 못해 완료 처리를 중단했습니다. 잠시 후 다시 시도해 주세요.',
-      'PHOTO_PURGE_FAILED',
-    );
-  }
-};
 
 const requireRegion = (user: AuthUser) => {
   if (user.regionId) return user.regionId;
@@ -241,13 +228,13 @@ router.post('/', asyncRoute(async (req, res) => {
       return;
     }
   }
-  const storedPhotos: Array<PendingPhoto & { objectKey: string; mimeType: string; size: number }> = [];
+  const storedPhotos: Array<PendingPhoto & Awaited<ReturnType<typeof savePrivatePhoto>>> = [];
   let createdId = '';
   try {
     for (const [index, photo] of photos.entries()) {
       const dataUrl = asText(photo.dataUrl, '사진 데이터', 15 * 1024 * 1024);
       const fileName = optionalText(photo.fileName, 160) || `업무이관 사진 ${index + 1}`;
-      const stored = await savePrivatePhoto(dataUrl, user.id);
+      const stored = await savePrivatePhoto(dataUrl, user.id, 'work-transfer');
       storedPhotos.push({ fileName, dataUrl, ...stored });
     }
 
@@ -283,9 +270,13 @@ router.post('/', asyncRoute(async (req, res) => {
         const attachmentId = randomUUID();
         db.prepare(`
           INSERT INTO work_transfer_attachments (
-            id, transfer_id, attachment_type, file_name, file_url, file_type, file_size, uploaded_by
-          ) VALUES (?, ?, 'request_photo', ?, ?, ?, ?, ?)
-        `).run(attachmentId, id, photo.fileName, photo.objectKey, photo.mimeType, photo.size, user.id);
+            id, transfer_id, attachment_type, file_name, file_url, thumbnail_url,
+            file_type, file_size, thumbnail_size, width, height, thumbnail_width, thumbnail_height,
+            sha256, thumbnail_sha256, uploaded_by
+          ) VALUES (?, ?, 'request_photo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(attachmentId, id, photo.fileName, photo.objectKey, photo.thumbnailObjectKey,
+          photo.mimeType, photo.size, photo.thumbnailSize, photo.width, photo.height,
+          photo.thumbnailWidth, photo.thumbnailHeight, photo.sha256, photo.thumbnailSha256, user.id);
       }
       db.prepare(`
         INSERT INTO work_transfer_logs (transfer_id, author_user_id, author_name, to_status, comment, created_at)
@@ -302,7 +293,8 @@ router.post('/', asyncRoute(async (req, res) => {
     success(res, mapTransferRow(created), 201);
   } catch (error) {
     if (!createdId || !db.prepare('SELECT 1 FROM work_transfers WHERE id = ?').get(createdId)) {
-      await Promise.all(storedPhotos.map((photo) => removePrivatePhoto(photo.objectKey).catch(() => undefined)));
+      await Promise.all(storedPhotos.flatMap((photo) => [photo.objectKey, photo.thumbnailObjectKey])
+        .map((objectKey) => removePrivatePhoto(objectKey).catch(() => undefined)));
     }
     throw error;
   }
@@ -358,8 +350,8 @@ router.delete('/:id', requireRoles('admin', 'public_official'), asyncRoute(async
   const existing = accessibleTransfer(req.params.id, user);
   const reason = asText(req.body?.reason, '삭제 사유', 1000);
   const now = new Date().toISOString();
-  const attachments = storedAttachments(req.params.id);
-  await removeStoredAttachmentFiles(attachments);
+  const attachments = workTransferAttachmentsForPurge(req.params.id);
+  const purge = await purgeWorkTransferPhotosNow(req.params.id, user.id, 'DELETE', attachments);
   db.exec('BEGIN IMMEDIATE');
   try {
     const deletedAttachments = db.prepare('DELETE FROM work_transfer_attachments WHERE transfer_id = ?').run(req.params.id);
@@ -381,6 +373,7 @@ router.delete('/:id', requireRoles('admin', 'public_official'), asyncRoute(async
              evidence_photos_deleted_at = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND deleted_at IS NULL
     `).run(now, user.id, reason, attachments.length, now, req.params.id);
+    markWorkTransferPurgeSucceeded(purge.attemptId, now);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
@@ -408,7 +401,7 @@ router.post('/:id/attachments', asyncRoute(async (req, res) => {
   if (String(transfer.workflow_status) === 'completed') throw new ApiError(409, '완료된 건에는 사진을 추가할 수 없습니다.', 'TRANSFER_COMPLETED');
   const fileName = asText(req.body?.fileName, '파일명', 160);
   const dataUrl = asText(req.body?.dataUrl, '사진 데이터', 15 * 1024 * 1024);
-  const stored = await savePrivatePhoto(dataUrl, user.id);
+  const stored = await savePrivatePhoto(dataUrl, user.id, 'work-transfer');
   const id = randomUUID();
   let transactionStarted = false;
   try {
@@ -422,9 +415,13 @@ router.post('/:id/attachments', asyncRoute(async (req, res) => {
     }
     db.prepare(`
       INSERT INTO work_transfer_attachments (
-        id, transfer_id, attachment_type, file_name, file_url, file_type, file_size, uploaded_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, req.params.id, attachmentType, fileName, stored.objectKey, stored.mimeType, stored.size, user.id);
+        id, transfer_id, attachment_type, file_name, file_url, thumbnail_url,
+        file_type, file_size, thumbnail_size, width, height, thumbnail_width, thumbnail_height,
+        sha256, thumbnail_sha256, uploaded_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, req.params.id, attachmentType, fileName, stored.objectKey, stored.thumbnailObjectKey,
+      stored.mimeType, stored.size, stored.thumbnailSize, stored.width, stored.height,
+      stored.thumbnailWidth, stored.thumbnailHeight, stored.sha256, stored.thumbnailSha256, user.id);
     db.prepare(`
       UPDATE work_transfers
          SET evidence_photo_count = evidence_photo_count + 1,
@@ -436,7 +433,8 @@ router.post('/:id/attachments', asyncRoute(async (req, res) => {
     transactionStarted = false;
   } catch (error) {
     if (transactionStarted) db.exec('ROLLBACK');
-    await removePrivatePhoto(stored.objectKey).catch(() => undefined);
+    await Promise.all([stored.objectKey, stored.thumbnailObjectKey]
+      .map((objectKey) => removePrivatePhoto(objectKey).catch(() => undefined)));
     throw error;
   }
   writeAuditLog(req, { action: 'WORK_TRANSFER_PHOTO_UPLOADED', targetType: 'work_transfer_attachment', targetId: id, metadata: { transferId: req.params.id, attachmentType } });
@@ -454,7 +452,8 @@ const attachmentForUser = (transferId: string, attachmentId: string, user: AuthU
 
 router.get('/:id/attachments/:attachmentId/file', asyncRoute(async (req, res) => {
   const attachment = attachmentForUser(req.params.id, req.params.attachmentId, authUser(req));
-  const objectKey = String(attachment.file_url);
+  const wantsThumbnail = req.query.variant === 'thumbnail';
+  const objectKey = String(wantsThumbnail && attachment.thumbnail_url ? attachment.thumbnail_url : attachment.file_url);
   if (usesR2Storage) {
     res.redirect(302, await privatePhotoDownloadUrl(objectKey));
     return;
@@ -469,10 +468,11 @@ router.get('/:id/attachments/:attachmentId/file', asyncRoute(async (req, res) =>
 
 router.get('/:id/attachments/:attachmentId/access-url', asyncRoute(async (req, res) => {
   const attachment = attachmentForUser(req.params.id, req.params.attachmentId, authUser(req));
-  const objectKey = String(attachment.file_url);
+  const wantsThumbnail = req.query.variant === 'thumbnail';
+  const objectKey = String(wantsThumbnail && attachment.thumbnail_url ? attachment.thumbnail_url : attachment.file_url);
   const url = usesR2Storage
     ? await privatePhotoDownloadUrl(objectKey)
-    : `/work-transfers/${req.params.id}/attachments/${req.params.attachmentId}/file`;
+    : `/work-transfers/${req.params.id}/attachments/${req.params.attachmentId}/file${wantsThumbnail ? '?variant=thumbnail' : ''}`;
   success(res, { url });
 }));
 
@@ -519,32 +519,48 @@ router.post('/:id/complete', asyncRoute(async (req, res) => {
   const user = authUser(req);
   if (!completionRoles.has(user.role)) throw new ApiError(403, '최종 완료 권한이 없습니다.', 'FORBIDDEN');
   const existing = accessibleTransfer(req.params.id, user);
+  if (String(existing.workflow_status) === 'completed') {
+    // Repeated completion is an idempotent read of the already-purged result.
+    success(res, mapTransferRow(existing));
+    return;
+  }
   if (String(existing.workflow_status) !== 'field_processed') throw new ApiError(409, '현장처리된 업무만 완료할 수 있습니다.', 'FIELD_ACTION_REQUIRED');
   const actionCount = Number((db.prepare('SELECT COUNT(*) AS count FROM work_transfer_field_actions WHERE transfer_id = ?').get(req.params.id) as { count: number }).count);
   if (actionCount < 1) throw new ApiError(409, '현장처리 이력이 있어야 완료할 수 있습니다.', 'FIELD_ACTION_REQUIRED');
   const comment = optionalText(req.body?.comment, 1000) || '최종 업무이관 완료';
   const now = new Date().toISOString();
-  const attachments = storedAttachments(req.params.id);
+  const attachments = workTransferAttachmentsForPurge(req.params.id);
 
   // 파일 저장소는 DB 트랜잭션과 원자적으로 묶을 수 없으므로 먼저 모두 지운다.
   // 중간 실패 시 완료 상태는 바뀌지 않으며, 재시도하면 존재하지 않는 로컬 파일은
   // 안전하게 건너뛰고 남은 파일부터 계속 삭제한다.
-  await removeStoredAttachmentFiles(attachments);
+  const purge = await purgeWorkTransferPhotosNow(req.params.id, user.id, 'COMPLETE', attachments);
+  let completedByConcurrentRequest = false;
   db.exec('BEGIN IMMEDIATE');
   try {
-    const deleted = db.prepare('DELETE FROM work_transfer_attachments WHERE transfer_id = ?').run(req.params.id);
-    if (Number(deleted.changes) !== attachments.length) {
-      throw new Error('업무이관 첨부사진 DB 삭제 건수가 일치하지 않습니다.');
+    const current = db.prepare('SELECT workflow_status FROM work_transfers WHERE id = ?').get(req.params.id) as { workflow_status: string };
+    if (current.workflow_status === 'completed') {
+      completedByConcurrentRequest = true;
+      markWorkTransferPurgeSucceeded(purge.attemptId, now);
+    } else {
+      if (current.workflow_status !== 'field_processed') throw new Error('업무이관 상태가 삭제 처리 중 변경되었습니다.');
+      const deleted = db.prepare('DELETE FROM work_transfer_attachments WHERE transfer_id = ?').run(req.params.id);
+      if (Number(deleted.changes) !== attachments.length) {
+        throw new Error('업무이관 첨부사진 DB 삭제 건수가 일치하지 않습니다.');
+      }
+      const updated = db.prepare(`
+        UPDATE work_transfers SET workflow_status = 'completed', status = 'completed', completed_at = ?,
+          final_completed_by = ?, evidence_photo_count = MAX(evidence_photo_count, ?),
+          evidence_photos_deleted_at = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND workflow_status = 'field_processed'
+      `).run(now, user.id, attachments.length, now, req.params.id);
+      if (Number(updated.changes) !== 1) throw new Error('업무이관 완료 상태 변경 건수가 일치하지 않습니다.');
+      db.prepare(`
+        INSERT INTO work_transfer_logs (transfer_id, author_user_id, author_name, from_status, to_status, comment, created_at)
+        VALUES (?, ?, ?, ?, 'completed', ?, ?)
+      `).run(req.params.id, user.id, user.name, String(existing.status), comment, now);
+      markWorkTransferPurgeSucceeded(purge.attemptId, now);
     }
-    db.prepare(`
-      UPDATE work_transfers SET workflow_status = 'completed', status = 'completed', completed_at = ?,
-        final_completed_by = ?, evidence_photo_count = MAX(evidence_photo_count, ?),
-        evidence_photos_deleted_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `).run(now, user.id, attachments.length, now, req.params.id);
-    db.prepare(`
-      INSERT INTO work_transfer_logs (transfer_id, author_user_id, author_name, from_status, to_status, comment, created_at)
-      VALUES (?, ?, ?, ?, 'completed', ?, ?)
-    `).run(req.params.id, user.id, user.name, String(existing.status), comment, now);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
@@ -554,6 +570,10 @@ router.post('/:id/complete', asyncRoute(async (req, res) => {
     action: 'WORK_TRANSFER_COMPLETED', targetType: 'work_transfer', targetId: req.params.id,
     metadata: { purgedPhotoCount: attachments.length },
   });
+  if (completedByConcurrentRequest) {
+    success(res, mapTransferRow(accessibleTransfer(req.params.id, user)));
+    return;
+  }
   success(res, mapTransferRow(accessibleTransfer(req.params.id, user)));
 }));
 
