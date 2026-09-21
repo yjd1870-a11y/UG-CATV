@@ -37,7 +37,11 @@ const response = await proxyApiRequest(
   },
 );
 
-assert.equal(capturedUrl, 'https://ratis-transmission-webapp-yjd1870.onrender.com/api/straight-maps/map-1/pdf?version=2');
+const capturedUpstreamUrl = new URL(capturedUrl);
+assert.equal(capturedUpstreamUrl.origin, 'https://ratis-transmission-webapp-yjd1870.onrender.com');
+assert.equal(capturedUpstreamUrl.pathname, '/api/straight-maps/map-1/pdf');
+assert.equal(capturedUpstreamUrl.searchParams.get('version'), '2');
+assert.match(capturedUpstreamUrl.searchParams.get('__catv_proxy_nonce') || '', /^[0-9a-f-]{36}$/i);
 assert.equal(capturedInit?.method, 'GET');
 assert.equal(capturedInit?.cache, 'no-store');
 const forwardedHeaders = new Headers(capturedInit?.headers);

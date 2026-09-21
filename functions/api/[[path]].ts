@@ -69,6 +69,13 @@ export const proxyApiRequest = async (
   upstreamUrl.pathname = incomingUrl.pathname;
   upstreamUrl.search = incomingUrl.search;
 
+  // A historical authenticated XLSX response was cached upstream before the
+  // no-store policy existed. Give every read-through request a private cache
+  // key so that legacy entries can never be served while they expire.
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    upstreamUrl.searchParams.set('__catv_proxy_nonce', crypto.randomUUID());
+  }
+
   const headers = new Headers(request.headers);
   for (const name of requestHeadersToRemove) headers.delete(name);
 
