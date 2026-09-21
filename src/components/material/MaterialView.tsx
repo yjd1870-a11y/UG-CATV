@@ -3,13 +3,13 @@ import {
   ArrowLeftRight,
   BarChart3,
   Boxes,
-  Camera,
   CheckCircle2,
   ClipboardList,
   Download,
   FileSpreadsheet,
   Filter,
   FilterX,
+  Images,
   Loader2,
   PackageCheck,
   Pencil,
@@ -80,6 +80,7 @@ const managerFieldTypes = new Set([
   "RECOVERED_BAD",
 ]);
 const managerStationTypes = new Set(["USE", "DEFECT_CONVERSION", "RECOVERED_DEFECTIVE"]);
+const badFieldStockTypes = new Set(["RECOVERED_BAD", "REPAIR_OUT", "DISPOSAL"]);
 const typeLabels: Record<string, string> = Object.fromEntries([
   ...fieldTypes,
   ...stationTypes,
@@ -1285,10 +1286,10 @@ const LedgerTable = ({
   onDelete: (row: InventoryTransaction) => void;
 }) => (
     <div className="max-h-[520px] overflow-auto" tabIndex={0} role="region" aria-label={domain === "FIELD" ? "자재 사용 이력 표" : "예비품 관리 이력 표"}>
-      <table className="w-full min-w-[1080px] text-sm">
+      <table className={`w-full text-sm ${domain === "FIELD" ? "min-w-[1080px]" : "min-w-[940px]"}`}>
         <thead className="sticky top-0 z-10 bg-[#173B57] text-white">
           <tr>
-            {(domain === "FIELD" ? ["일자", "지역", "거래유형", "품명", "세부모델", "수량", "분출", "작업자", "관리"] : ["일자", "거래번호", "거래유형", "모델", "수량", "국사/이동", "처리자", "상태", ""]).map((item) => (
+            {(domain === "FIELD" ? ["일자", "지역", "거래유형", "품명", "세부모델", "수량", "분출", "작업자", "관리"] : ["일자", "거래유형", "모델", "수량", "국사/이동", "처리자", "상태", ""]).map((item) => (
               <th
                 key={item}
                 className="px-3 py-3 text-left text-xs font-extrabold"
@@ -1316,9 +1317,6 @@ const LedgerTable = ({
           })() : (
             <tr key={row.id}>
               <td className="px-3 py-3">{row.effectiveDate}</td>
-              <td className="px-3 py-3 font-mono text-xs text-slate-500">
-                {row.transactionNumber}
-              </td>
               <td className="px-3 py-3 font-bold">
                 {typeLabels[row.transactionType] || row.transactionType}
               </td>
@@ -1367,7 +1365,7 @@ const LedgerTable = ({
           ))}
           {!rows.length ? (
             <tr>
-              <td colSpan={9} className="px-4 py-14 text-center text-slate-600">
+              <td colSpan={domain === "FIELD" ? 9 : 8} className="px-4 py-14 text-center text-slate-600">
                 {domain === "FIELD" ? "사용 이력이 없습니다." : "관리 이력이 없습니다."}
               </td>
             </tr>
@@ -1564,10 +1562,12 @@ const TransactionModal = ({
   const [workerId, setWorkerId] = useState(data.workers[0]?.id || "");
   const activeFieldModels = data.fieldModels.filter((item) => item.active);
   const fieldNormalStock = new Map(data.fieldBalances.map((balance) => [balance.modelId, Number(balance.normalQuantity)]));
+  const fieldBadStock = new Map(data.fieldBalances.map((balance) => [balance.modelId, Number(balance.badQuantity)]));
   const eligibleFieldModels = (transactionType: string, categoryId: string) =>
     activeFieldModels.filter((model) =>
       model.categoryId === categoryId
-      && (transactionType !== "FIELD_USE" || (fieldNormalStock.get(model.id) || 0) > 0),
+      && (transactionType !== "FIELD_USE" || (fieldNormalStock.get(model.id) || 0) > 0)
+      && (!badFieldStockTypes.has(transactionType) || (fieldBadStock.get(model.id) || 0) > 0)
     );
   const eligibleFieldCategories = (transactionType: string) =>
     data.categories.filter((category) => category.active && eligibleFieldModels(transactionType, category.id).length > 0);
@@ -1577,6 +1577,10 @@ const TransactionModal = ({
   type FieldLine = { key: string; transactionType: string; categoryId: string; modelId: string; quantity: number };
   const makeFieldLine = (): FieldLine => ({ key: requestKey(), transactionType: firstFieldType, categoryId: firstCategoryId, modelId: firstFieldModelId, quantity: 1 });
   const [fieldItems, setFieldItems] = useState<FieldLine[]>([makeFieldLine()]);
+  const [includeFieldDefective, setIncludeFieldDefective] = useState(false);
+  const [fieldDefectiveCategoryId, setFieldDefectiveCategoryId] = useState("");
+  const [fieldDefectiveModelId, setFieldDefectiveModelId] = useState("");
+  const [fieldDefectiveQuantity, setFieldDefectiveQuantity] = useState(1);
   const activeSpareModels = data.spareModels.filter((item) => item.active);
   const initialStationId = data.stations.find((item) => item.active)?.id || "";
   const initialState = domain === "FIELD" ? "NORMAL" : "SERVICEABLE";
@@ -1605,6 +1609,18 @@ const TransactionModal = ({
   const optionalOutdoorPhotos = domain === "FIELD" && fieldItems.some((item) => item.transactionType === "FIELD_USE" && data.fieldModels.find((model) => model.id === item.modelId)?.categoryName === "수동소자(옥외용)");
   const showPhotos = requiredPhotos || optionalOutdoorPhotos;
   const incompletePhotoPair = Boolean(beforeFile) !== Boolean(afterFile);
+  const activeReplacementItem = fieldItems.find((item) => item.transactionType === "FIELD_USE" && data.fieldModels.find((model) => model.id === item.modelId)?.materialKind === "ACTIVE");
+  const fieldDefectiveCategories = data.categories.filter((category) => category.active && activeFieldModels.some((model) => model.categoryId === category.id));
+  const fieldDefectiveModels = activeFieldModels.filter((model) => model.categoryId === fieldDefectiveCategoryId);
+  const toggleFieldDefective = (checked: boolean) => {
+    setIncludeFieldDefective(checked);
+    if (!checked || !activeReplacementItem) return;
+    const usedModel = activeFieldModels.find((model) => model.id === activeReplacementItem.modelId);
+    const categoryId = usedModel?.categoryId || fieldDefectiveCategories[0]?.id || "";
+    setFieldDefectiveCategoryId(categoryId);
+    setFieldDefectiveModelId(usedModel?.id || activeFieldModels.find((model) => model.categoryId === categoryId)?.id || "");
+    setFieldDefectiveQuantity(activeReplacementItem.quantity);
+  };
   useEffect(() => {
     if (hsIssueSelected && !hsIssueLocations.includes(address as typeof hsIssueLocations[number])) setAddress(hsIssueLocations[0]);
   }, [address, hsIssueSelected]);
@@ -1647,6 +1663,25 @@ const TransactionModal = ({
     if (requiredPhotos && (!beforeFile || !afterFile)) return;
     if (incompletePhotoPair) return;
     if (domain === "FIELD") {
+      if (requiredPhotos && includeFieldDefective && (!fieldDefectiveModelId || !Number.isInteger(fieldDefectiveQuantity) || fieldDefectiveQuantity < 1)) return;
+      const items = fieldItems.map((item) => ({
+        transactionType: item.transactionType,
+        modelId: item.modelId,
+        quantity: item.quantity,
+        stockState: ["RECOVERED_BAD", "REPAIR_OUT", "DISPOSAL"].includes(item.transactionType) ? "BAD" : "NORMAL",
+        companyName: item.transactionType === "HS_ISSUE" ? "H&S" : item.transactionType === "OTHER_COMPANY_ISSUE" ? "타사" : undefined,
+        idempotencyKey: requestKey(),
+      }));
+      if (requiredPhotos && includeFieldDefective) {
+        items.push({
+          transactionType: "RECOVERED_BAD",
+          modelId: fieldDefectiveModelId,
+          quantity: fieldDefectiveQuantity,
+          stockState: "BAD",
+          companyName: undefined,
+          idempotencyKey: requestKey(),
+        });
+      }
       await onSubmit({
         effectiveDate: date,
         location: address,
@@ -1657,14 +1692,7 @@ const TransactionModal = ({
         afterPhoto,
         sourceWorkerId: workerId,
         idempotencyKey: requestKey(),
-        items: fieldItems.map((item) => ({
-          transactionType: item.transactionType,
-          modelId: item.modelId,
-          quantity: item.quantity,
-          stockState: ["RECOVERED_BAD", "REPAIR_OUT", "DISPOSAL"].includes(item.transactionType) ? "BAD" : "NORMAL",
-          companyName: item.transactionType === "HS_ISSUE" ? "H&S" : item.transactionType === "OTHER_COMPANY_ISSUE" ? "타사" : undefined,
-          idempotencyKey: requestKey(),
-        })),
+        items,
       });
       return;
     }
@@ -1734,7 +1762,7 @@ const TransactionModal = ({
                 <div className="text-sm font-black text-[#173B57]">사용·회수 자재</div>
                 <div className="text-xs text-slate-500">같은 주소와 작업내용에 사용할 자재를 여러 개 등록할 수 있습니다.</div>
               </div>
-              <button type="button" onClick={() => setFieldItems((items) => [...items, makeFieldLine()])} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700">
+              <button type="button" onClick={() => setFieldItems((items) => [...items, makeFieldLine()])} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700">
                 <Plus className="h-4 w-4" /> 추가 등록
               </button>
             </div>
@@ -1746,6 +1774,32 @@ const TransactionModal = ({
                 <label className="space-y-1 sm:col-span-2"><span className="text-xs font-bold text-slate-600">수량</span><div className="flex gap-1"><input aria-label={`수량 ${index + 1}`} className={inputClass} type="number" min="1" step="1" required value={item.quantity} onChange={(e)=>updateFieldItem(item.key,{quantity:Number(e.target.value)})}/>{fieldItems.length>1?<button type="button" aria-label={`${index+1}번째 자재 삭제`} onClick={()=>setFieldItems((items)=>items.filter((line)=>line.key!==item.key))} className="rounded-lg border border-red-200 px-2 text-red-600"><X className="h-4 w-4"/></button>:null}</div></label>
               </div>
             ))}
+            {requiredPhotos ? (
+              <div className="space-y-3 rounded-2xl border border-red-200 bg-red-50 p-4">
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-extrabold text-red-700">
+                  <input aria-label="불량품 회수등록" type="checkbox" checked={includeFieldDefective} onChange={(event) => toggleFieldDefective(event.target.checked)} />
+                  불량품 회수등록
+                </label>
+                {includeFieldDefective ? (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <Field label="회수품 품목">
+                      <select aria-label="회수품 품목" className={inputClass} required value={fieldDefectiveCategoryId} onChange={(event) => { const categoryId=event.target.value; setFieldDefectiveCategoryId(categoryId); setFieldDefectiveModelId(activeFieldModels.find((model) => model.categoryId === categoryId)?.id || ""); }}>
+                        <option value="">선택</option>
+                        {fieldDefectiveCategories.map((category) => <option key={category.id} value={category.id}>{category.categoryName}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="회수품 세부모델">
+                      <select aria-label="회수품 세부모델" className={inputClass} required value={fieldDefectiveModelId} onChange={(event) => setFieldDefectiveModelId(event.target.value)}>
+                        <option value="">선택</option>
+                        {fieldDefectiveModels.map((model) => <option key={model.id} value={model.id}>{model.modelName}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="회수 수량"><input aria-label="회수 수량" className={inputClass} type="number" min="1" step="1" required value={fieldDefectiveQuantity} onChange={(event) => setFieldDefectiveQuantity(Number(event.target.value))} /></Field>
+                    <p className="text-xs text-red-600 sm:col-span-3">사용 자재의 품목·모델·수량이 기본값으로 입력되며 현장에서 모두 변경할 수 있습니다.</p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : (
           <>
@@ -1962,6 +2016,7 @@ const TransactionModal = ({
               busy ||
               (domain === "FIELD" && !workerId) ||
               (domain === "FIELD" ? fieldItems.some((item) => !item.modelId || !Number.isInteger(item.quantity) || item.quantity < 1) : (!modelId || !Number.isInteger(quantity) || quantity < 1)) ||
+              (domain === "FIELD" && requiredPhotos && includeFieldDefective && (!fieldDefectiveModelId || !Number.isInteger(fieldDefectiveQuantity) || fieldDefectiveQuantity < 1)) ||
               (domain === "STATION" && type === "USE" && includeDefective && (!Number.isInteger(defectiveQuantity) || defectiveQuantity < 1)) ||
               (requiredPhotos && (!beforeFile || !afterFile)) ||
               incompletePhotoPair
@@ -1996,15 +2051,14 @@ const PhotoInput = ({
   }, [file]);
   return (
     <label className="group relative flex min-h-44 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-orange-300 bg-white p-3 text-center">
-      {previewUrl ? <img src={previewUrl} alt={`${label} 미리보기`} className="absolute inset-0 h-full w-full object-contain" /> : <Camera className="mb-2 h-8 w-8 text-orange-500" />}
+      {previewUrl ? <img src={previewUrl} alt={`${label} 미리보기`} className="absolute inset-0 h-full w-full object-contain" /> : <Images className="mb-2 h-8 w-8 text-orange-500" />}
       <span className={`relative z-10 rounded-lg px-2 py-1 text-sm font-extrabold ${previewUrl ? "bg-black/65 text-white" : ""}`}>{label}</span>
       <span className={`relative z-10 mt-1 max-w-full truncate rounded px-2 py-0.5 text-xs ${previewUrl ? "bg-black/65 text-white" : "text-slate-500"}`}>
-        {file?.name || "사진 선택"}
+        {file?.name || "갤러리에서 사진 선택"}
       </span>
       <input
         type="file"
         accept="image/jpeg,image/png,image/webp"
-        capture="environment"
         className="hidden"
         onChange={(e) => onChange(e.target.files?.[0] || null)}
       />

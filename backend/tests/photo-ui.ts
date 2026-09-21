@@ -9,6 +9,7 @@ const mapper = fs.readFileSync(path.join(root, 'backend/mappers.ts'), 'utf8');
 const navigation = fs.readFileSync(path.join(root, 'src/components/common/primary-navigation.ts'), 'utf8');
 const context = fs.readFileSync(path.join(root, 'src/context/AppContext.tsx'), 'utf8');
 const cellGallery = fs.readFileSync(path.join(root, 'src/components/cell/PhotoGalleryModal.tsx'), 'utf8');
+const materialView = fs.readFileSync(path.join(root, 'src/components/material/MaterialView.tsx'), 'utf8');
 
 assert.match(detail, /loading="lazy"/);
 assert.match(detail, /photo\.thumbnailUrl \|\| photo\.url/);
@@ -19,5 +20,11 @@ assert.match(navigation, /materialManagementEnabled/);
 assert.match(context, /materialManagementEnabled && \['\/materials', '\/material-management'\]/);
 assert.match(cellGallery, /loading="lazy"/);
 assert.match(cellGallery, /selectedPhoto\.masterUrl \|\| selectedPhoto\.url/);
+assert.doesNotMatch(materialView, /capture="environment"/);
+assert.match(materialView, /갤러리에서 사진 선택/);
+assert.match(materialView, /whitespace-nowrap[^>]*>[\s\S]*?추가 등록/);
+assert.match(materialView, /불량품 회수등록/);
+assert.match(materialView, /badFieldStockTypes/);
+assert.doesNotMatch(materialView, /\{row\.transactionNumber\}/);
 
-console.log('Photo UI test passed: lazy thumbnails, fixed aspect ratio, master-on-detail support, and frontend dark launch');
+console.log('Photo UI test passed: gallery selection, material recovery controls, responsive actions, hidden station transaction number, lazy thumbnails, and frontend dark launch');
