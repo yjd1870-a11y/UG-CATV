@@ -13,10 +13,11 @@ let capturedUrl = '';
 let capturedInit: RequestInit | undefined;
 const upstreamHeaders = new Headers({
   'Accept-Ranges': 'bytes',
-  'Cache-Control': 'private, no-store',
+  'Cache-Control': 'public, max-age=86400',
   'Content-Range': 'bytes 0-3/10',
   'Content-Type': 'application/pdf',
   'Set-Cookie': 'catv_session=test-token; HttpOnly; Path=/; SameSite=None; Secure',
+  Vary: 'Accept-Encoding',
 });
 
 const response = await proxyApiRequest(
@@ -48,6 +49,14 @@ assert.equal(response.status, 206);
 assert.equal(response.headers.get('accept-ranges'), 'bytes');
 assert.equal(response.headers.get('content-range'), 'bytes 0-3/10');
 assert.match(response.headers.get('set-cookie') || '', /catv_session=test-token/);
+assert.equal(response.headers.get('cache-control'), 'private, no-store, no-cache, must-revalidate');
+assert.equal(response.headers.get('cdn-cache-control'), 'no-store');
+assert.equal(response.headers.get('cloudflare-cdn-cache-control'), 'no-store');
+assert.equal(response.headers.get('pragma'), 'no-cache');
+assert.equal(response.headers.get('expires'), '0');
+assert.match(response.headers.get('vary') || '', /Accept-Encoding/);
+assert.match(response.headers.get('vary') || '', /Cookie/);
+assert.match(response.headers.get('vary') || '', /Authorization/);
 assert.equal(await response.text(), 'test');
 
 const invalidPath = await proxyApiRequest(new Request('https://ugt-transmission-network.pages.dev/not-api'));

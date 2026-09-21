@@ -80,10 +80,29 @@ export const proxyApiRequest = async (
     redirect: 'manual',
   });
 
+  // API responses can contain authenticated business data and must never be
+  // stored by the Pages/CDN cache.  Enforce this at the proxy boundary as a
+  // defence in depth even when an upstream route forgets its cache headers.
+  const responseHeaders = new Headers(upstreamResponse.headers);
+  responseHeaders.set('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+  responseHeaders.set('CDN-Cache-Control', 'no-store');
+  responseHeaders.set('Cloudflare-CDN-Cache-Control', 'no-store');
+  responseHeaders.set('Pragma', 'no-cache');
+  responseHeaders.set('Expires', '0');
+  const existingVary = responseHeaders.get('Vary');
+  const varyValues = new Set(
+    (existingVary ? existingVary.split(',') : [])
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  varyValues.add('Cookie');
+  varyValues.add('Authorization');
+  responseHeaders.set('Vary', [...varyValues].join(', '));
+
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
     statusText: upstreamResponse.statusText,
-    headers: new Headers(upstreamResponse.headers),
+    headers: responseHeaders,
   });
 };
 
