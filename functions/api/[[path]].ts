@@ -77,6 +77,7 @@ export const proxyApiRequest = async (
     method: request.method,
     headers,
     body: hasBody ? request.body : undefined,
+    cache: 'no-store',
     redirect: 'manual',
   });
 

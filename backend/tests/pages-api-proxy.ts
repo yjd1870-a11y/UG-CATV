@@ -39,6 +39,7 @@ const response = await proxyApiRequest(
 
 assert.equal(capturedUrl, 'https://ratis-transmission-webapp-yjd1870.onrender.com/api/straight-maps/map-1/pdf?version=2');
 assert.equal(capturedInit?.method, 'GET');
+assert.equal(capturedInit?.cache, 'no-store');
 const forwardedHeaders = new Headers(capturedInit?.headers);
 assert.equal(forwardedHeaders.get('cookie'), 'catv_session=test-token');
 assert.equal(forwardedHeaders.get('origin'), 'https://ugt-transmission-network.pages.dev');
