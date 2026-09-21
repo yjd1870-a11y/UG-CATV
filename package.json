@@ -11,7 +11,7 @@
     "dev:frontend": "vite --port=3000 --host=0.0.0.0",
     "dev:backend": "tsx backend/server.ts --api-only",
     "build": "vite build",
-    "start": "tsx backend/server.ts",
+    "start": "tsx scripts/prestart-database-backup.ts && tsx backend/server.ts",
     "db:init": "tsx backend/init-db.ts",
     "test:api": "tsx backend/tests/run-isolated.ts backend/tests/api.integration.ts",
     "test:daily-work-permissions": "tsx backend/tests/run-isolated.ts backend/tests/daily-work-permissions.ts",
