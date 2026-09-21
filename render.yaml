@@ -52,4 +52,4 @@ services:
       - key: STRAIGHT_MAP_DIRECT_R2_UPLOAD_ENABLED
         value: "false"
       - key: MATERIAL_MANAGEMENT_ENABLED
-        value: "false"
+        value: "true"
