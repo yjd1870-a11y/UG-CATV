@@ -435,8 +435,19 @@ try {
   assert.equal(staged.response.status, 201);
   assert.equal(staged.payload?.data?.review, 2);
 
+  const previousYear = Number(date.slice(0,4)) - 1;
+  const historicalHsImport = await call<{inserted:number;skipped:number}>('/material-management/field/imports/official',{method:'POST',cookie:admin,body:{
+    sourceFile:'구내증폭기 분출현황(H&S).xlsx',
+    sourceHash:'abababababababababababababababababababababababababababababababab',
+    reportYear:previousYear,
+    rows:[{sheetName:'구내증폭기 분출현황(H&S)',rowNumber:30,transactionType:'HS_ISSUE',effectiveDate:`${previousYear}-09-04`,categoryName,modelName:'통합테스트 수동모델',quantity:1,address:'평택',workCategory:'H&S 분출',workDetails:'H&S 분출내역 업로드',companyName:'H&S',unit:'EA'}],
+  }});
+  assert.equal(historicalHsImport.response.status,201);
+  assert.equal(historicalHsImport.payload?.data?.inserted,1);
+
   const official = await file(`/material-management/exports/field-official.xlsx?year=${date.slice(0, 4)}`, admin);
   assert.equal(official.response.status, 200); assert.equal(official.body.subarray(0, 2).toString(), 'PK');
+  assert.match(official.response.headers.get('cache-control') || '', /no-store/);
   assert.equal((await file(`/material-management/exports/station.xlsx?asOf=${date}`,manager)).response.status,403);
   assert.equal((await file(`/material-management/exports/station.xlsx?asOf=${date}`,teamLeader)).response.status,403);
   assert.equal((await file(`/material-management/exports/station.xlsx?asOf=${date}`,publicOfficial)).response.status,200);
@@ -502,6 +513,21 @@ try {
   assert.equal(hsSheet.getCell('F16').value, 1);
   assert.ok(hsSheet.model.merges.includes('B3:B4'));
   assert.equal((hsSheet.views[0] as { ySplit?: number }).ySplit, 15);
+  assert.match(hsExport.response.headers.get('cache-control') || '', /no-store/);
+  const allHsExport = await file('/material-management/exports/hs.xlsx?scope=all', admin);
+  assert.equal(allHsExport.response.status,200);
+  const allHsWorkbook = new ExcelJS.Workbook(); await allHsWorkbook.xlsx.load(allHsExport.body);
+  const allHsSheet = allHsWorkbook.getWorksheet('구내증폭기 분출현황(H&S)');
+  assert.ok(allHsSheet);
+  assert.equal(allHsSheet.getCell('F4').value,`${previousYear}년`);
+  assert.equal(allHsSheet.getCell('G4').value,`${Number(date.slice(0,4))}년`);
+  assert.equal((allHsSheet.getCell('F7').value as {result:number}).result,1);
+  assert.equal((allHsSheet.getCell('G8').value as {result:number}).result,1);
+  const historicalHsRows:ExcelJS.Row[]=[];
+  allHsSheet.eachRow((row)=>{if(row.getCell(8).value instanceof Date&&(row.getCell(8).value as Date).toISOString().slice(0,10)===`${previousYear}-09-04`)historicalHsRows.push(row);});
+  assert.equal(historicalHsRows.length,1);
+  assert.equal(historicalHsRows[0].getCell(9).value,null);
+  assert.equal((allHsSheet.getCell(`F${allHsSheet.rowCount}`).value as {result:number}).result,2);
   const photos = await file(`/material-management/exports/field-photos.xlsx?start=${period}-01&end=${date}`, admin);
   assert.equal(photos.response.status, 200); assert.equal(photos.body.subarray(0, 2).toString(), 'PK');
   const photoWorkbook = new ExcelJS.Workbook(); await photoWorkbook.xlsx.load(photos.body);

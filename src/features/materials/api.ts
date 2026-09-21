@@ -129,9 +129,9 @@ export const inventoryApi = {
   stageImport: (input: { domain: 'FIELD' | 'STATION'; sourceFile: string; sourceHash?: string; sheetName?: string; rows: Array<Record<string, unknown>> }) => request<{ sourceHash: string; inserted: number; review: number }>('/material-management/imports/stage', { method: 'POST', body: JSON.stringify(input) }),
   importOfficialField: (input: { sourceFile: string; sourceHash: string; sourceWorkbookBase64?: string; reportYear?: number; rows: Array<Record<string, unknown>> }) => request<{ inserted: number; skipped: number }>('/material-management/field/imports/official', { method: 'POST', body: JSON.stringify(input) }),
   importStationInventory: (input: { sourceFile: string; sourceHash: string; rows: Array<Record<string, unknown>> }) => request<{ inserted: number; skipped: number }>('/material-management/station/imports/inventory', { method: 'POST', body: JSON.stringify(input) }),
-  downloadFieldOfficial: (year: number) => downloadFile(`/material-management/exports/field-official.xlsx?year=${year}`, `CATV_현장자재_공식보고_${year}.xlsx`),
+  downloadFieldOfficial: (year: number) => downloadFile(`/material-management/exports/field-official.xlsx?year=${year}&download=${Date.now()}`, `CATV_현장자재_공식보고_${year}.xlsx`),
   downloadFieldPhotos: (start: string, end: string) => downloadFile(`/material-management/exports/field-photos.xlsx?start=${start}&end=${end}`, `CATV_능동자재_사진_${start}_${end}.xlsx`),
-  downloadHs: (start: string, end: string) => downloadFile(`/material-management/exports/hs.xlsx?start=${start}&end=${end}`, `CATV_HS분출_${start}_${end}.xlsx`),
+  downloadHs: () => downloadFile(`/material-management/exports/hs.xlsx?scope=all&download=${Date.now()}`, 'CATV_HS분출_전체.xlsx'),
   downloadStation: (asOf: string) => downloadFile(`/material-management/exports/station.xlsx?asOf=${asOf}`, `CATV_국사예비품_${asOf}.xlsx`),
 };
 

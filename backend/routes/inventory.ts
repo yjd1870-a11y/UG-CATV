@@ -56,6 +56,9 @@ const dateParam = (value: unknown, fallback: string) => {
 const excelResponse = (res: Parameters<typeof success>[0], buffer: Buffer, filename: string) => {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.send(buffer);
 };
 
@@ -421,8 +424,9 @@ router.get('/exports/field-photos.xlsx',exportRoles,asyncRoute(async(req,res)=>{
   excelResponse(res,buffer,`CATV_능동자재_사진_${start}_${end}.xlsx`);
 }));
 router.get('/exports/hs.xlsx',exportRoles,asyncRoute(async(req,res)=>{
-  const today=new Date().toISOString().slice(0,10);const start=dateParam(req.query.start,today.slice(0,7)+'-01');const end=dateParam(req.query.end,today);
-  excelResponse(res,await buildHsWorkbook(start,end),`CATV_HS분출_${start}_${end}.xlsx`);
+  const allHistory=req.query.scope==='all';
+  const today=new Date().toISOString().slice(0,10);const start=dateParam(req.query.start,allHistory?'2000-01-01':today.slice(0,7)+'-01');const end=dateParam(req.query.end,allHistory?'2100-12-31':today);
+  excelResponse(res,await buildHsWorkbook(start,end),allHistory?'CATV_HS분출_전체.xlsx':`CATV_HS분출_${start}_${end}.xlsx`);
 }));
 router.get('/exports/station.xlsx',exportRoles,asyncRoute(async(req,res)=>{
   const asOf=dateParam(req.query.asOf,new Date().toISOString().slice(0,10));

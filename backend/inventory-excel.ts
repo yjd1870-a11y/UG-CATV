@@ -484,6 +484,14 @@ export const buildHsWorkbook = async (start: string, end: string) => {
   const sheet = workbook.getWorksheet('구내증폭기 분출현황(H&S)');
   if (!sheet) throw new Error('H&S 분출현황 템플릿 시트를 찾을 수 없습니다.');
   const rows = fieldDetailRows(start, end).filter((row) => row.transactionType === 'HS_ISSUE');
+  const hsExportNote = (row: Record<string, unknown>) => {
+    for (const candidate of [row.workDetails, row.purpose, row.memo]) {
+      const text = String(candidate || '').trim();
+      if (!text || text === 'H&S 분출내역 업로드' || /^원본: .+ \/ .+ \d+행$/.test(text)) continue;
+      return text;
+    }
+    return null;
+  };
   const templateCapacity = 49;
   let totalRowNumber = 65;
   if (rows.length > templateCapacity) {
@@ -501,22 +509,32 @@ export const buildHsWorkbook = async (start: string, end: string) => {
     const year = Number(String(item.effectiveDate).slice(0, 4));
     const hsLocation = String(item.location || item.regionName || '').trim().replace(/지점$/, '');
     const values = ['H&S', hsLocation, String(item.categoryName || ''), String(item.modelName || ''),
-      Math.abs(Number(item.signedQuantity)), `${year}년`, excelDate(item.effectiveDate), String(item.memo || item.workDetails || item.purpose || '')];
+      Math.abs(Number(item.signedQuantity)), `${year}년`, excelDate(item.effectiveDate), hsExportNote(item)];
     values.forEach((value, columnIndex) => { row.getCell(columnIndex + 2).value = value as ExcelJS.CellValue; });
     row.getCell(8).numFmt = 'yyyy-mm-dd';
   });
-  const reportYear = Math.round((Number(start.slice(0, 4)) + Number(end.slice(0, 4))) / 2);
+  const rowYears = rows.map((row) => Number(String(row.effectiveDate).slice(0, 4))).filter(Number.isInteger);
+  const reportYear = rowYears.length ? Math.max(...rowYears) : Number(new Date().toISOString().slice(0, 4));
   [reportYear - 1, reportYear, reportYear + 1].forEach((year, index) => { sheet.getRow(4).getCell(index + 6).value = `${year}년`; });
   for (let index = 0; index < 7; index += 1) {
     const rowNumber = index + 5;
     for (let column = 6; column <= 8; column += 1) {
       const yearCell = sheet.getRow(4).getCell(column).address;
-      sheet.getRow(rowNumber).getCell(column).value = { formula: `SUMIFS($F$16:$F$${totalRowNumber - 1},$G$16:$G$${totalRowNumber - 1},${yearCell},$C$16:$C$${totalRowNumber - 1},C${rowNumber})` };
+      const summaryYear = reportYear + column - 7;
+      const location = String(sheet.getRow(rowNumber).getCell(3).value || '').trim();
+      const result = rows
+        .filter((row) => Number(String(row.effectiveDate).slice(0, 4)) === summaryYear)
+        .filter((row) => String(row.location || row.regionName || '').trim().replace(/지점$/, '') === location)
+        .reduce((sum, row) => sum + Math.abs(Number(row.signedQuantity)), 0);
+      sheet.getRow(rowNumber).getCell(column).value = { formula: `SUMIFS($F$16:$F$${totalRowNumber - 1},$G$16:$G$${totalRowNumber - 1},${yearCell},$C$16:$C$${totalRowNumber - 1},C${rowNumber})`, result };
     }
   }
-  for (let column = 6; column <= 8; column += 1) sheet.getRow(12).getCell(column).value = { formula: `SUM(${sheet.getRow(5).getCell(column).address}:${sheet.getRow(11).getCell(column).address})` };
+  for (let column = 6; column <= 8; column += 1) {
+    const result = Array.from({ length: 7 }, (_, index) => numericCellValue(sheet.getRow(index + 5).getCell(column))).reduce((sum, value) => sum + value, 0);
+    sheet.getRow(12).getCell(column).value = { formula: `SUM(${sheet.getRow(5).getCell(column).address}:${sheet.getRow(11).getCell(column).address})`, result };
+  }
   sheet.getCell(`B${totalRowNumber}`).value = '합계';
-  sheet.getCell(`F${totalRowNumber}`).value = { formula: `SUM(F16:F${totalRowNumber - 1})` };
+  sheet.getCell(`F${totalRowNumber}`).value = { formula: `SUM(F16:F${totalRowNumber - 1})`, result: rows.reduce((sum, row) => sum + Math.abs(Number(row.signedQuantity)), 0) };
   return removeInvalidDefinedNames(Buffer.from(await workbook.xlsx.writeBuffer()));
 };
 

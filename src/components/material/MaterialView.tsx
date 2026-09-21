@@ -279,7 +279,7 @@ export const MaterialView: React.FC = () => {
           exportPeriod.end,
         );
       if (kind === "hs")
-        await inventoryApi.downloadHs(exportPeriod.start, exportPeriod.end);
+        await inventoryApi.downloadHs();
       if (kind === "station") await inventoryApi.downloadStation(today());
       setNotice("Excel 파일을 생성했습니다.");
     } catch (e) {
@@ -330,7 +330,7 @@ export const MaterialView: React.FC = () => {
               const quantity=positiveNumber(row[5]);
               if(!effectiveDate||!categoryName||!modelName||!quantity) return;
               const regionName=String(row[2]||"").trim();
-              rows.push({sheetName,rowNumber:headerIndex+index+2,transactionType:"HS_ISSUE",effectiveDate,categoryName,modelName,quantity,address:regionName,workCategory:"H&S 분출",workDetails:String(row[8]||"").trim()||"H&S 분출내역 업로드",companyName:String(row[1]||"").trim()||"H&S",unit:"EA"});
+              rows.push({sheetName,rowNumber:headerIndex+index+2,transactionType:"HS_ISSUE",effectiveDate,categoryName,modelName,quantity,address:regionName,workCategory:"H&S 분출",workDetails:String(row[8]||"").trim(),companyName:String(row[1]||"").trim()||"H&S",unit:"EA"});
             });
           }
           if(!rows.length) throw new Error("H&S 분출내역 형식의 등록 가능한 데이터가 없습니다.");
