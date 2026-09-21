@@ -1,6 +1,7 @@
 import type { Express } from 'express';
 import { administrationModule } from './administration';
 import { authModule } from './auth';
+import { materialManagementModule } from './material-management';
 import { networkModule } from './network';
 import { operationsModule } from './operations';
 import type { ApiModule } from './types';
@@ -10,6 +11,7 @@ export const apiModules: ApiModule[] = [
   administrationModule,
   networkModule,
   operationsModule,
+  materialManagementModule,
 ];
 
 export const registerApiModules = (app: Express) => {
