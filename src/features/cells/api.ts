@@ -49,6 +49,34 @@ const uploadPhoto = async (cellId: string, photo: Record<string, unknown>) => {
   });
 };
 
+const uploadHistoryPhoto = async (cellId: string, historyId: string, dataUrl: string) => {
+  const matched = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/i.exec(dataUrl);
+  if (!matched) throw new ApiClientError('작업이력 사진 형식이 올바르지 않습니다.', 400, 'INVALID_PHOTO_TYPE');
+  const binary = atob(matched[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const blob = new Blob([bytes], { type: matched[1].toLowerCase() });
+  const basePath = `/cells/${encodeURIComponent(cellId)}/history/${encodeURIComponent(historyId)}/photos`;
+  let signed: { objectKey: string; uploadUrl: string; expiresAt: string };
+  try {
+    signed = await request(`${basePath}/upload-url`, {
+      method: 'POST', body: JSON.stringify({ mimeType: blob.type, size: blob.size }),
+    });
+  } catch (error) {
+    if (error instanceof ApiClientError && error.code === 'DIRECT_UPLOAD_UNAVAILABLE') {
+      return request<{ id: string }>(basePath, { method: 'POST', body: JSON.stringify({ url: dataUrl }) });
+    }
+    throw error;
+  }
+  const uploaded = await fetch(signed.uploadUrl, {
+    method: 'PUT', headers: { 'Content-Type': blob.type }, body: blob,
+  });
+  if (!uploaded.ok) throw new ApiClientError('작업이력 사진을 R2에 업로드하지 못했습니다.', uploaded.status, 'R2_UPLOAD_FAILED');
+  return request<{ id: string }>(`${basePath}/complete`, {
+    method: 'POST', body: JSON.stringify({ objectKey: signed.objectKey }),
+  });
+};
+
 export const cellsApi = {
   list: async () => (await request<Page<CellInfo>>('/cells?limit=100')).items,
   search: async (name: string) =>
@@ -58,12 +86,35 @@ export const cellsApi = {
   update: (id: string, input: Record<string, unknown>) => request<{ id: string }>(`/cells/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) }),
   remove: (id: string) => request<{ id: string; deleted: true }>(`/cells/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   addPhoto: uploadPhoto,
-  addHistory: (cellId: string, history: Record<string, unknown>) => request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/history`, {
-    method: 'POST', body: JSON.stringify(history),
-  }),
-  updateHistory: (cellId: string, historyId: string, updates: Record<string, unknown>) => request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/history/${encodeURIComponent(historyId)}`, {
-    method: 'PUT', body: JSON.stringify(updates),
-  }),
+  addHistory: async (cellId: string, history: Record<string, unknown>) => {
+    const photos = Array.isArray(history.photos)
+      ? history.photos.filter((photo): photo is string => typeof photo === 'string').slice(0, 3)
+      : [];
+    const { photos: _photos, ...metadata } = history;
+    const created = await request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/history`, {
+      method: 'POST', body: JSON.stringify(metadata),
+    });
+    try {
+      for (const photo of photos) await uploadHistoryPhoto(cellId, created.id, photo);
+      return created;
+    } catch (error) {
+      await request(`/cells/${encodeURIComponent(cellId)}/history/${encodeURIComponent(created.id)}`, { method: 'DELETE' }).catch(() => undefined);
+      throw error;
+    }
+  },
+  updateHistory: async (cellId: string, historyId: string, updates: Record<string, unknown>) => {
+    const photos = Array.isArray(updates.photos)
+      ? updates.photos.filter((photo): photo is string => typeof photo === 'string').slice(0, 3)
+      : null;
+    const newPhotos = photos?.filter((photo) => photo.startsWith('data:image/')) || [];
+    const retainedPhotos = photos?.filter((photo) => !photo.startsWith('data:image/')) || [];
+    const response = await request<{ id: string }>(`/cells/${encodeURIComponent(cellId)}/history/${encodeURIComponent(historyId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...updates, ...(photos ? { photos: retainedPhotos } : {}) }),
+    });
+    for (const photo of newPhotos) await uploadHistoryPhoto(cellId, historyId, photo);
+    return response;
+  },
   deleteHistory: (cellId: string, historyId: string) => request<{ id: string; deleted: true }>(`/cells/${encodeURIComponent(cellId)}/history/${encodeURIComponent(historyId)}`, {
     method: 'DELETE',
   }),

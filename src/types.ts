@@ -55,6 +55,8 @@ export interface CellWorkHistory {
   summary: string;
   status?: '완료' | '진행중';
   photos?: string[]; // Attached photo URLs (up to 3)
+  photoIds?: string[];
+  masterPhotos?: string[];
 }
 
 export interface StationLineInfo {

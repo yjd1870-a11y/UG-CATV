@@ -22,7 +22,7 @@ const extensionByMime = new Map([
   ['image/webp', '.webp'],
 ]);
 const legacyPattern = /^photos\/[0-9]{4}\/[0-9]{2}\/(?:[a-z0-9_-]+\/)?[0-9a-f-]+\.(?:jpg|png|webp)$/i;
-const managedPattern = /^(?:cell-photos|work-transfer-photos)\/(?:master|thumbnails)\/[0-9]{4}\/[0-9]{2}\/[a-z0-9_-]+\/[0-9a-f-]+\.jpg$/i;
+const managedPattern = /^(?:cell-photos|cell-history-photos|work-transfer-photos)\/(?:master|thumbnails)\/[0-9]{4}\/[0-9]{2}\/[a-z0-9_-]+\/[0-9a-f-]+\.jpg$/i;
 const quarantinePattern = /^photo-quarantine\/cell\/[0-9]{4}\/[0-9]{2}\/[a-z0-9_-]+\/[0-9a-f-]+\.(?:jpg|png|webp)$/i;
 
 const allowedKey = (key: string) => legacyPattern.test(key) || managedPattern.test(key) || quarantinePattern.test(key);
@@ -80,7 +80,9 @@ const readObject = async (key: string) => usesR2Storage
 const saveProcessed = async (source: Buffer, mimeType: string, uploadedBy: string, profile: ImageProfile) => {
   const processed = await processUploadedImage(source, mimeType, profile);
   const [year, month] = monthParts();
-  const basePrefix = profile === 'work-transfer' ? 'work-transfer-photos' : 'cell-photos';
+  const basePrefix = profile === 'work-transfer'
+    ? 'work-transfer-photos'
+    : profile === 'cell-history' ? 'cell-history-photos' : 'cell-photos';
   const id = randomUUID();
   const suffix = `${year}/${month}/${safeUploader(uploadedBy)}/${id}.jpg`;
   const objectKey = `${basePrefix}/master/${suffix}`;
@@ -112,7 +114,7 @@ const saveProcessed = async (source: Buffer, mimeType: string, uploadedBy: strin
 export const savePrivatePhoto = async (
   dataUrl: string,
   uploadedBy = '',
-  profile: 'cell' | 'work-transfer' = 'cell',
+  profile: 'cell' | 'cell-history' | 'work-transfer' = 'cell',
 ) => {
   const decoded = decodePhotoDataUrl(dataUrl);
   return saveProcessed(decoded.buffer, decoded.mimeType, uploadedBy, profile);
@@ -123,6 +125,16 @@ export const promoteQuarantinedCellPhoto = async (objectKey: string, mimeType: s
   const source = await readObject(objectKey);
   try {
     return await saveProcessed(source, mimeType, uploadedBy, 'cell');
+  } finally {
+    await removePrivatePhoto(objectKey).catch(() => undefined);
+  }
+};
+
+export const promoteQuarantinedCellHistoryPhoto = async (objectKey: string, mimeType: string, uploadedBy: string) => {
+  if (!quarantinePattern.test(objectKey)) throw new ApiError(400, '격리 사진 경로가 올바르지 않습니다.', 'INVALID_PHOTO_PATH');
+  const source = await readObject(objectKey);
+  try {
+    return await saveProcessed(source, mimeType, uploadedBy, 'cell-history');
   } finally {
     await removePrivatePhoto(objectKey).catch(() => undefined);
   }

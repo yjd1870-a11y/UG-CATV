@@ -3,11 +3,11 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { projectRoot } from '../backend/env';
 
-// 2026-09-21 운영 배포 커밋 4107e545의 Git blob 해시입니다.
+// 업무이관/일일업무는 2026-09-21 운영 배포 기준, DB/CELL 작업이력은 승인된 사진정책 변경 기준입니다.
 // 변경 승인을 받기 전에는 이 목록이나 해시를 갱신하지 않습니다.
 const protectedFiles: Record<string, string> = {
-  'backend/db.ts': 'e69c1fdbe3fea09dbf8545a88008c485d5ce9536',
-  'backend/routes/cells.ts': 'a35d23ee323c08a141f495e223160ecfa0e0661f',
+  'backend/db.ts': '5fd75170b8dfb240d2f61469385d944afd253dad',
+  'backend/routes/cells.ts': '43cbfaaa136ac4ebbaeb4340b54c632e7216857f',
   'backend/routes/work-transfers.ts': '0c759f5f89f6c8cd4a6dd72189561830f5e4745f',
   'backend/routes/daily-work.ts': 'f65a22ebc2a030c9776b083161e05e8b7090c9de',
   'backend/daily-work-service.ts': 'db326b179cc04e7c2d1dc5e3e6f79512003e9149',
@@ -16,11 +16,11 @@ const protectedFiles: Record<string, string> = {
   'backend/catv-store.ts': '9fb9a01e38c2d26d55902e6c79f1727ad24d299c',
   'backend/catv.ts': '62ae96a0c61646a0e1f980899746d8c703735a61',
   'backend/work-transfer-policy.ts': 'bc3263ae21fd842c9ef8784f19398cf19e5b62d7',
-  'src/features/cells/api.ts': '1536dd5ff5035a6179ad76b1ca0869cc179873e4',
+  'src/features/cells/api.ts': '12ce3d82750b9249cc61d7d39cd14758dad70e67',
   'src/features/transfers/api.ts': 'a93b0c7a023944203828d67f7eacfaaad91c2662',
   'src/features/daily-work/api.ts': '293ff7aeebe598616c241a055234b83a762fd970',
   'src/components/cell/CatvCellDetail.tsx': '56c9b69df25bb8498c16aa62d6f380e76a3dfc35',
-  'src/components/cell/CatvCellHistorySection.tsx': 'b0fa62df72617922c4e883ccae80300909bbc261',
+  'src/components/cell/CatvCellHistorySection.tsx': '8f366e00915bc271a0de2704286c25a6f5215190',
   'src/components/cell/CellDetail.tsx': 'd87f76758fe8d428b825934d336926ea31629006',
   'src/components/cell/CellHistorySection.tsx': '6ef366466f73ac4751657b77878bee602a29f2e5',
   'src/components/cell/CellList.tsx': '3ad3e0a7d270f86d004d16d8dab96aeecc5e2c39',

@@ -28,6 +28,7 @@ import {
   buildFieldPhotoWorkbook,
   buildHsWorkbook,
   buildStationWorkbook,
+  fieldPhotoExportCounts,
   markPhotosExported,
 } from '../inventory-excel';
 import { removeMaterialPhoto, saveMaterialPhoto } from '../material-photo-storage';
@@ -35,6 +36,11 @@ import { authUser, requireAuth, requireRoles } from '../security/session';
 import { normalizeStationName } from '../catv';
 import { writeAuditLog } from '../security/audit';
 import { env } from '../env';
+import {
+  materialPhotoOrphanReport,
+  photoStorageSummary,
+  purgeExpiredMaterialPhotos,
+} from '../material-photo-retention';
 
 const router = Router();
 router.use(requireAuth);
@@ -47,6 +53,16 @@ router.use((_req, _res, next) => {
 const masterRoles = requireRoles('admin', 'public_official');
 const importRoles = requireRoles('admin');
 const exportRoles = requireRoles('admin', 'public_official');
+
+const koreaToday = () => new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const monthEnd = (periodKey: string) => {
+  const [year, month] = periodKey.split('-').map(Number);
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+};
+const latestClosedMonth = () => db.prepare(`
+  SELECT id,period_key AS periodKey,period_start AS periodStart,period_end AS periodEnd,confirmed_at AS confirmedAt
+    FROM inventory_month_closures WHERE status='CLOSED' ORDER BY period_key DESC LIMIT 1
+`).get() as { id: string; periodKey: string; periodStart: string; periodEnd: string; confirmedAt: string } | undefined;
 
 const dateParam = (value: unknown, fallback: string) => {
   const date = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : fallback;
@@ -86,6 +102,16 @@ router.get('/bootstrap', (req, res) => {
     stationBalances,
     stationTransactions: listTransactions(user, 'STATION'),
     closures: db.prepare('SELECT id,period_key AS periodKey,period_start AS periodStart,period_end AS periodEnd,status,confirmed_at AS confirmedAt FROM inventory_month_closures ORDER BY period_start DESC').all(),
+    photoDownloadOptions: (() => {
+      const today = koreaToday();
+      const currentPeriod = today.slice(0, 7);
+      const closed = latestClosedMonth();
+      return {
+        current: { periodKey: currentPeriod, periodStart: `${currentPeriod}-01`, periodEnd: today, mode: 'current' },
+        latestClosed: closed ? { ...closed, mode: 'closed' } : null,
+      };
+    })(),
+    photoStorage: photoStorageSummary(),
   });
 });
 
@@ -347,7 +373,7 @@ router.post('/station/transactions',(req,res)=>success(res,createStationTransact
 router.post('/transactions/:id/reverse',masterRoles,(req,res)=>success(res,reverseTransaction(req),201));
 router.put('/field/transactions/:id',masterRoles,(req,res)=>success(res,updateFieldTransaction(req)));
 router.put('/field/transactions/:id/quantity',masterRoles,(req,res)=>success(res,updateFieldTransactionQuantity(req)));
-router.delete('/field/transactions/:id',masterRoles,(req,res)=>success(res,deleteFieldTransaction(req)));
+router.delete('/field/transactions/:id',masterRoles,asyncRoute(async(req,res)=>success(res,await deleteFieldTransaction(req))));
 
 router.post('/field/imports/official',importRoles,(req,res)=>{
   if (!req.body?.sourceHash) req.body.sourceHash=createHash('sha256').update(JSON.stringify(req.body?.rows||[])).digest('hex');
@@ -368,15 +394,51 @@ router.post('/field/closures',masterRoles,(req,res)=>{
   const end=dateParam(req.body?.periodEnd,next.toISOString().slice(0,10));
   const negative=(listFieldBalances(end) as Array<Record<string,unknown>>).filter((row)=>Number(row.normalQuantity)<0||Number(row.badQuantity)<0);
   if(negative.length) throw new ApiError(409,'음수재고가 있어 마감할 수 없습니다.','NEGATIVE_STOCK');
-  const missing=Number((db.prepare(`SELECT COUNT(*) AS count FROM inventory_transactions t JOIN field_material_entries e ON e.transaction_id=t.id JOIN field_material_models m ON m.id=e.model_id WHERE t.domain='FIELD' AND t.status='POSTED' AND t.transaction_type='FIELD_USE' AND m.material_kind='ACTIVE' AND t.effective_date BETWEEN ? AND ? AND (SELECT COUNT(*) FROM material_photo_assets p WHERE p.transaction_id=t.id)<>2`).get(start,end) as {count:number}).count);
+  const missing=Number((db.prepare(`SELECT COUNT(*) AS count FROM inventory_transactions t JOIN field_material_entries e ON e.transaction_id=t.id JOIN field_material_models m ON m.id=e.model_id WHERE t.domain='FIELD' AND t.status='POSTED' AND t.transaction_type='FIELD_USE' AND m.material_kind='ACTIVE' AND t.effective_date BETWEEN ? AND ? AND (SELECT COUNT(*) FROM material_photo_assets p WHERE p.transaction_id=t.id AND p.archive_status<>'DELETED' AND p.deleted_at IS NULL)<>2`).get(start,end) as {count:number}).count);
   if(missing) throw new ApiError(409,`능동자재 ${missing}건의 전·후 사진이 부족합니다.`,'ACTIVE_PHOTOS_REQUIRED');
-  const pending=Number((db.prepare(`SELECT COUNT(*) AS count FROM material_photo_assets p JOIN inventory_transactions t ON t.id=p.transaction_id WHERE t.effective_date BETWEEN ? AND ? AND p.archive_status<>'EXPORTED'`).get(start,end) as {count:number}).count);
+  const pending=Number((db.prepare(`SELECT COUNT(*) AS count FROM material_photo_assets p JOIN inventory_transactions t ON t.id=p.transaction_id WHERE t.status='POSTED' AND t.effective_date BETWEEN ? AND ? AND p.archive_status='PENDING' AND p.deleted_at IS NULL`).get(start,end) as {count:number}).count);
   if(pending) throw new ApiError(409,'사진 Excel을 먼저 생성하고 확인해야 합니다.','PHOTO_EXPORT_REQUIRED');
-  const id=randomUUID();
-  db.prepare('INSERT INTO inventory_month_closures (id,period_key,period_start,period_end,summary_json,confirmed_by) VALUES (?,?,?,?,?,?)')
-    .run(id,periodKey,start,end,JSON.stringify({fieldBalances:listFieldBalances(end)}),user.id);
+  const existingClosure=db.prepare('SELECT id,status FROM inventory_month_closures WHERE period_key=?').get(periodKey) as {id:string;status:string}|undefined;
+  if(existingClosure?.status==='CLOSED') throw new ApiError(409,'이미 마감된 월입니다.','PERIOD_ALREADY_CLOSED');
+  const id=existingClosure?.id||randomUUID();
+  if(existingClosure){
+    db.prepare(`UPDATE inventory_month_closures SET period_start=?,period_end=?,status='CLOSED',summary_json=?,confirmed_by=?,confirmed_at=CURRENT_TIMESTAMP,cancelled_by=NULL,cancelled_at=NULL,cancel_reason=NULL WHERE id=?`)
+      .run(start,end,JSON.stringify({fieldBalances:listFieldBalances(end)}),user.id,id);
+  }else{
+    db.prepare('INSERT INTO inventory_month_closures (id,period_key,period_start,period_end,summary_json,confirmed_by) VALUES (?,?,?,?,?,?)')
+      .run(id,periodKey,start,end,JSON.stringify({fieldBalances:listFieldBalances(end)}),user.id);
+  }
+  db.prepare(`
+    UPDATE material_photo_assets
+       SET delete_after=datetime((SELECT confirmed_at FROM inventory_month_closures WHERE id=?),'+30 days')
+     WHERE transaction_id IN (
+       SELECT id FROM inventory_transactions
+        WHERE domain='FIELD' AND status='POSTED' AND effective_date BETWEEN ? AND ?
+     ) AND archive_status='EXPORTED' AND deleted_at IS NULL
+  `).run(id,start,end);
   writeAuditLog(req,{action:'INVENTORY_MONTH_CLOSED',targetType:'inventory_month_closure',targetId:id,metadata:{periodKey,start,end}});
   success(res,{id,periodKey,start,end},201);
+});
+
+router.post('/field/closures/:id/cancel',masterRoles,(req,res)=>{
+  const user=authUser(req);
+  const reason=asText(req.body?.reason,'마감취소 사유',1000);
+  const closure=db.prepare("SELECT * FROM inventory_month_closures WHERE id=? AND status='CLOSED'").get(req.params.id) as Record<string,unknown>|undefined;
+  if(!closure) throw new ApiError(404,'마감 내역을 찾을 수 없습니다.','NOT_FOUND');
+  db.exec('BEGIN IMMEDIATE');
+  try{
+    db.prepare("UPDATE inventory_month_closures SET status='CANCELLED',cancelled_by=?,cancelled_at=CURRENT_TIMESTAMP,cancel_reason=? WHERE id=?")
+      .run(user.id,reason,req.params.id);
+    db.prepare(`
+      UPDATE material_photo_assets SET delete_after=NULL
+       WHERE transaction_id IN (
+         SELECT id FROM inventory_transactions WHERE effective_date BETWEEN ? AND ?
+       ) AND deleted_at IS NULL
+    `).run(String(closure.period_start),String(closure.period_end));
+    db.exec('COMMIT');
+  }catch(error){db.exec('ROLLBACK');throw error;}
+  writeAuditLog(req,{action:'INVENTORY_MONTH_CLOSURE_CANCELLED',targetType:'inventory_month_closure',targetId:req.params.id,metadata:{reason}});
+  success(res,{id:req.params.id,cancelled:true});
 });
 
 router.post('/imports/stage',importRoles,(req,res)=>{
@@ -419,9 +481,41 @@ router.get('/exports/field-official.xlsx',exportRoles,asyncRoute(async(req,res)=
   excelResponse(res,await buildFieldOfficialWorkbook(year),`CATV_현장자재_공식보고_${year}.xlsx`);
 }));
 router.get('/exports/field-photos.xlsx',exportRoles,asyncRoute(async(req,res)=>{
-  const today=new Date().toISOString().slice(0,10);const start=dateParam(req.query.start,today.slice(0,7)+'-01');const end=dateParam(req.query.end,today);
-  const buffer=await buildFieldPhotoWorkbook(start,end);markPhotosExported(start,end);
-  excelResponse(res,buffer,`CATV_능동자재_사진_${start}_${end}.xlsx`);
+  const user=authUser(req);
+  const today=koreaToday();
+  const requestedPeriod=typeof req.query.period==='string'?req.query.period:undefined;
+  const periodKey=requestedPeriod||String(req.query.start||today).slice(0,7);
+  if(!/^\d{4}-\d{2}$/.test(periodKey)) throw new ApiError(400,'조회월 형식은 YYYY-MM이어야 합니다.','VALIDATION_ERROR');
+  const mode=String(req.query.mode||'current').toLowerCase();
+  if(!['current','closed'].includes(mode)) throw new ApiError(400,'다운로드 구분이 올바르지 않습니다.','VALIDATION_ERROR');
+  let start=`${periodKey}-01`;let end=periodKey===today.slice(0,7)?today:monthEnd(periodKey);
+  if(mode==='current'&&periodKey!==today.slice(0,7)) throw new ApiError(409,'진행중 자료는 현재 월만 받을 수 있습니다.','INVALID_EXPORT_PERIOD');
+  if(mode==='closed'){
+    const closed=latestClosedMonth();
+    if(!closed||closed.periodKey!==periodKey) throw new ApiError(409,'가장 최근 마감월 자료만 받을 수 있습니다.','INVALID_EXPORT_PERIOD');
+    start=closed.periodStart;end=closed.periodEnd;
+    const expired=Number((db.prepare(`
+      SELECT COUNT(*) AS count FROM material_photo_assets p JOIN inventory_transactions t ON t.id=p.transaction_id
+       WHERE t.status='POSTED' AND t.effective_date BETWEEN ? AND ? AND p.archive_status='DELETED'
+    `).get(start,end) as {count:number}).count);
+    if(expired) throw new ApiError(410,'보존기간이 지나 마감월 사진자료가 삭제되었습니다.','PHOTO_EXPORT_EXPIRED');
+  }
+  const buffer=await buildFieldPhotoWorkbook(start,end,periodKey);
+  markPhotosExported(start,end);
+  const counts=fieldPhotoExportCounts(start,end);
+  db.prepare(`INSERT INTO inventory_photo_exports (id,period_key,export_mode,period_start,period_end,row_count,photo_count,generated_by) VALUES (?,?,?,?,?,?,?,?)`)
+    .run(randomUUID(),periodKey,mode==='closed'?'CLOSED':'CURRENT',start,end,counts.rowCount,counts.photoCount,user.id);
+  await purgeExpiredMaterialPhotos(user.id);
+  const suffix=mode==='closed'?'마감':'진행중';
+  excelResponse(res,buffer,`CATV_능동자재_사진_${periodKey}_${suffix}.xlsx`);
+}));
+
+router.get('/photos/storage-summary',masterRoles,(_req,res)=>success(res,photoStorageSummary()));
+router.get('/photos/orphan-report',masterRoles,(_req,res)=>success(res,materialPhotoOrphanReport()));
+router.post('/photos/purge-expired',masterRoles,asyncRoute(async(req,res)=>{
+  const user=authUser(req);
+  const result=await purgeExpiredMaterialPhotos(user.id);
+  success(res,{...result,storage:photoStorageSummary()});
 }));
 router.get('/exports/hs.xlsx',exportRoles,asyncRoute(async(req,res)=>{
   const allHistory=req.query.scope==='all';

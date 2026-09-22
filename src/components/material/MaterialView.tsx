@@ -274,20 +274,14 @@ export const MaterialView: React.FC = () => {
       setBusy(false);
     }
   };
-  const exportPeriod = { start: `${today().slice(0, 7)}-01`, end: today() };
   const handleExport = async (
-    kind: "official" | "photos" | "hs" | "station",
+    kind: "official" | "hs" | "station",
   ) => {
     setBusy(true);
     setError("");
     try {
       if (kind === "official")
         await inventoryApi.downloadFieldOfficial(Number(today().slice(0, 4)));
-      if (kind === "photos")
-        await inventoryApi.downloadFieldPhotos(
-          exportPeriod.start,
-          exportPeriod.end,
-        );
       if (kind === "hs")
         await inventoryApi.downloadHs();
       if (kind === "station") await inventoryApi.downloadStation(today());
@@ -296,6 +290,19 @@ export const MaterialView: React.FC = () => {
       setError(
         e instanceof Error ? e.message : "Excel 파일을 만들지 못했습니다.",
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const handlePhotoExport = async (periodKey: string, mode: "current" | "closed") => {
+    setBusy(true);
+    setError("");
+    try {
+      await inventoryApi.downloadFieldPhotos(periodKey, mode);
+      setNotice(`${periodKey} 능동자재 사진자료를 생성했습니다.`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "사진자료 Excel을 만들지 못했습니다.");
     } finally {
       setBusy(false);
     }
@@ -799,9 +806,13 @@ export const MaterialView: React.FC = () => {
                   onClick={() => void handleExport("official")}
                 />
                 <ExportButton
-                  label="능동자재 사진자료"
-                  onClick={() => void handleExport("photos")}
+                  label={`${data?.photoDownloadOptions.current.periodKey.slice(5)}월 사진자료 (진행중)`}
+                  onClick={() => data && void handlePhotoExport(data.photoDownloadOptions.current.periodKey, "current")}
                 />
+                {data?.photoDownloadOptions.latestClosed ? <ExportButton
+                  label={`${data.photoDownloadOptions.latestClosed.periodKey.slice(5)}월 사진자료 (마감)`}
+                  onClick={() => void handlePhotoExport(data.photoDownloadOptions.latestClosed!.periodKey, "closed")}
+                /> : null}
                 <ExportButton
                   label="H&S 분출내역"
                   onClick={() => void handleExport("hs")}

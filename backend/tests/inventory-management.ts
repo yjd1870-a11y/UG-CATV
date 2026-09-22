@@ -6,6 +6,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import sharp from 'sharp';
 import { createApiApp } from '../app';
 import { db, initializeDatabase } from '../db';
+import { readMaterialPhoto } from '../material-photo-storage';
 
 await initializeDatabase();
 const app = createApiApp();
@@ -162,7 +163,7 @@ try {
   assert.equal((await call('/material-management/field/transactions', { method: 'POST', cookie: admin, body: { transactionType: 'REPAIR_OUT', effectiveDate: date, modelId: passiveId, quantity: 1, stockState: 'BAD', purpose: '수리출고', idempotencyKey: 'admin-repair' } })).response.status, 201);
   assert.equal((await call('/material-management/field/transactions', { method: 'POST', cookie: admin, body: { transactionType: 'DISPOSAL', effectiveDate: date, modelId: passiveId, quantity: 1, stockState: 'BAD', purpose: '수리불가 폐기', idempotencyKey: 'admin-disposal' } })).response.status, 201);
 
-  assert.equal((await call('/material-management/field/transactions', { method: 'POST', cookie: admin, body: { transactionType: 'OPENING', effectiveDate: date, modelId: activeId, quantity: 2, stockState: 'NORMAL', idempotencyKey: 'active-opening' } })).response.status, 201);
+  assert.equal((await call('/material-management/field/transactions', { method: 'POST', cookie: admin, body: { transactionType: 'OPENING', effectiveDate: date, modelId: activeId, quantity: 3, stockState: 'NORMAL', idempotencyKey: 'active-opening' } })).response.status, 201);
   const missingPhotos = await call('/material-management/field/transactions', { method: 'POST', cookie: manager, body: { transactionType: 'FIELD_USE', effectiveDate: date, modelId: activeId, quantity: 1, stockState: 'NORMAL', purpose: '사진 누락', idempotencyKey: 'active-missing' } });
   assert.equal(missingPhotos.response.status, 400);
   const before = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#2266aa' } }).png().toBuffer();
@@ -173,6 +174,16 @@ try {
   assert.equal(photoRows.length, 2);
   assert.notEqual(photoRows[0].sha256, photoRows[1].sha256);
   assert.ok(Number(photoRows[0].width) <= 1280);
+  const activeDelete = await call<{id:string}>('/material-management/field/transactions', { method: 'POST', cookie: manager, body: { transactionType: 'FIELD_USE', effectiveDate: date, modelId: activeId, quantity: 1, stockState: 'NORMAL', purpose: '오등록 삭제', workDetails: '사진 삭제 검증', beforePhoto: `data:image/png;base64,${before.toString('base64')}`, afterPhoto: `data:image/png;base64,${after.toString('base64')}`, idempotencyKey: 'active-photo-delete' } });
+  assert.equal(activeDelete.response.status,201);
+  const deletePhotoRows=db.prepare('SELECT object_key AS objectKey,thumbnail_object_key AS thumbnailObjectKey FROM material_photo_assets WHERE transaction_id=?').all(activeDelete.payload?.data?.id) as Array<{objectKey:string;thumbnailObjectKey:string}>;
+  assert.equal(deletePhotoRows.length,2);
+  assert.equal((await call(`/material-management/field/transactions/${activeDelete.payload?.data?.id}`,{method:'DELETE',cookie:admin,body:{reason:'능동자재 오등록 삭제'}})).response.status,200);
+  for(const photo of deletePhotoRows){
+    await assert.rejects(()=>readMaterialPhoto(photo.objectKey));
+    await assert.rejects(()=>readMaterialPhoto(photo.thumbnailObjectKey));
+  }
+  assert.equal(Number((db.prepare("SELECT COUNT(*) AS count FROM material_photo_assets WHERE transaction_id=? AND archive_status='DELETED' AND purge_status='DELETED'").get(activeDelete.payload?.data?.id) as {count:number}).count),2);
 
   const fieldBalances = await call<Array<{ modelId: string; normalQuantity: number; badQuantity: number }>>('/material-management/field/balances', { cookie: admin });
   const passiveBalance = fieldBalances.payload?.data?.find((row) => row.modelId === passiveId);
@@ -528,18 +539,22 @@ try {
   assert.equal(historicalHsRows.length,1);
   assert.equal(historicalHsRows[0].getCell(9).value,null);
   assert.equal((allHsSheet.getCell(`F${allHsSheet.rowCount}`).value as {result:number}).result,2);
-  const photos = await file(`/material-management/exports/field-photos.xlsx?start=${period}-01&end=${date}`, admin);
+  const photos = await file(`/material-management/exports/field-photos.xlsx?period=${period}&mode=current`, admin);
   assert.equal(photos.response.status, 200); assert.equal(photos.body.subarray(0, 2).toString(), 'PK');
   const photoWorkbook = new ExcelJS.Workbook(); await photoWorkbook.xlsx.load(photos.body);
   const photoSheet = photoWorkbook.getWorksheet('능동자재 사진자료');
-  assert.deepEqual((photoSheet.getRow(1).values as ExcelJS.CellValue[]).slice(1), ['순번','일자','지역','품목','모델','수량','위치','작업자','작업내용','전 사진','후 사진']);
-  assert.equal(photoSheet.getCell('A2').value, 1);
-  assert.equal(photoSheet.getCell('C2').value, managerRegionName);
-  assert.equal((photoSheet.getRow(1).values as ExcelJS.CellValue[]).includes('거래번호'), false);
+  assert.equal(photoSheet.getCell('A1').value,`${Number(period.slice(5))}월 능동자재 사진자료`);
+  assert.ok(photoSheet.model.merges.includes('A1:K1'));
+  assert.deepEqual((photoSheet.getRow(2).values as ExcelJS.CellValue[]).slice(1), ['순번','일자','지역','품목','모델','수량','위치','작업자','작업내용','전 사진','후 사진']);
+  assert.equal(photoSheet.getCell('A3').value, 1);
+  assert.equal(photoSheet.getCell('C3').value, managerRegionName);
+  assert.equal((photoSheet.getRow(2).values as ExcelJS.CellValue[]).includes('거래번호'), false);
   assert.equal(photoSheet.getImages().length, 2);
-  assert.equal(photoSheet.getCell('A2').border.bottom?.color?.argb, 'FF9AA8B5');
-  assert.equal(photoSheet.getCell('A2').border.right?.color?.argb, 'FF9AA8B5');
+  assert.equal((photoSheet.views[0] as { ySplit?: number }).ySplit,2);
+  assert.equal(photoSheet.getCell('A3').border.bottom?.color?.argb, 'FF9AA8B5');
+  assert.equal(photoSheet.getCell('A3').border.right?.color?.argb, 'FF9AA8B5');
   assert.equal(Number((db.prepare("SELECT COUNT(*) AS count FROM material_photo_assets WHERE archive_status='EXPORTED'").get() as { count: number }).count), 2);
+  assert.equal(Number((db.prepare("SELECT COUNT(*) AS count FROM material_photo_assets WHERE archive_status='EXPORTED' AND delete_after IS NOT NULL").get() as { count: number }).count),0);
 
   const preservedSource = new ExcelJS.Workbook();
   const preservedSummary = preservedSource.addWorksheet('사급자재 사용내역');
@@ -623,10 +638,27 @@ try {
     assert.equal(sheet.getCell('A2').border.bottom?.color?.argb, 'FF9AA8B5');
     assert.equal(sheet.getCell('A2').border.right?.color?.argb, 'FF9AA8B5');
   }
-  const closed = await call('/material-management/field/closures', { method: 'POST', cookie: admin, body: { periodKey: period } });
+  const closed = await call<{id:string}>('/material-management/field/closures', { method: 'POST', cookie: admin, body: { periodKey: period } });
   assert.equal(closed.response.status, 201);
+  assert.equal(Number((db.prepare("SELECT COUNT(*) AS count FROM material_photo_assets WHERE archive_status='EXPORTED' AND delete_after IS NOT NULL").get() as { count: number }).count),2);
+  const fixedDeleteAfter=String((db.prepare("SELECT delete_after AS deleteAfter FROM material_photo_assets WHERE archive_status='EXPORTED' LIMIT 1").get() as {deleteAfter:string}).deleteAfter);
+  const closedPhotos=await file(`/material-management/exports/field-photos.xlsx?period=${period}&mode=closed`,admin);
+  assert.equal(closedPhotos.response.status,200);
+  assert.equal(String((db.prepare("SELECT delete_after AS deleteAfter FROM material_photo_assets WHERE archive_status='EXPORTED' LIMIT 1").get() as {deleteAfter:string}).deleteAfter),fixedDeleteAfter);
+  const cancelled=await call(`/material-management/field/closures/${closed.payload?.data?.id}/cancel`,{method:'POST',cookie:admin,body:{reason:'마감자료 재확인'}});
+  assert.equal(cancelled.response.status,200);
+  assert.equal(Number((db.prepare("SELECT COUNT(*) AS count FROM material_photo_assets WHERE archive_status='EXPORTED' AND delete_after IS NOT NULL").get() as {count:number}).count),0);
+  const reclosed=await call('/material-management/field/closures',{method:'POST',cookie:admin,body:{periodKey:period}});
+  assert.equal(reclosed.response.status,201);
+  assert.equal(Number((db.prepare("SELECT COUNT(*) AS count FROM material_photo_assets WHERE archive_status='EXPORTED' AND delete_after IS NOT NULL").get() as {count:number}).count),2);
   const blockedAfterClose = await call('/material-management/field/transactions', { method: 'POST', cookie: admin, body: { transactionType: 'RECEIPT', effectiveDate: date, modelId: passiveId, quantity: 1, idempotencyKey: 'closed-period' } });
   assert.equal(blockedAfterClose.response.status, 409); assert.equal(blockedAfterClose.payload?.code, 'PERIOD_CLOSED');
+  db.prepare("UPDATE material_photo_assets SET delete_after=datetime('now','-1 minute') WHERE archive_status='EXPORTED'").run();
+  const retentionPurge=await call<{purged:number;failed:number}>('/material-management/photos/purge-expired',{method:'POST',cookie:admin});
+  assert.equal(retentionPurge.response.status,200);
+  assert.equal(retentionPurge.payload?.data?.purged,2);
+  assert.equal(retentionPurge.payload?.data?.failed,0);
+  assert.equal(Number((db.prepare("SELECT COUNT(*) AS count FROM material_photo_assets WHERE archive_status='DELETED' AND deleted_at IS NOT NULL").get() as {count:number}).count),4);
   assert.ok(Number((db.prepare('SELECT COUNT(*) AS count FROM inventory_audit_logs').get() as { count: number }).count) >= 9);
   console.log('inventory management tests passed');
 } finally {

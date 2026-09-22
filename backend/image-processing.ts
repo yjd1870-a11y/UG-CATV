@@ -16,7 +16,7 @@ const hasDeclaredSignature = (source: Buffer, mime: string) => {
   return false;
 };
 
-export type ImageProfile = 'cell' | 'work-transfer' | 'material';
+export type ImageProfile = 'cell' | 'cell-history' | 'work-transfer' | 'material';
 
 export type ProcessedImage = {
   master: Buffer;
@@ -32,6 +32,7 @@ export type ProcessedImage = {
 
 const profileSettings: Record<ImageProfile, { masterLongEdge: number; quality: number; targetBytes: number }> = {
   cell: { masterLongEdge: 1600, quality: 82, targetBytes: 500 * 1024 },
+  'cell-history': { masterLongEdge: 1280, quality: 78, targetBytes: 250 * 1024 },
   'work-transfer': { masterLongEdge: 1600, quality: 82, targetBytes: 500 * 1024 },
   material: { masterLongEdge: 1280, quality: 78, targetBytes: 200 * 1024 },
 };
@@ -44,6 +45,30 @@ const encodeWithinTarget = async (pipeline: Sharp, initialQuality: number, targe
     output = await pipeline.clone().jpeg({ quality, mozjpeg: true }).toBuffer();
   }
   return output;
+};
+
+const encodeStrictlyWithinTarget = async (
+  source: Buffer,
+  longEdges: number[],
+  initialQuality: number,
+  targetBytes: number,
+) => {
+  let smallest: Buffer | null = null;
+  for (const longEdge of longEdges) {
+    const pipeline = sharp(source, { failOn: 'error', limitInputPixels: maxInputPixels })
+      .rotate()
+      .resize({ width: longEdge, height: longEdge, fit: 'inside', withoutEnlargement: true });
+    for (let quality = initialQuality; quality >= 42; quality -= 6) {
+      const output = await pipeline.clone().jpeg({ quality, mozjpeg: true }).toBuffer();
+      if (!smallest || output.length < smallest.length) smallest = output;
+      if (output.length <= targetBytes) return output;
+    }
+  }
+  throw new ApiError(
+    400,
+    `사진을 ${Math.round(targetBytes / 1024)}KB 이하로 최적화하지 못했습니다. 다른 사진을 선택해 주세요.`,
+    'PHOTO_COMPRESSION_FAILED',
+  );
 };
 
 export const processUploadedImage = async (
@@ -86,12 +111,16 @@ export const processUploadedImage = async (
       fit: 'inside',
       withoutEnlargement: true,
     });
-    const master = await encodeWithinTarget(masterPipeline, settings.quality, settings.targetBytes);
-    const thumbnail = await encodeWithinTarget(
-      oriented.clone().resize({ width: 480, height: 480, fit: 'inside', withoutEnlargement: true }),
-      72,
-      40 * 1024,
-    );
+    const master = profile === 'cell-history'
+      ? await encodeStrictlyWithinTarget(source, [1280, 1152, 1024, 896, 768], settings.quality, settings.targetBytes)
+      : await encodeWithinTarget(masterPipeline, settings.quality, settings.targetBytes);
+    const thumbnail = profile === 'cell-history'
+      ? await encodeStrictlyWithinTarget(source, [480, 420, 360, 320], 72, 30 * 1024)
+      : await encodeWithinTarget(
+        oriented.clone().resize({ width: 480, height: 480, fit: 'inside', withoutEnlargement: true }),
+        72,
+        40 * 1024,
+      );
     const masterMetadata = await sharp(master).metadata();
     const thumbnailMetadata = await sharp(thumbnail).metadata();
     if (!masterMetadata.width || !masterMetadata.height || !thumbnailMetadata.width || !thumbnailMetadata.height) {

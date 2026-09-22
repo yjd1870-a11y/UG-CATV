@@ -538,10 +538,12 @@ export const buildHsWorkbook = async (start: string, end: string) => {
   return removeInvalidDefinedNames(Buffer.from(await workbook.xlsx.writeBuffer()));
 };
 
-export const buildFieldPhotoWorkbook = async (start: string, end: string) => {
+export const buildFieldPhotoWorkbook = async (start: string, end: string, periodKey = start.slice(0, 7)) => {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'CATV 업무관리';
   const sheet = workbook.addWorksheet('능동자재 사진자료');
+  sheet.addRow([`${Number(periodKey.slice(5, 7))}월 능동자재 사진자료`]);
+  sheet.mergeCells('A1:K1');
   sheet.addRow(['순번', '일자', '지역', '품목', '모델', '수량', '위치', '작업자', '작업내용', '전 사진', '후 사진']);
   const rows = db.prepare(`
     SELECT t.id, t.effective_date AS effectiveDate, COALESCE(r.region_name,'') AS regionName,
@@ -561,15 +563,50 @@ export const buildFieldPhotoWorkbook = async (start: string, end: string) => {
     const excelRow = sheet.addRow([index + 1, row.effectiveDate, row.regionName, row.categoryName, row.modelName,
       row.quantity, row.location, row.workerName, row.workDetails, '', '']);
     excelRow.height = 190;
-    const photos = db.prepare(`SELECT photo_slot AS slot, object_key AS objectKey FROM material_photo_assets WHERE transaction_id=? ORDER BY photo_slot`).all(String(row.id)) as Array<{ slot: string; objectKey: string }>;
+    const photos = db.prepare(`
+      SELECT photo_slot AS slot,object_key AS objectKey,width,height
+        FROM material_photo_assets
+       WHERE transaction_id=? AND archive_status<>'DELETED' AND deleted_at IS NULL
+       ORDER BY photo_slot
+    `).all(String(row.id)) as Array<{ slot: string; objectKey: string; width: number; height: number }>;
     for (const photo of photos) {
       const image = await readMaterialPhoto(photo.objectKey);
       const imageId = workbook.addImage({ buffer: image, extension: 'jpeg' });
       const column = photo.slot === 'BEFORE' ? 9 : 10;
-      sheet.addImage(imageId, { tl: { col: column + 0.08, row: excelRow.number - 0.92 }, ext: { width: 260, height: 180 }, editAs: 'oneCell' });
+      const scale = Math.min(260 / Math.max(1, Number(photo.width)), 180 / Math.max(1, Number(photo.height)));
+      const width = Math.max(1, Number(photo.width) * scale);
+      const height = Math.max(1, Number(photo.height) * scale);
+      sheet.addImage(imageId, {
+        tl: { col: column + (260 - width) / 260 / 2, row: excelRow.number - 1 + (180 - height) / 180 / 2 },
+        ext: { width, height }, editAs: 'oneCell',
+      });
     }
   }
-  styleSheet(sheet, [8, 13, 13, 18, 24, 10, 18, 14, 34, 38, 38]);
+  const widths = [8, 13, 13, 18, 24, 10, 18, 14, 34, 38, 38];
+  widths.forEach((width, index) => { sheet.getColumn(index + 1).width = width; });
+  sheet.views = [{ state: 'frozen', ySplit: 2 }];
+  sheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: 11 } };
+  sheet.getRow(1).height = 34;
+  sheet.getCell('A1').font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 18 };
+  sheet.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: headerFill } };
+  sheet.getCell('A1').alignment = { vertical: 'middle', horizontal: 'center' };
+  sheet.getRow(2).height = 28;
+  sheet.getRow(2).eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: accentFill } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  });
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber < 3) return;
+    row.alignment = { vertical: 'middle', wrapText: true };
+    row.eachCell((cell) => {
+      cell.border = {
+        bottom: { style: 'hair', color: { argb: exportGridBorder } },
+        right: { style: 'hair', color: { argb: exportGridBorder } },
+      };
+    });
+  });
+  sheet.pageSetup = { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
   sheet.getColumn(2).numFmt = 'yyyy-mm-dd';
   sheet.getColumn(6).numFmt = '#,##0.##';
   return Buffer.from(await workbook.xlsx.writeBuffer());
@@ -631,10 +668,20 @@ export const buildStationWorkbook = async (asOf: string) => {
 export const markPhotosExported = (start: string, end: string) => {
   db.prepare(`
     UPDATE material_photo_assets SET archive_status='EXPORTED', exported_at=CURRENT_TIMESTAMP,
-           delete_after=datetime('now','+90 days')
+           delete_after=NULL
      WHERE transaction_id IN (
        SELECT id FROM inventory_transactions WHERE domain='FIELD' AND transaction_type='FIELD_USE'
          AND status='POSTED' AND effective_date BETWEEN ? AND ?
      ) AND archive_status='PENDING'
   `).run(start,end);
 };
+
+export const fieldPhotoExportCounts = (start: string, end: string) => db.prepare(`
+  SELECT COUNT(DISTINCT t.id) AS rowCount,COUNT(p.id) AS photoCount
+    FROM inventory_transactions t
+    JOIN field_material_entries e ON e.transaction_id=t.id
+    JOIN field_material_models m ON m.id=e.model_id AND m.material_kind='ACTIVE'
+    LEFT JOIN material_photo_assets p ON p.transaction_id=t.id AND p.archive_status<>'DELETED' AND p.deleted_at IS NULL
+   WHERE t.domain='FIELD' AND t.status='POSTED' AND t.transaction_type='FIELD_USE'
+     AND t.effective_date BETWEEN ? AND ?
+`).get(start, end) as { rowCount: number; photoCount: number };

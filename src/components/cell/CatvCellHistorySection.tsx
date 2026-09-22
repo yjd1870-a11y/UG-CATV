@@ -212,7 +212,7 @@ export const CatvCellHistorySection: React.FC<CatvCellHistorySectionProps> = ({
               {item.photos?.length ? (
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   {item.photos.map((photo, index) => (
-                    <button type="button" key={`${item.id}-${index}`} onClick={() => setPreview({ photos: item.photos || [], index, title: item.title || item.type || '작업이력' })} className="group relative overflow-hidden rounded-xl border border-slate-200" aria-label={`${item.title || '작업이력'} 현장 사진 ${index + 1} 확대`}>
+                    <button type="button" key={`${item.id}-${index}`} onClick={() => setPreview({ photos: item.masterPhotos?.length ? item.masterPhotos : item.photos || [], index, title: item.title || item.type || '작업이력' })} className="group relative overflow-hidden rounded-xl border border-slate-200" aria-label={`${item.title || '작업이력'} 현장 사진 ${index + 1} 확대`}>
                       <img src={photo} alt={`${item.title || '작업이력'} 현장 사진 ${index + 1}`} className="aspect-4/3 w-full object-cover transition group-hover:scale-105" />
                       <span className="absolute inset-0 flex items-center justify-center bg-black/0 text-white transition group-hover:bg-black/25"><Maximize2 className="h-5 w-5 opacity-0 transition group-hover:opacity-100" /></span>
                     </button>

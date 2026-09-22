@@ -20,6 +20,16 @@ import {
 import { writeAuditLog } from '../security/audit';
 import fs from 'node:fs';
 import { headR2Object, usesR2Storage } from '../object-storage';
+import {
+  addCellHistoryPhotoFromDataUrl,
+  addCellHistoryPhotoFromQuarantine,
+  cellHistoryPhotoContent,
+  getCellHistoryPhoto,
+  historyPhotoView,
+  listCellHistoryPhotos,
+  purgeCellHistoryPhoto,
+  purgeCellHistoryPhotos,
+} from '../cell-history-photo-service';
 
 const router = Router();
 router.use(requireAuth);
@@ -30,6 +40,31 @@ const cellSelect = `
     LEFT JOIN sites s ON s.id = c.site_id
    WHERE c.deleted_at IS NULL
 `;
+
+const mapHistoryRow = (history: Record<string, unknown>) => {
+  const storedPhotos = listCellHistoryPhotos(String(history.id)).map(historyPhotoView);
+  let legacyPhotos: string[] = [];
+  if (!storedPhotos.length) {
+    try {
+      const parsed = JSON.parse(String(history.photos_json || '[]'));
+      legacyPhotos = Array.isArray(parsed) ? parsed.filter((photo): photo is string => typeof photo === 'string') : [];
+    } catch {
+      legacyPhotos = [];
+    }
+  }
+  return {
+    id: String(history.id),
+    title: history.title || undefined,
+    type: String(history.work_type),
+    date: String(history.work_date),
+    worker: String(history.worker_name),
+    summary: String(history.summary),
+    status: history.status || undefined,
+    photos: storedPhotos.length ? storedPhotos.map((photo) => photo.url) : legacyPhotos,
+    photoIds: storedPhotos.map((photo) => photo.id),
+    masterPhotos: storedPhotos.map((photo) => photo.masterUrl),
+  };
+};
 
 router.get('/search', (req, res) => {
   if (typeof req.query.q === 'string') {
@@ -87,16 +122,7 @@ router.get('/:id/transmission', (req, res) => {
   success(res, {
     ...mapCatvCellRow(row),
     status: String(row.status || '정상'),
-    history: historyRows.map((history) => ({
-      id: String(history.id),
-      title: history.title || undefined,
-      type: String(history.work_type),
-      date: String(history.work_date),
-      worker: String(history.worker_name),
-      summary: String(history.summary),
-      status: history.status || undefined,
-      photos: JSON.parse(String(history.photos_json || '[]')),
-    })),
+    history: historyRows.map(mapHistoryRow),
   });
 });
 
@@ -159,16 +185,7 @@ router.get('/:id', (req, res) => {
       description: memo.description || '',
     };
   });
-  cell.history = historyRows.map((history) => ({
-    id: String(history.id),
-    title: history.title || undefined,
-    type: String(history.work_type),
-    date: String(history.work_date),
-    worker: String(history.worker_name),
-    summary: String(history.summary),
-    status: history.status || undefined,
-    photos: JSON.parse(String(history.photos_json || '[]')),
-  }));
+  cell.history = historyRows.map(mapHistoryRow);
 
   success(res, {
     cell,
@@ -406,7 +423,7 @@ router.delete('/:id/photos/:photoId', requireRoles('admin'), asyncRoute(async (r
   success(res, { id: req.params.photoId, deleted: true });
 }));
 
-router.post('/:id/history', (req, res) => {
+router.post('/:id/history', asyncRoute(async (req, res) => {
   const user = authUser(req);
   const cell = db.prepare('SELECT id FROM cells WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!cell) throw new ApiError(404, 'CELL 정보를 찾을 수 없습니다.', 'NOT_FOUND');
@@ -424,13 +441,27 @@ router.post('/:id/history', (req, res) => {
     user.role === 'admin' || user.role === 'team_leader' ? asText(req.body?.worker, '작업자', 100) : user.name,
     asText(req.body?.summary, '작업내용', 3000),
     req.body?.status || '완료',
-    JSON.stringify(Array.isArray(req.body?.photos) ? req.body.photos.slice(0, 3) : [])
+    '[]'
   );
+  const photos = Array.isArray(req.body?.photos)
+    ? req.body.photos.filter((photo: unknown): photo is string => typeof photo === 'string').slice(0, 3)
+    : [];
+  try {
+    for (const photo of photos) await addCellHistoryPhotoFromDataUrl(id, req.params.id, user.id, photo);
+  } catch (error) {
+    try {
+      await purgeCellHistoryPhotos(id);
+      db.prepare('DELETE FROM cell_work_history WHERE id=?').run(id);
+    } catch {
+      // Keep the history row when storage cleanup failed so the purge remains retryable.
+    }
+    throw error;
+  }
   writeAuditLog(req, { action: 'CELL_HISTORY_CREATED', targetType: 'cell_history', targetId: id, metadata: { cellId: req.params.id } });
   success(res, { id }, 201);
-});
+}));
 
-router.put('/:id/history/:historyId', (req, res) => {
+router.put('/:id/history/:historyId', asyncRoute(async (req, res) => {
   const user = authUser(req);
   const existing = db.prepare(`
     SELECT * FROM cell_work_history WHERE id = ? AND cell_id = ? AND deleted_at IS NULL
@@ -438,6 +469,19 @@ router.put('/:id/history/:historyId', (req, res) => {
   if (!existing) throw new ApiError(404, '작업이력을 찾을 수 없습니다.', 'NOT_FOUND');
   if (user.role !== 'admin' && user.role !== 'team_leader' && String(existing.worker_name) !== user.name) {
     throw new ApiError(403, '이 작업이력을 수정할 권한이 없습니다.', 'FORBIDDEN');
+  }
+  if (Array.isArray(req.body?.photos)) {
+    const requestedPhotos = req.body.photos.filter((photo: unknown): photo is string => typeof photo === 'string').slice(0, 3);
+    const retainedIds = new Set(requestedPhotos.flatMap((photo: string) => {
+      const match = /\/photos\/([^/]+)\/content/.exec(photo);
+      return match ? [decodeURIComponent(match[1])] : [];
+    }));
+    for (const photo of listCellHistoryPhotos(req.params.historyId)) {
+      if (!retainedIds.has(photo.id)) await purgeCellHistoryPhoto(photo);
+    }
+    for (const photo of requestedPhotos.filter((value: string) => value.startsWith('data:image/'))) {
+      await addCellHistoryPhotoFromDataUrl(req.params.historyId, req.params.id, user.id, photo);
+    }
   }
   db.prepare(`
     UPDATE cell_work_history SET title = ?, work_type = ?, work_date = ?, worker_name = ?,
@@ -449,14 +493,95 @@ router.put('/:id/history/:historyId', (req, res) => {
     user.role === 'admin' || user.role === 'team_leader' ? req.body?.worker || existing.worker_name : existing.worker_name,
     req.body?.summary || existing.summary,
     req.body?.status || existing.status,
-    req.body?.photos ? JSON.stringify(req.body.photos.slice(0, 3)) : String(existing.photos_json),
+    Array.isArray(req.body?.photos) ? '[]' : String(existing.photos_json),
     req.params.historyId
   );
   writeAuditLog(req, { action: 'CELL_HISTORY_UPDATED', targetType: 'cell_history', targetId: req.params.historyId, metadata: { cellId: req.params.id } });
   success(res, { id: req.params.historyId });
-});
+}));
 
-router.delete('/:id/history/:historyId', (req, res) => {
+router.post('/:id/history/:historyId/photos/upload-url', asyncRoute(async (req, res) => {
+  if (!usesR2Storage) throw new ApiError(409, '현재 저장소는 직접 업로드 모드가 아닙니다.', 'DIRECT_UPLOAD_UNAVAILABLE');
+  const user = authUser(req);
+  const history = db.prepare('SELECT id FROM cell_work_history WHERE id=? AND cell_id=? AND deleted_at IS NULL')
+    .get(req.params.historyId, req.params.id);
+  if (!history) throw new ApiError(404, '작업이력을 찾을 수 없습니다.', 'NOT_FOUND');
+  if (listCellHistoryPhotos(req.params.historyId).length >= 3) {
+    throw new ApiError(409, '작업이력 사진은 최대 3장까지 등록할 수 있습니다.', 'PHOTO_LIMIT_EXCEEDED');
+  }
+  const mimeType = asText(req.body?.mimeType, '사진 MIME 형식', 100).toLowerCase();
+  const size = Number(req.body?.size);
+  validatePhotoUpload(mimeType, size);
+  const objectKey = createPhotoObjectKey(mimeType, user.id);
+  success(res, { objectKey, ...(await privatePhotoUploadUrl(objectKey, mimeType, size)) });
+}));
+
+router.post('/:id/history/:historyId/photos/complete', asyncRoute(async (req, res) => {
+  if (!usesR2Storage) throw new ApiError(409, '현재 저장소는 직접 업로드 모드가 아닙니다.', 'DIRECT_UPLOAD_UNAVAILABLE');
+  const user = authUser(req);
+  const history = db.prepare('SELECT id FROM cell_work_history WHERE id=? AND cell_id=? AND deleted_at IS NULL')
+    .get(req.params.historyId, req.params.id);
+  if (!history) throw new ApiError(404, '작업이력을 찾을 수 없습니다.', 'NOT_FOUND');
+  const objectKey = asText(req.body?.objectKey, 'R2 객체 키', 512);
+  const safeUserId = user.id.replace(/[^a-z0-9_-]/gi, '').slice(0, 64);
+  if (!objectKey.startsWith('photo-quarantine/cell/') || !objectKey.includes(`/${safeUserId}/`)) {
+    throw new ApiError(400, '사진 객체 키가 현재 사용자에게 발급된 키가 아닙니다.', 'INVALID_PHOTO_PATH');
+  }
+  try {
+    const object = await headR2Object(objectKey);
+    validatePhotoUpload(object.contentType, object.size);
+    const id = await addCellHistoryPhotoFromQuarantine(
+      req.params.historyId, req.params.id, user.id, objectKey, object.contentType,
+    );
+    success(res, { id }, 201);
+  } catch (error) {
+    await removePrivatePhoto(objectKey).catch(() => undefined);
+    throw error;
+  }
+}));
+
+router.post('/:id/history/:historyId/photos', asyncRoute(async (req, res) => {
+  const user = authUser(req);
+  const history = db.prepare('SELECT id FROM cell_work_history WHERE id=? AND cell_id=? AND deleted_at IS NULL')
+    .get(req.params.historyId, req.params.id);
+  if (!history) throw new ApiError(404, '작업이력을 찾을 수 없습니다.', 'NOT_FOUND');
+  const dataUrl = asText(req.body?.url, '사진 데이터', 15 * 1024 * 1024);
+  const id = await addCellHistoryPhotoFromDataUrl(req.params.historyId, req.params.id, user.id, dataUrl);
+  success(res, { id }, 201);
+}));
+
+router.get('/:id/history/:historyId/photos/:photoId/content', asyncRoute(async (req, res) => {
+  const photo = getCellHistoryPhoto(req.params.photoId, req.params.historyId, req.params.id);
+  if (!photo) throw new ApiError(404, '작업이력 사진을 찾을 수 없습니다.', 'NOT_FOUND');
+  const content = await cellHistoryPhotoContent(photo, req.query.variant === 'thumbnail');
+  if (content.redirectUrl) {
+    res.redirect(302, content.redirectUrl);
+    return;
+  }
+  if (!content.absolutePath || !fs.existsSync(content.absolutePath)) {
+    throw new ApiError(404, '사진 파일을 찾을 수 없습니다.', 'NOT_FOUND');
+  }
+  res.setHeader('Content-Type', content.mimeType || 'image/jpeg');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.sendFile(content.absolutePath);
+}));
+
+router.delete('/:id/history/:historyId/photos/:photoId', asyncRoute(async (req, res) => {
+  const user = authUser(req);
+  const history = db.prepare('SELECT worker_name FROM cell_work_history WHERE id=? AND cell_id=? AND deleted_at IS NULL')
+    .get(req.params.historyId, req.params.id) as { worker_name: string } | undefined;
+  if (!history) throw new ApiError(404, '작업이력을 찾을 수 없습니다.', 'NOT_FOUND');
+  if (user.role !== 'admin' && user.role !== 'team_leader' && history.worker_name !== user.name) {
+    throw new ApiError(403, '이 작업이력을 수정할 권한이 없습니다.', 'FORBIDDEN');
+  }
+  const photo = getCellHistoryPhoto(req.params.photoId, req.params.historyId, req.params.id);
+  if (!photo) throw new ApiError(404, '작업이력 사진을 찾을 수 없습니다.', 'NOT_FOUND');
+  await purgeCellHistoryPhoto(photo);
+  success(res, { id: photo.id, deleted: true });
+}));
+
+router.delete('/:id/history/:historyId', asyncRoute(async (req, res) => {
   const user = authUser(req);
   const existing = db.prepare(`
     SELECT worker_name FROM cell_work_history WHERE id = ? AND cell_id = ? AND deleted_at IS NULL
@@ -465,13 +590,14 @@ router.delete('/:id/history/:historyId', (req, res) => {
   if (user.role !== 'admin' && user.role !== 'team_leader' && existing.worker_name !== user.name) {
     throw new ApiError(403, '이 작업이력을 삭제할 권한이 없습니다.', 'FORBIDDEN');
   }
+  await purgeCellHistoryPhotos(req.params.historyId);
   const result = db.prepare(`
-    UPDATE cell_work_history SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+    UPDATE cell_work_history SET photos_json='[]',deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND cell_id = ? AND deleted_at IS NULL
   `).run(req.params.historyId, req.params.id);
   if (result.changes === 0) throw new ApiError(404, '작업이력을 찾을 수 없습니다.', 'NOT_FOUND');
   writeAuditLog(req, { action: 'CELL_HISTORY_DELETED', targetType: 'cell_history', targetId: req.params.historyId, metadata: { cellId: req.params.id } });
   success(res, { id: req.params.historyId, deleted: true });
-});
+}));
 
 export default router;

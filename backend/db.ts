@@ -178,6 +178,33 @@ CREATE TABLE IF NOT EXISTS cell_work_history (
 );
 CREATE INDEX IF NOT EXISTS idx_cell_work_history_cell ON cell_work_history(cell_id);
 
+CREATE TABLE IF NOT EXISTS cell_history_photo_assets (
+  id TEXT PRIMARY KEY,
+  history_id TEXT NOT NULL REFERENCES cell_work_history(id) ON DELETE RESTRICT,
+  cell_id TEXT NOT NULL REFERENCES cells(id) ON DELETE RESTRICT,
+  display_order INTEGER NOT NULL CHECK (display_order BETWEEN 0 AND 2),
+  object_key TEXT NOT NULL UNIQUE,
+  thumbnail_object_key TEXT NOT NULL UNIQUE,
+  mime_type TEXT NOT NULL,
+  file_size INTEGER NOT NULL CHECK (file_size > 0),
+  thumbnail_size INTEGER NOT NULL CHECK (thumbnail_size > 0),
+  width INTEGER NOT NULL CHECK (width > 0),
+  height INTEGER NOT NULL CHECK (height > 0),
+  thumbnail_width INTEGER NOT NULL CHECK (thumbnail_width > 0),
+  thumbnail_height INTEGER NOT NULL CHECK (thumbnail_height > 0),
+  sha256 TEXT NOT NULL,
+  thumbnail_sha256 TEXT NOT NULL,
+  uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  purge_status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (purge_status IN ('ACTIVE', 'PENDING', 'FAILED', 'DELETED')),
+  purge_attempts INTEGER NOT NULL DEFAULT 0,
+  last_purge_error TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cell_history_photos_history ON cell_history_photo_assets(history_id, purge_status, display_order);
+CREATE INDEX IF NOT EXISTS idx_cell_history_photos_order ON cell_history_photo_assets(history_id, display_order);
+CREATE INDEX IF NOT EXISTS idx_cell_history_photos_cell ON cell_history_photo_assets(cell_id, purge_status);
+
 CREATE TABLE IF NOT EXISTS work_transfers (
   id TEXT PRIMARY KEY,
   cell_id TEXT REFERENCES cells(id) ON DELETE RESTRICT,
@@ -572,6 +599,19 @@ CREATE TABLE IF NOT EXISTS material_photo_assets (
 );
 CREATE INDEX IF NOT EXISTS idx_material_photos_retention ON material_photo_assets(archive_status, delete_after);
 
+CREATE TABLE IF NOT EXISTS inventory_photo_exports (
+  id TEXT PRIMARY KEY,
+  period_key TEXT NOT NULL,
+  export_mode TEXT NOT NULL CHECK (export_mode IN ('CURRENT', 'CLOSED')),
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  photo_count INTEGER NOT NULL DEFAULT 0,
+  generated_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_photo_exports_period ON inventory_photo_exports(period_key, generated_at DESC);
+
 CREATE TABLE IF NOT EXISTS inventory_audit_logs (
   id TEXT PRIMARY KEY,
   transaction_id TEXT NOT NULL REFERENCES inventory_transactions(id) ON DELETE RESTRICT,
@@ -891,6 +931,11 @@ export const createSchema = () => {
   ensureColumn('inventory_transactions', 'source_row_number', 'INTEGER');
   ensureColumn('inventory_transactions', 'source_effective_date', 'TEXT');
   ensureColumn('field_material_entries', 'category_name_snapshot', 'TEXT');
+  ensureColumn('material_photo_assets', 'purge_status', "TEXT NOT NULL DEFAULT 'ACTIVE'");
+  ensureColumn('material_photo_assets', 'purge_attempts', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('material_photo_assets', 'last_purge_error', 'TEXT');
+  ensureColumn('material_photo_assets', 'deleted_by', 'TEXT');
+  ensureColumn('material_photo_assets', 'delete_reason', 'TEXT');
   const legacyOfficialRows = db.prepare(`
     SELECT id,effective_date AS effectiveDate,memo
       FROM inventory_transactions

@@ -52,6 +52,11 @@ export type InventoryBootstrap = {
   stationBalances: SpareBalance[];
   stationTransactions: InventoryTransaction[];
   closures: Array<{ id: string; periodKey: string; periodStart: string; periodEnd: string; status: string; confirmedAt: string }>;
+  photoDownloadOptions: {
+    current: { periodKey: string; periodStart: string; periodEnd: string; mode: 'current' };
+    latestClosed: { id: string; periodKey: string; periodStart: string; periodEnd: string; confirmedAt: string; mode: 'closed' } | null;
+  };
+  photoStorage: { bytes: number; gigabytes: number; estimatedObjects: number; warningLevel: 'NORMAL' | 'WARNING' | 'CRITICAL' };
 };
 
 export type InventoryTransactionInput = {
@@ -130,7 +135,10 @@ export const inventoryApi = {
   importOfficialField: (input: { sourceFile: string; sourceHash: string; sourceWorkbookBase64?: string; reportYear?: number; rows: Array<Record<string, unknown>> }) => request<{ inserted: number; skipped: number }>('/material-management/field/imports/official', { method: 'POST', body: JSON.stringify(input) }),
   importStationInventory: (input: { sourceFile: string; sourceHash: string; rows: Array<Record<string, unknown>> }) => request<{ inserted: number; skipped: number }>('/material-management/station/imports/inventory', { method: 'POST', body: JSON.stringify(input) }),
   downloadFieldOfficial: (year: number) => downloadFile(`/material-management/exports/field-official.xlsx?year=${year}&download=${Date.now()}`, `CATV_현장자재_공식보고_${year}.xlsx`),
-  downloadFieldPhotos: (start: string, end: string) => downloadFile(`/material-management/exports/field-photos.xlsx?start=${start}&end=${end}`, `CATV_능동자재_사진_${start}_${end}.xlsx`),
+  downloadFieldPhotos: (periodKey: string, mode: 'current' | 'closed') => downloadFile(
+    `/material-management/exports/field-photos.xlsx?period=${encodeURIComponent(periodKey)}&mode=${mode}&download=${Date.now()}`,
+    `CATV_능동자재_사진_${periodKey}_${mode === 'closed' ? '마감' : '진행중'}.xlsx`,
+  ),
   downloadHs: () => downloadFile(`/material-management/exports/hs.xlsx?scope=all&download=${Date.now()}`, 'CATV_HS분출_전체.xlsx'),
   downloadStation: (asOf: string) => downloadFile(`/material-management/exports/station.xlsx?asOf=${asOf}`, `CATV_국사예비품_${asOf}.xlsx`),
 };

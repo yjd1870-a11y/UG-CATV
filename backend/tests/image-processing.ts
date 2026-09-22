@@ -29,12 +29,16 @@ const largeSource = await sharp({
   create: { width: 2400, height: 1800, channels: 3, background: { r: 170, g: 120, b: 80 } },
 }).png().toBuffer();
 const cell = await processUploadedImage(largeSource, 'image/png', 'cell');
+const cellHistory = await processUploadedImage(largeSource, 'image/png', 'cell-history');
 const material = await processUploadedImage(largeSource, 'image/png', 'material');
 assert.equal(Math.max(cell.width, cell.height), 1600);
 assert.equal(Math.max(material.width, material.height), 1280);
+assert.ok(Math.max(cellHistory.width, cellHistory.height) <= 1280);
 assert.ok(Math.max(cell.thumbnailWidth, cell.thumbnailHeight) <= 480);
 assert.ok(cell.master.length <= 500 * 1024);
 assert.ok(material.master.length <= 200 * 1024);
+assert.ok(cellHistory.master.length <= 250 * 1024);
+assert.ok(cellHistory.thumbnail.length <= 30 * 1024);
 assert.ok(cell.thumbnail.length <= 40 * 1024);
 assert.equal(createHash('sha256').update(cell.master).digest('hex'), cell.sha256);
 assert.equal(createHash('sha256').update(cell.thumbnail).digest('hex'), cell.thumbnailSha256);

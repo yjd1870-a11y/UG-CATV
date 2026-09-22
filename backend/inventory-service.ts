@@ -4,6 +4,7 @@ import { db } from './db';
 import { ApiError, asPositiveInteger, asPositiveNumber, asText, optionalText } from './http';
 import { authUser, type AuthUser, type DbRole } from './security/session';
 import { normalizeStationName } from './catv';
+import { purgeMaterialTransactionPhotos } from './material-photo-retention';
 
 export type InventoryDomain = 'FIELD' | 'STATION';
 export type FieldStockState = 'NORMAL' | 'BAD';
@@ -551,7 +552,7 @@ export const updateFieldTransaction = (req: Request) => {
     if (resolved && resolved !== user.regionId) throw new ApiError(403, '담당지역 밖의 주소로 수정할 수 없습니다.', 'REGION_SCOPE_FORBIDDEN');
   }
   if (type === 'FIELD_USE' && String(model.material_kind) === 'ACTIVE') {
-    const photoCount = Number((db.prepare('SELECT COUNT(*) AS count FROM material_photo_assets WHERE transaction_id=?').get(String(original.id)) as { count: number }).count);
+    const photoCount = Number((db.prepare("SELECT COUNT(*) AS count FROM material_photo_assets WHERE transaction_id=? AND archive_status<>'DELETED' AND deleted_at IS NULL").get(String(original.id)) as { count: number }).count);
     if (photoCount !== 2) throw new ApiError(409, '능동자재 현장사용으로 변경하려면 전·후 사진이 필요합니다.', 'ACTIVE_PHOTOS_REQUIRED');
   }
   assertFieldReplacementStock(oldEntry, { modelId, state: replacementEntry.state, signed: replacementEntry.signed });
@@ -586,11 +587,12 @@ export const updateFieldTransaction = (req: Request) => {
 
 export const updateFieldTransactionQuantity = (req: Request) => updateFieldTransaction(req);
 
-export const deleteFieldTransaction = (req: Request) => {
+export const deleteFieldTransaction = async (req: Request) => {
   const { user, original, entry } = fieldMutationTarget(req);
   const reason = asText(req.body?.reason, '삭제사유', 1000);
   assertOpenPeriod(String(original.effective_date));
   assertFieldReplacementStock(entry);
+  await purgeMaterialTransactionPhotos(String(original.id), user.id, reason);
   db.exec('BEGIN IMMEDIATE');
   try {
     assertFieldReplacementStock(entry);
