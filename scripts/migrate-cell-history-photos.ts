@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { db, initializeDatabase } from '../backend/db';
 import { addCellHistoryPhotoFromDataUrl, listCellHistoryPhotos } from '../backend/cell-history-photo-service';
 
@@ -7,7 +8,14 @@ const backupConfirmed = args.has('--backup-confirmed');
 const batchArg = process.argv.find((arg) => arg.startsWith('--batch-size='));
 const batchSize = Math.min(500, Math.max(1, Number(batchArg?.split('=')[1] || 50)));
 
-const normalizeLegacyPhotoDataUrl = (dataUrl: string) => {
+const describeLegacyPhoto = (dataUrl: string) => {
+  const declared = /^data:([^;,]+)/i.exec(dataUrl)?.[1]?.toLowerCase();
+  if (declared) return `declared=${declared}`;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(dataUrl)?.[1]?.toLowerCase();
+  return scheme ? `scheme=${scheme}` : 'source=relative-or-unknown';
+};
+
+const normalizeLegacyPhotoDataUrl = async (dataUrl: string) => {
   const match = /^data:[^;,]+;base64,([a-z0-9+/=\r\n]+)$/i.exec(dataUrl);
   if (!match) return dataUrl;
   const buffer = Buffer.from(match[1], 'base64');
@@ -18,7 +26,17 @@ const normalizeLegacyPhotoDataUrl = (dataUrl: string) => {
       : buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP'
         ? 'image/webp'
         : '';
-  return mimeType ? `data:${mimeType};base64,${match[1]}` : dataUrl;
+  if (mimeType) return `data:${mimeType};base64,${match[1]}`;
+  try {
+    const converted = await sharp(buffer, { failOn: 'error', limitInputPixels: 40_000_000, animated: false })
+      .rotate()
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: 90, mozjpeg: true })
+      .toBuffer();
+    return `data:image/jpeg;base64,${converted.toString('base64')}`;
+  } catch {
+    return dataUrl;
+  }
 };
 
 if (apply && !backupConfirmed) {
@@ -74,7 +92,13 @@ for (const row of rows) {
   try {
     const existing = listCellHistoryPhotos(row.id).length;
     for (const photo of photos.slice(existing, 3)) {
-      await addCellHistoryPhotoFromDataUrl(row.id, row.cellId, row.uploadedBy || '', normalizeLegacyPhotoDataUrl(photo));
+      try {
+        const normalized = await normalizeLegacyPhotoDataUrl(photo);
+        await addCellHistoryPhotoFromDataUrl(row.id, row.cellId, row.uploadedBy || '', normalized);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${message} (${describeLegacyPhoto(photo)})`);
+      }
       uploadedPhotos += 1;
     }
     if (listCellHistoryPhotos(row.id).length >= Math.min(photos.length, 3)) {
