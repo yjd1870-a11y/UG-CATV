@@ -38,7 +38,13 @@ const normalizeLegacyPhotoDataUrl = async (dataUrl: string) => {
   if (mimeType) return `data:${mimeType};base64,${buffer.toString('base64')}`;
   if (declaredMime === 'image/svg+xml') {
     const svg = buffer.toString('utf8');
-    if (/<script\b|<!doctype\b|<!entity\b|<image\b|(?:xlink:)?href\s*=|url\s*\(/i.test(svg)) return dataUrl;
+    if (/<script\b|<!doctype\b|<!entity\b/i.test(svg)) return dataUrl;
+    const hrefs = Array.from(svg.matchAll(/(?:xlink:)?href\s*=\s*(["'])(.*?)\1/gi), (entry) => entry[2].trim());
+    const embeddedRaster = hrefs.find((value) => /^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=\r\n]+$/i.test(value));
+    if (embeddedRaster) return embeddedRaster;
+    if (hrefs.some((value) => !value.startsWith('#'))) return dataUrl;
+    const cssUrls = Array.from(svg.matchAll(/url\s*\(\s*(["']?)(.*?)\1\s*\)/gi), (entry) => entry[2].trim());
+    if (cssUrls.some((value) => !value.startsWith('#'))) return dataUrl;
   }
   try {
     const converted = await sharp(buffer, { failOn: 'error', limitInputPixels: 40_000_000, animated: false })
