@@ -12,7 +12,7 @@
     "dev:backend": "tsx backend/server.ts --api-only",
     "prebuild": "npm run test:deployment-scope",
     "build": "vite build",
-    "start": "tsx scripts/prestart-database-backup.ts && tsx scripts/run-once-cell-history-photo-migration.ts && tsx backend/server.ts",
+    "start": "tsx scripts/prestart-database-backup.ts && tsx backend/server.ts",
     "db:init": "tsx backend/init-db.ts",
     "photos:migrate-cell-history": "tsx scripts/migrate-cell-history-photos.ts",
     "photos:audit-material-orphans": "tsx scripts/audit-orphan-material-photos.ts",
