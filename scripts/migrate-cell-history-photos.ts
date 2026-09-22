@@ -7,6 +7,20 @@ const backupConfirmed = args.has('--backup-confirmed');
 const batchArg = process.argv.find((arg) => arg.startsWith('--batch-size='));
 const batchSize = Math.min(500, Math.max(1, Number(batchArg?.split('=')[1] || 50)));
 
+const normalizeLegacyPhotoDataUrl = (dataUrl: string) => {
+  const match = /^data:[^;,]+;base64,([a-z0-9+/=\r\n]+)$/i.exec(dataUrl);
+  if (!match) return dataUrl;
+  const buffer = Buffer.from(match[1], 'base64');
+  const mimeType = buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
+    ? 'image/jpeg'
+    : buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      ? 'image/png'
+      : buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+        ? 'image/webp'
+        : '';
+  return mimeType ? `data:${mimeType};base64,${match[1]}` : dataUrl;
+};
+
 if (apply && !backupConfirmed) {
   throw new Error('실제 적용 전 SQLite와 R2 백업을 완료한 뒤 --backup-confirmed 옵션을 함께 지정하세요.');
 }
@@ -60,7 +74,7 @@ for (const row of rows) {
   try {
     const existing = listCellHistoryPhotos(row.id).length;
     for (const photo of photos.slice(existing, 3)) {
-      await addCellHistoryPhotoFromDataUrl(row.id, row.cellId, row.uploadedBy || '', photo);
+      await addCellHistoryPhotoFromDataUrl(row.id, row.cellId, row.uploadedBy || '', normalizeLegacyPhotoDataUrl(photo));
       uploadedPhotos += 1;
     }
     if (listCellHistoryPhotos(row.id).length >= Math.min(photos.length, 3)) {

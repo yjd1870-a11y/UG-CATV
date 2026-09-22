@@ -54,13 +54,13 @@ if (!backupPath) {
   throw new Error('CELL history photo migration refused: no pre-deploy SQLite backup was found.');
 }
 
-const deployedCommit = (process.env.RENDER_GIT_COMMIT || '').replace(/[^a-fA-F0-9]/g, '');
-const failedCurrentBackup = deployedCommit
-  ? path.join(backupDirectory, `catv-predeploy-${deployedCommit}.sqlite`)
-  : '';
-if (failedCurrentBackup && invalidBackups.includes(failedCurrentBackup)) {
-  fs.unlinkSync(failedCurrentBackup);
-  console.log(`[CATV] Removed incomplete backup left by a failed VACUUM INTO: ${failedCurrentBackup}`);
+for (const invalidBackup of invalidBackups) {
+  const resolved = path.resolve(invalidBackup);
+  const safeDirectory = path.resolve(backupDirectory) + path.sep;
+  if (!resolved.startsWith(safeDirectory)) continue;
+  if (!/^catv-predeploy-[a-zA-Z0-9_-]+\.sqlite$/.test(path.basename(resolved))) continue;
+  fs.unlinkSync(resolved);
+  console.log(`[CATV] Removed incomplete backup left by a failed VACUUM INTO: ${resolved}`);
 }
 
 const tsxCli = path.join(projectRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
