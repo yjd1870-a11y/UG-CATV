@@ -32,19 +32,35 @@ const backupFiles = fs.existsSync(backupDirectory)
       .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)
   : [];
 
-const backupPath = backupFiles[0];
+const validBackups: string[] = [];
+const invalidBackups: string[] = [];
+for (const candidate of backupFiles) {
+  try {
+    const backup = new DatabaseSync(candidate, { readOnly: true });
+    try {
+      const result = backup.prepare('PRAGMA integrity_check').get() as Record<string, unknown> | undefined;
+      if (result && Object.values(result)[0] === 'ok') validBackups.push(candidate);
+      else invalidBackups.push(candidate);
+    } finally {
+      backup.close();
+    }
+  } catch {
+    invalidBackups.push(candidate);
+  }
+}
+
+const backupPath = validBackups[0];
 if (!backupPath) {
   throw new Error('CELL history photo migration refused: no pre-deploy SQLite backup was found.');
 }
 
-const backup = new DatabaseSync(backupPath, { readOnly: true });
-try {
-  const result = backup.prepare('PRAGMA integrity_check').get() as Record<string, unknown> | undefined;
-  if (!result || Object.values(result)[0] !== 'ok') {
-    throw new Error('CELL history photo migration refused: backup integrity_check failed.');
-  }
-} finally {
-  backup.close();
+const deployedCommit = (process.env.RENDER_GIT_COMMIT || '').replace(/[^a-fA-F0-9]/g, '');
+const failedCurrentBackup = deployedCommit
+  ? path.join(backupDirectory, `catv-predeploy-${deployedCommit}.sqlite`)
+  : '';
+if (failedCurrentBackup && invalidBackups.includes(failedCurrentBackup)) {
+  fs.unlinkSync(failedCurrentBackup);
+  console.log(`[CATV] Removed incomplete backup left by a failed VACUUM INTO: ${failedCurrentBackup}`);
 }
 
 const tsxCli = path.join(projectRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
