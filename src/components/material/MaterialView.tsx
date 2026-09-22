@@ -213,14 +213,16 @@ export const MaterialView: React.FC = () => {
     () =>
       (data?.fieldBalances || []).filter((row) => {
         const key = stockQuery.trim().toLowerCase();
+        const hasStock = Number(row.normalQuantity) + Number(row.badQuantity) !== 0;
         return (
-          !key ||
-          [row.categoryName, row.modelName].some((value) =>
-            value.toLowerCase().includes(key),
-          )
+          (!inStockOnly || hasStock) &&
+          (!key ||
+            [row.categoryName, row.modelName].some((value) =>
+              value.toLowerCase().includes(key),
+            ))
         );
       }),
-    [data, stockQuery],
+    [data, stockQuery, inStockOnly],
   );
   const stationRows = useMemo(
     () =>
@@ -673,7 +675,14 @@ export const MaterialView: React.FC = () => {
         <div className="border-b border-slate-200 p-4">
           <div className="mb-3 flex items-center gap-2"><PackageCheck className="h-5 w-5 text-[#2878B5]"/><h2 className="font-black text-[#173B57]">현재고</h2></div>
           <div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"/><input value={stockQuery} onChange={(e)=>setStockQuery(e.target.value)} placeholder={domain === "FIELD" ? "품명, 세부모델 검색" : "품목, 모델, 제조사 검색"} className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm outline-none focus:border-blue-400 focus:bg-white"/></div>
-          {domain === "STATION" ? (
+          {domain === "FIELD" ? (
+            <div className="mt-3 flex justify-end text-sm">
+              <label className="flex items-center gap-2 font-semibold text-slate-600">
+                <input type="checkbox" checked={inStockOnly} onChange={(e)=>setInStockOnly(e.target.checked)}/>
+                재고 있는 모델만
+              </label>
+            </div>
+          ) : (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
               <Filter className="h-4 w-4 text-slate-400"/>
               <select
@@ -717,7 +726,7 @@ export const MaterialView: React.FC = () => {
                 재고 있는 모델만
               </label>
             </div>
-          ):null}
+          )}
         </div>
         {domain === "FIELD" ? <FieldStockTable rows={fieldRows}/> : <StationStockTable rows={stationRows}/>}
       </section> : null}

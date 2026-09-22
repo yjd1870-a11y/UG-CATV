@@ -35,5 +35,7 @@ assert.match(materialView, /새 품명 직접 입력/);
 assert.doesNotMatch(materialView, /field-material-category-options/);
 assert.doesNotMatch(fieldStockTable, /제조사|row\.manufacturer/);
 assert.match(fieldStockTable, /colSpan=\{6\}/);
+assert.match(materialView, /Number\(row\.normalQuantity\) \+ Number\(row\.badQuantity\) !== 0/);
+assert.equal((materialView.match(/재고 있는 모델만/g) || []).length, 2);
 
-console.log('Photo UI test passed: gallery selection, material recovery controls, field category selection, field stock columns, responsive actions, station filter counts, hidden station transaction number, lazy thumbnails, and frontend dark launch');
+console.log('Photo UI test passed: gallery selection, material recovery controls, field category selection, in-stock field filtering, field stock columns, responsive actions, station filter counts, hidden station transaction number, lazy thumbnails, and frontend dark launch');
