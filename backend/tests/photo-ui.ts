@@ -26,5 +26,8 @@ assert.match(materialView, /whitespace-nowrap[^>]*>[\s\S]*?추가 등록/);
 assert.match(materialView, /불량품 회수등록/);
 assert.match(materialView, /badFieldStockTypes/);
 assert.doesNotMatch(materialView, /\{row\.transactionNumber\}/);
+assert.match(materialView, /value=\{String\(filteredStationCount\)\}/);
+assert.match(materialView, /\{stationOptions\.map\(\(item\)=>/);
+assert.doesNotMatch(materialView, /new Set\(stationRows\.map\(\(row\) => row\.stationId\)\)\.size/);
 
-console.log('Photo UI test passed: gallery selection, material recovery controls, responsive actions, hidden station transaction number, lazy thumbnails, and frontend dark launch');
+console.log('Photo UI test passed: gallery selection, material recovery controls, responsive actions, station filter counts, hidden station transaction number, lazy thumbnails, and frontend dark launch');

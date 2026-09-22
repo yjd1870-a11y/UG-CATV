@@ -249,6 +249,13 @@ export const MaterialView: React.FC = () => {
       }),
     [data, stockQuery, region, stationFilter, manufacturerFilter, itemTypeFilter, inStockOnly],
   );
+  const stationOptions = useMemo(
+    () => (data?.stations || []).filter((item) => item.active && (region === "전체" || item.regionName === region)),
+    [data, region],
+  );
+  const filteredStationCount = stationFilter === "전체"
+    ? stationOptions.length
+    : stationOptions.some((item) => item.id === stationFilter) ? 1 : 0;
   const runAction = async (action: () => Promise<unknown>, message: string) => {
     setBusy(true);
     setError("");
@@ -645,10 +652,8 @@ export const MaterialView: React.FC = () => {
             />
             <MetricCard
               label="조회 국사"
-              value={String(
-                new Set(stationRows.map((row) => row.stationId)).size,
-              )}
-              detail="필터 적용 결과"
+              value={String(filteredStationCount)}
+              detail="국사 필터 적용 결과"
               tone="slate"
             />
           </>
@@ -687,7 +692,7 @@ export const MaterialView: React.FC = () => {
                 className="rounded-lg border border-slate-200 px-3 py-2"
               >
                 <option value="전체">전체 국사</option>
-                {(data?.stations||[]).filter((item)=>region==="전체"||item.regionName===region).map((item)=><option key={item.id} value={item.id}>{item.stationName}</option>)}
+                {stationOptions.map((item)=><option key={item.id} value={item.id}>{item.stationName}</option>)}
               </select>
               <select
                 aria-label="제조사 필터"
