@@ -10,6 +10,7 @@ const navigation = fs.readFileSync(path.join(root, 'src/components/common/primar
 const context = fs.readFileSync(path.join(root, 'src/context/AppContext.tsx'), 'utf8');
 const cellGallery = fs.readFileSync(path.join(root, 'src/components/cell/PhotoGalleryModal.tsx'), 'utf8');
 const materialView = fs.readFileSync(path.join(root, 'src/components/material/MaterialView.tsx'), 'utf8');
+const fieldStockTable = materialView.slice(materialView.indexOf('const FieldStockTable'), materialView.indexOf('const StationStockTable'));
 
 assert.match(detail, /loading="lazy"/);
 assert.match(detail, /photo\.thumbnailUrl \|\| photo\.url/);
@@ -29,5 +30,10 @@ assert.doesNotMatch(materialView, /\{row\.transactionNumber\}/);
 assert.match(materialView, /value=\{String\(filteredStationCount\)\}/);
 assert.match(materialView, /\{stationOptions\.map\(\(item\)=>/);
 assert.doesNotMatch(materialView, /new Set\(stationRows\.map\(\(row\) => row\.stationId\)\)\.size/);
+assert.match(materialView, /aria-label="현장 자재 품명"/);
+assert.match(materialView, /새 품명 직접 입력/);
+assert.doesNotMatch(materialView, /field-material-category-options/);
+assert.doesNotMatch(fieldStockTable, /제조사|row\.manufacturer/);
+assert.match(fieldStockTable, /colSpan=\{6\}/);
 
-console.log('Photo UI test passed: gallery selection, material recovery controls, responsive actions, station filter counts, hidden station transaction number, lazy thumbnails, and frontend dark launch');
+console.log('Photo UI test passed: gallery selection, material recovery controls, field category selection, field stock columns, responsive actions, station filter counts, hidden station transaction number, lazy thumbnails, and frontend dark launch');

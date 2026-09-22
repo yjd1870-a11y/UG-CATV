@@ -215,7 +215,7 @@ export const MaterialView: React.FC = () => {
         const key = stockQuery.trim().toLowerCase();
         return (
           !key ||
-          [row.categoryName, row.modelName, row.manufacturer].some((value) =>
+          [row.categoryName, row.modelName].some((value) =>
             value.toLowerCase().includes(key),
           )
         );
@@ -672,7 +672,7 @@ export const MaterialView: React.FC = () => {
       {activePanel === "STOCK" ? <section id="inventory-stock" className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 p-4">
           <div className="mb-3 flex items-center gap-2"><PackageCheck className="h-5 w-5 text-[#2878B5]"/><h2 className="font-black text-[#173B57]">현재고</h2></div>
-          <div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"/><input value={stockQuery} onChange={(e)=>setStockQuery(e.target.value)} placeholder="품목, 모델, 제조사 검색" className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm outline-none focus:border-blue-400 focus:bg-white"/></div>
+          <div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"/><input value={stockQuery} onChange={(e)=>setStockQuery(e.target.value)} placeholder={domain === "FIELD" ? "품명, 세부모델 검색" : "품목, 모델, 제조사 검색"} className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm outline-none focus:border-blue-400 focus:bg-white"/></div>
           {domain === "STATION" ? (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
               <Filter className="h-4 w-4 text-slate-400"/>
@@ -1099,14 +1099,13 @@ const StatisticsTable = ({ title, rows }: { title: string; rows: Array<{ label: 
 
 const FieldStockTable = ({ rows }: { rows: FieldBalance[] }) => (
     <div className="max-h-[520px] overflow-auto" tabIndex={0} role="region" aria-label="현장 자재 현재고 표">
-      <table className="w-full min-w-[720px] text-sm">
+      <table className="w-full min-w-[640px] text-sm">
         <thead className="sticky top-0 z-10 bg-[#173B57] text-white">
           <tr>
             {[
               "품명",
               "세부모델",
               "구분",
-              "제조사",
               "정상재고",
               "불량재고",
               "단위",
@@ -1136,9 +1135,6 @@ const FieldStockTable = ({ rows }: { rows: FieldBalance[] }) => (
                   {row.materialKind === "ACTIVE" ? "능동" : "수동"}
                 </span>
               </td>
-              <td className="px-4 py-3 text-slate-500">
-                {row.manufacturer || "-"}
-              </td>
               <td className="px-4 py-3 text-right text-base font-black text-[#2878B5]">
                 {formatStockQuantity(row.normalQuantity)}
               </td>
@@ -1150,7 +1146,7 @@ const FieldStockTable = ({ rows }: { rows: FieldBalance[] }) => (
           ))}
           {!rows.length ? (
             <tr>
-              <td colSpan={7} className="px-4 py-14 text-center text-slate-600">
+              <td colSpan={6} className="px-4 py-14 text-center text-slate-600">
                 등록된 현장 자재 모델이 없습니다.
               </td>
             </tr>
@@ -2090,9 +2086,10 @@ const FieldModelModal = ({
     materialKind: "ACTIVE" | "PASSIVE";
   }) => Promise<void>;
 }) => {
-  const [categoryName, setCategoryName] = useState(
-    model?.categoryName || data.categories.find((i) => i.active)?.categoryName || "",
-  );
+  const activeCategories = data.categories.filter((item) => item.active);
+  const customCategoryValue = "__CUSTOM__";
+  const [categoryChoice, setCategoryChoice] = useState(model?.categoryId || "");
+  const [customCategoryName, setCustomCategoryName] = useState("");
   const [modelName, setModelName] = useState(model?.modelName || "");
   const [quantity, setQuantity] = useState(1);
   const [unit, setUnit] = useState(model?.unit || "EA");
@@ -2102,6 +2099,9 @@ const FieldModelModal = ({
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          const categoryName = categoryChoice === customCategoryValue
+            ? customCategoryName.trim()
+            : activeCategories.find((item) => item.id === categoryChoice)?.categoryName || "";
           const existingCategory = data.categories.find((item) => item.active && item.categoryName.toLocaleLowerCase() === categoryName.trim().toLocaleLowerCase());
           void onSubmit({
             categoryId: existingCategory?.id,
@@ -2115,8 +2115,14 @@ const FieldModelModal = ({
         className="grid gap-4 p-5 sm:grid-cols-2"
       >
         <Field label="품명">
-          <input className={inputClass} list="field-material-category-options" required value={categoryName} onChange={(e)=>setCategoryName(e.target.value)} placeholder="기존 품명 선택 또는 직접입력" />
-          <datalist id="field-material-category-options">{data.categories.filter((item)=>item.active).map((item)=><option key={item.id} value={item.categoryName}/>)}</datalist>
+          <select aria-label="현장 자재 품명" className={inputClass} required value={categoryChoice} onChange={(e) => setCategoryChoice(e.target.value)}>
+            <option value="">등록된 품명 선택</option>
+            {activeCategories.map((item) => <option key={item.id} value={item.id}>{item.categoryName}</option>)}
+            <option value={customCategoryValue}>새 품명 직접 입력</option>
+          </select>
+          {categoryChoice === customCategoryValue ? (
+            <input aria-label="새 현장 자재 품명" className={`${inputClass} mt-2`} required value={customCategoryName} onChange={(e) => setCustomCategoryName(e.target.value)} placeholder="새 품명을 입력하세요" />
+          ) : null}
         </Field>
         <Field label="세부모델">
           <input
