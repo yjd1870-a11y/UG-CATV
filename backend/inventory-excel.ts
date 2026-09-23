@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import sharp from 'sharp';
 import { db } from './db';
 import { listFieldBalances, listSpareBalances } from './inventory-service';
 import { readMaterialPhoto } from './material-photo-storage';
@@ -539,12 +540,20 @@ export const buildHsWorkbook = async (start: string, end: string) => {
 };
 
 export const buildFieldPhotoWorkbook = async (start: string, end: string, periodKey = start.slice(0, 7)) => {
+  const photoColumnWidth = 27;
+  const photoPaddingPx = 4;
+  // Excel column widths are character-based. At the default font, width 27 is 194 px.
+  const photoColumnWidthPx = Math.floor(photoColumnWidth * 7 + 5);
+  const photoSizePx = photoColumnWidthPx - photoPaddingPx * 2;
+  const photoRowHeightPoints = photoColumnWidthPx * (72 / 96);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'CATV 업무관리';
   const sheet = workbook.addWorksheet('능동자재 사진자료');
   sheet.addRow([`${Number(periodKey.slice(5, 7))}월 능동자재 사진자료`]);
   sheet.mergeCells('A1:K1');
   sheet.addRow(['순번', '일자', '지역', '품목', '모델', '수량', '위치', '작업자', '작업내용', '전 사진', '후 사진']);
+  const widths = [8, 13, 13, 18, 24, 10, 18, 14, 34, photoColumnWidth, photoColumnWidth];
+  widths.forEach((width, index) => { sheet.getColumn(index + 1).width = width; });
   const rows = db.prepare(`
     SELECT t.id, t.effective_date AS effectiveDate, COALESCE(r.region_name,'') AS regionName,
            c.category_name AS categoryName, m.model_name AS modelName,
@@ -562,28 +571,31 @@ export const buildFieldPhotoWorkbook = async (start: string, end: string, period
   for (const [index, row] of rows.entries()) {
     const excelRow = sheet.addRow([index + 1, row.effectiveDate, row.regionName, row.categoryName, row.modelName,
       row.quantity, row.location, row.workerName, row.workDetails, '', '']);
-    excelRow.height = 190;
     const photos = db.prepare(`
-      SELECT photo_slot AS slot,object_key AS objectKey,width,height
+      SELECT photo_slot AS slot,object_key AS objectKey
         FROM material_photo_assets
        WHERE transaction_id=? AND archive_status<>'DELETED' AND deleted_at IS NULL
        ORDER BY photo_slot
-    `).all(String(row.id)) as Array<{ slot: string; objectKey: string; width: number; height: number }>;
+    `).all(String(row.id)) as Array<{ slot: string; objectKey: string }>;
+    excelRow.height = photoRowHeightPoints;
     for (const photo of photos) {
-      const image = await readMaterialPhoto(photo.objectKey);
-      const imageId = workbook.addImage({ buffer: image, extension: 'jpeg' });
+      const originalImage = await readMaterialPhoto(photo.objectKey);
+      const fittedImage = await sharp(originalImage)
+        .rotate()
+        .resize(photoSizePx, photoSizePx, { fit: 'cover', position: 'centre' })
+        .jpeg({ quality: 90, chromaSubsampling: '4:4:4' })
+        .toBuffer();
+      const imageId = workbook.addImage({ buffer: fittedImage, extension: 'jpeg' });
       const column = photo.slot === 'BEFORE' ? 9 : 10;
-      const scale = Math.min(260 / Math.max(1, Number(photo.width)), 180 / Math.max(1, Number(photo.height)));
-      const width = Math.max(1, Number(photo.width) * scale);
-      const height = Math.max(1, Number(photo.height) * scale);
       sheet.addImage(imageId, {
-        tl: { col: column + (260 - width) / 260 / 2, row: excelRow.number - 1 + (180 - height) / 180 / 2 },
-        ext: { width, height }, editAs: 'oneCell',
+        tl: {
+          col: column + photoPaddingPx / photoColumnWidthPx,
+          row: excelRow.number - 1 + photoPaddingPx / photoColumnWidthPx,
+        },
+        ext: { width: photoSizePx, height: photoSizePx }, editAs: 'oneCell',
       });
     }
   }
-  const widths = [8, 13, 13, 18, 24, 10, 18, 14, 34, 38, 38];
-  widths.forEach((width, index) => { sheet.getColumn(index + 1).width = width; });
   sheet.views = [{ state: 'frozen', ySplit: 2 }];
   sheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: 11 } };
   sheet.getRow(1).height = 34;

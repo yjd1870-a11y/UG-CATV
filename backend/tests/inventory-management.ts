@@ -166,8 +166,8 @@ try {
   assert.equal((await call('/material-management/field/transactions', { method: 'POST', cookie: admin, body: { transactionType: 'OPENING', effectiveDate: date, modelId: activeId, quantity: 3, stockState: 'NORMAL', idempotencyKey: 'active-opening' } })).response.status, 201);
   const missingPhotos = await call('/material-management/field/transactions', { method: 'POST', cookie: manager, body: { transactionType: 'FIELD_USE', effectiveDate: date, modelId: activeId, quantity: 1, stockState: 'NORMAL', purpose: '사진 누락', idempotencyKey: 'active-missing' } });
   assert.equal(missingPhotos.response.status, 400);
-  const before = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#2266aa' } }).png().toBuffer();
-  const after = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#ee8822' } }).png().toBuffer();
+  const before = await sharp({ create: { width: 32, height: 24, channels: 3, background: '#2266aa' } }).png().toBuffer();
+  const after = await sharp({ create: { width: 32, height: 24, channels: 3, background: '#ee8822' } }).png().toBuffer();
   const activeUse = await call('/material-management/field/transactions', { method: 'POST', cookie: manager, body: { transactionType: 'FIELD_USE', effectiveDate: date, modelId: activeId, quantity: 1, stockState: 'NORMAL', purpose: '능동 교체', workDetails: '전후 사진 포함', beforePhoto: `data:image/png;base64,${before.toString('base64')}`, afterPhoto: `data:image/png;base64,${after.toString('base64')}`, idempotencyKey: 'active-photo-use' } });
   assert.equal(activeUse.response.status, 201);
   const photoRows = db.prepare("SELECT * FROM material_photo_assets").all() as Array<Record<string, unknown>>;
@@ -550,6 +550,23 @@ try {
   assert.equal(photoSheet.getCell('C3').value, managerRegionName);
   assert.equal((photoSheet.getRow(2).values as ExcelJS.CellValue[]).includes('거래번호'), false);
   assert.equal(photoSheet.getImages().length, 2);
+  assert.equal(photoSheet.getColumn(10).width, 27);
+  assert.equal(photoSheet.getColumn(11).width, 27);
+  assert.equal(photoSheet.getRow(3).height, 145.5);
+  for (const image of photoSheet.getImages()) {
+    const { tl, ext } = image.range as unknown as ExcelJS.ImagePosition;
+    assert.ok(Math.abs((tl.col - Math.floor(tl.col)) - (4 / 194)) < 0.01);
+    assert.ok(Math.abs((tl.row - Math.floor(tl.row)) - (4 / 194)) < 0.01);
+    assert.equal(Math.round(ext.width), 186);
+    assert.equal(Math.round(ext.height), 186);
+  }
+  const photoMedia = Object.entries(unzipSync(photos.body)).filter(([filePath]) => /^xl\/media\/[^/]+$/.test(filePath));
+  assert.equal(photoMedia.length, 2);
+  for (const [, media] of photoMedia) {
+    const metadata = await sharp(Buffer.from(media)).metadata();
+    assert.equal(metadata.width, 186);
+    assert.equal(metadata.height, 186);
+  }
   assert.equal((photoSheet.views[0] as { ySplit?: number }).ySplit,2);
   assert.equal(photoSheet.getCell('A3').border.bottom?.color?.argb, 'FF9AA8B5');
   assert.equal(photoSheet.getCell('A3').border.right?.color?.argb, 'FF9AA8B5');
