@@ -154,6 +154,9 @@ const detailRows = (filter: SqlFilter, period: Period, metric: string, limit: nu
          ${requestDateSql} AS received_date,
          COALESCE(r.region_name, '') AS region_name,
          wt.customer_address, wt.handover_reason, wt.is_urgent,
+         (SELECT fa.action_text FROM work_transfer_field_actions fa
+           WHERE fa.transfer_id = wt.id ORDER BY fa.processed_at DESC, fa.created_at DESC LIMIT 1) AS action_summary,
+         CASE WHEN json_valid(wt.extra_json) THEN COALESCE(json_extract(wt.extra_json, '$.remarks'), '') ELSE '' END AS remarks,
          COALESCE(field_user.name, '현장처리자 미지정') AS field_processor_name,
          wt.field_processed_at, wt.completed_at, wt.workflow_status,
          CASE WHEN wt.completed_at IS NOT NULL
@@ -357,12 +360,13 @@ router.get('/export', (req, res) => {
   const metric = typeof req.query.detailMetric === 'string' && detailMetrics.has(req.query.detailMetric) ? req.query.detailMetric : 'received';
   const rows = detailRows(filter, period, metric, 10_000, 0);
   const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-  const header = ['점검요청일', '지역', '주소', '이관사유', '긴급', '현장처리자', '현장처리일시', '완료일시', '상태', '처리시간(시간)'];
+  const header = ['점검요청일', '지역', '주소', '긴급', '작업처리자', '처리내용', '완료일시', '상태', '처리시간(시간)', '비고'];
   const statusLabels: Record<string, string> = { registered: '미완료', field_processed: '현장처리', completed: '완료' };
   const lines = rows.map((row) => [
-    row.received_date, row.region_name, row.customer_address, row.handover_reason,
-    row.is_urgent ? '긴급' : '일반', row.field_processor_name, row.field_processed_at, row.completed_at,
-    statusLabels[String(row.workflow_status)] || row.workflow_status, row.processing_hours,
+    row.received_date, row.region_name, row.customer_address,
+    row.is_urgent ? '긴급' : '일반', row.field_processor_name,
+    row.workflow_status === 'registered' ? '현장처리 대기' : row.action_summary || '-', row.completed_at,
+    statusLabels[String(row.workflow_status)] || row.workflow_status, row.processing_hours, row.remarks,
   ].map(escapeCsv).join(','));
   const filename = `work-transfer-analytics-${period.from}-${period.to}.csv`;
   res.status(200)

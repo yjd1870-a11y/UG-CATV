@@ -50,6 +50,7 @@ export const mapTransferRow = (row: Record<string, unknown>) => {
   return {
     ...saved,
     id: row.id,
+    remarks: String(saved.remarks || ''),
     cellName: row.cell_name || saved.cellName || '',
     requesterName: row.requester_name || saved.requesterName || '',
     inspectionRequestedDate: row.inspection_requested_date || saved.inspectionRequestedDate || row.transfer_date,

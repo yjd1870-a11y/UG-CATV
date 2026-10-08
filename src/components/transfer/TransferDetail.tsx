@@ -293,6 +293,7 @@ export const TransferDetail: React.FC = () => {
         <dl className="grid grid-cols-[82px_1fr] gap-x-3 gap-y-3 text-xs">
           <dt className="font-bold text-slate-500 flex items-center gap-1"><Calendar className="w-3 h-3" />점검요청일</dt><dd className="font-semibold">{transfer.inspectionRequestedDate || transfer.requestDate}</dd>
           <dt className="font-bold text-slate-500">지역</dt><dd className="font-extrabold text-[#173B57]">{transfer.regionName || '-'}</dd>
+          <dt className="font-bold text-slate-500">비고</dt><dd className="break-words font-medium">{transfer.remarks || '-'}</dd>
           <dt className="font-bold text-slate-500">매체</dt><dd className="font-medium">{transfer.mediaType || 'CABLE'}</dd>
           <dt className="font-bold text-slate-500 flex items-center gap-1"><MapPin className="w-3 h-3" />주소</dt><dd className="font-medium">{transfer.location || '주소 미입력'}</dd>
           <dt className="font-bold text-slate-500 flex items-center gap-1"><User className="w-3 h-3" />작업처리자</dt><dd className="font-semibold">{transfer.fieldProcessedByName || '미지정'}</dd>

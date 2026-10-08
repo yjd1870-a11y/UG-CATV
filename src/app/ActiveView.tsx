@@ -11,6 +11,7 @@ const TransferDetail = lazy(() => import('../components/transfer/TransferDetail'
 const DailyWorkView = lazy(() => import('../components/daily/DailyWorkView').then((module) => ({ default: module.DailyWorkView })));
 const MaterialView = lazy(() => import('../components/material/MaterialView').then((module) => ({ default: module.MaterialView })));
 const AdminUsersView = lazy(() => import('../components/admin/AdminUsersView').then((module) => ({ default: module.AdminUsersView })));
+const ManualView = lazy(() => import('../components/manual/ManualView').then((module) => ({ default: module.ManualView })));
 
 const ViewLoading = () => (
   <div className="flex min-h-48 items-center justify-center text-sm font-semibold text-[#173B57]" role="status">
@@ -25,6 +26,8 @@ export const ActiveView: React.FC = () => {
     switch (activeView) {
       case 'home':
         return <HomeDashboard />;
+      case 'manual':
+        return <ManualView />;
       case 'cell_list':
         return <CellList />;
       case 'cell_detail':

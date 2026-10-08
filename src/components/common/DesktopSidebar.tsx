@@ -1,4 +1,5 @@
 import React from 'react';
+import { BookOpen } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { primaryNavigationItems } from './primary-navigation';
 
@@ -38,6 +39,11 @@ export const DesktopSidebar: React.FC = () => {
             </button>
           );
         })}
+        <button type="button" onClick={() => navigateTo('manual')} aria-current={activeView === 'manual' ? 'page' : undefined}
+          className={`flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-bold transition ${activeView === 'manual' ? 'bg-blue-50 text-[#1D6091]' : 'text-slate-500 hover:bg-slate-50 hover:text-[#173B57]'}`}>
+          <BookOpen className="h-5 w-5 shrink-0" />
+          <span>매뉴얼</span><span className="ml-auto rounded-full bg-teal-600 px-2 py-0.5 text-[10px] font-black text-white">NEW</span>
+        </button>
       </nav>
       <div className="border-t border-slate-100 px-4 py-4 text-[10px] font-semibold leading-relaxed text-slate-400">
         CATV 업무관리

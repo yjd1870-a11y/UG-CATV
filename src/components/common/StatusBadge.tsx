@@ -1,4 +1,5 @@
 import React from 'react';
+import { CheckCircle2, Clock3, Wrench } from 'lucide-react';
 import { CellStatus, TransferStatus } from '../../types';
 
 interface StatusBadgeProps {
@@ -65,12 +66,15 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
     md: 'text-xs font-semibold px-2.5 py-1 rounded-md gap-1.5',
     lg: 'text-sm font-bold px-3 py-1.5 rounded-lg gap-2',
   };
+  const workflow = status === '미완료' ? 'registered' : status === '현장처리' ? 'field-processed' : status === '완료' ? 'completed' : '';
+  const WorkflowIcon = status === '미완료' ? Clock3 : status === '현장처리' ? Wrench : CheckCircle2;
 
   return (
     <span
-      className={`inline-flex items-center border whitespace-nowrap ${sizeClasses[size]} ${bgClass} ${className}`}
+      className={`status-badge ${workflow ? `status-badge--${workflow}` : ''} inline-flex items-center border whitespace-nowrap ${sizeClasses[size]} ${bgClass} ${className}`}
     >
-      {showDot && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} />}
+      {workflow && <WorkflowIcon aria-hidden="true" className="status-badge__workflow-icon" />}
+      {showDot && <span className={`status-badge__dot w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} />}
       <span>{status}</span>
     </span>
   );

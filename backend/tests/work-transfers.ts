@@ -63,12 +63,12 @@ try {
   const unknownRegion = await call('/work-transfers', { method: 'POST', cookie: adminCookie, body: { regionId: 'unknown-region', requestPhotos: [photo()] } });
   assert.equal(unknownRegion.response.status, 400); assert.equal(unknownRegion.payload.code, 'INVALID_REGION');
 
-  const defaultDate = await call<{ id: string; inspectionRequestedDate: string; customerAddress: string }>('/work-transfers', {
+  const defaultDate = await call<{ id: string; inspectionRequestedDate: string; customerAddress: string; remarks: string }>('/work-transfers', {
     method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, customerAddress: '', clientRegistrationKey: 'default-date-key', requestPhotos: [photo()] },
   });
   assert.equal(defaultDate.response.status, 201); createdIds.push(defaultDate.payload.data?.id || '');
   const koreaToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  assert.equal(defaultDate.payload.data?.inspectionRequestedDate, koreaToday); assert.equal(defaultDate.payload.data?.customerAddress, '');
+  assert.equal(defaultDate.payload.data?.inspectionRequestedDate, koreaToday); assert.equal(defaultDate.payload.data?.customerAddress, ''); assert.equal(defaultDate.payload.data?.remarks, '');
 
   const threePhotos = await call<{ id: string; attachments: unknown[] }>('/work-transfers', {
     method: 'POST', cookie: teamCookie, body: { regionId: suwon.id, requestPhotos: [photo('one-of-three.png'), photo('two-of-three.png'), photo('three-of-three.png')] },
@@ -83,11 +83,21 @@ try {
 
   const created = await call<Record<string, unknown> & { id: string; attachments: Array<{ id: string; url: string }> }>('/work-transfers', {
     method: 'POST', cookie: teamCookie,
-    body: { regionId: suwon.id, inspectionRequestedDate: '2026-08-25', customerAddress: '', isUrgent: true, requestPhotos: [photo('one.png'), photo('two.png')] },
+    body: { regionId: suwon.id, inspectionRequestedDate: '2026-08-25', customerAddress: '', remarks: '현장 방문 전 연락', isUrgent: true, requestPhotos: [photo('one.png'), photo('two.png')] },
   });
   assert.equal(created.response.status, 201); const transferId = created.payload.data?.id || ''; createdIds.push(transferId);
   assert.equal(created.payload.data?.customerAddress, ''); assert.equal(created.payload.data?.workflowStatus, 'registered');
   assert.equal(created.payload.data?.attachments.length, 2);
+
+  assert.equal(created.payload.data?.remarks, '현장 방문 전 연락');
+  const remarkUpdate = await call<{remarks: string}>(`/work-transfers/${transferId}`, {method: 'PUT', cookie: teamCookie, body: {remarks: '목록에서 수정'}});
+  assert.equal(remarkUpdate.response.status, 200); assert.equal(remarkUpdate.payload.data?.remarks, '목록에서 수정');
+  const preservedRemarks = await call<{remarks: string}>(`/work-transfers/${transferId}`, {method: 'PUT', cookie: teamCookie, body: {customerAddress: '주소 수정'}});
+  assert.equal(preservedRemarks.payload.data?.remarks, '목록에서 수정');
+  const deniedRemarks = await call(`/work-transfers/${transferId}`, {method: 'PUT', cookie: managerCookie, body: {remarks: '권한 없음'}});
+  assert.equal(deniedRemarks.response.status, 403);
+  const clearedRemarks = await call<{remarks: string}>(`/work-transfers/${transferId}`, {method: 'PUT', cookie: teamCookie, body: {remarks: ''}});
+  assert.equal(clearedRemarks.payload.data?.remarks, '');
 
   const blankUpdate = await call<{ customerAddress: string }>(`/work-transfers/${transferId}`, { method: 'PUT', cookie: teamCookie, body: { customerAddress: '', inspectionRequestedDate: '2026-08-26' } });
   assert.equal(blankUpdate.response.status, 200); assert.equal(blankUpdate.payload.data?.customerAddress, '');
@@ -99,6 +109,25 @@ try {
   assert.equal(adminRegionUpdate.response.status, 200);
   const publicUpdate = await call(`/work-transfers/${transferId}`, { method: 'PUT', cookie: publicCookie, body: { regionId: suwon.id, customerAddress: '공무 수정 주소' } });
   assert.equal(publicUpdate.response.status, 200);
+
+  // All search fields must work for both list and summary (including the region join).
+  const assertSearch = async (term: string, cookie = adminCookie, expected = true) => {
+    const result = await call<Array<{id: string}>>(`/work-transfers?q=${encodeURIComponent(term)}`, {cookie});
+    const counts = await call<{registered: number; field_processed: number}>(`/work-transfers/summary?q=${encodeURIComponent(term)}`, {cookie});
+    assert.equal(result.response.status, 200, term);
+    assert.equal(counts.response.status, 200, term);
+    assert.equal(result.payload.data?.some(item => item.id === transferId), expected, term);
+    assert.equal((counts.payload.data?.registered || 0) + (counts.payload.data?.field_processed || 0), result.payload.data?.length, term);
+  };
+  const searchableRemarks = "구내증폭기 O'Brien 100%";
+  await call(`/work-transfers/${transferId}`, {method: 'PUT', cookie: adminCookie, body: {remarks: searchableRemarks}});
+  await assertSearch('수원');
+  await assertSearch('공무 수정 주소');
+  await assertSearch('구내증폭기');
+  await assertSearch("O'Brien");
+  await assertSearch('없는검색어', adminCookie, false);
+  await assertSearch('구내증폭기', managerCookie);
+  await assertSearch('구내증폭기', otherManagerCookie, false);
 
   const detail = await call<{ attachments: Array<{ id: string; url: string }> }>(`/work-transfers/${transferId}`, { cookie: managerCookie });
   assert.equal(detail.response.status, 200);
@@ -117,6 +146,10 @@ try {
   assert.equal(premature.response.status, 409);
   const processed = await call<{ workflowStatus: string }>(`/work-transfers/${transferId}/field-actions`, { method: 'POST', cookie: managerCookie, body: { actionText: '현장 처리 완료' } });
   assert.equal(processed.response.status, 201); assert.equal(processed.payload.data?.workflowStatus, 'field_processed');
+  await assertSearch('현장 처리 완료');
+  const processor = db.prepare("SELECT name FROM users WHERE id = 'user-1'").get() as {name: string};
+  await assertSearch(processor.name);
+  await assertSearch('구내증폭기', managerCookie, false);
   const managerHidden = await call(`/work-transfers/${transferId}`, { cookie: managerCookie });
   assert.equal(managerHidden.response.status, 404);
   const managerPhotoHidden = await fetch(`${base}${detail.payload.data?.attachments[0].url}`, { headers: { Cookie: managerCookie } });

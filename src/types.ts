@@ -4,6 +4,7 @@ export interface HomeNotice {
   id: string;
   title: string;
   content: string;
+  category: 'notice' | 'safety';
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -165,6 +166,7 @@ export interface TransferLog {
 }
 
 export interface WorkTransfer {
+  remarks?: string;
   id: string;
   serviceNo: string;
   requestDate: string;
@@ -360,6 +362,7 @@ export interface MaterialUsageRecord {
 export type AppView =
   | 'login'
   | 'home'
+  | 'manual'
   | 'cell_list'
   | 'cell_detail'
   | 'transfer_list'

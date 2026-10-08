@@ -10,6 +10,7 @@ import { useApp } from '../../context/AppContext';
 import { StatusBadge } from './StatusBadge';
 import telecomBg from '../../assets/images/telecom_network_bg_1786338007517.jpg';
 import headerWorkhubLogo from '../../assets/images/header-workhub-logo.png';
+import towerBackground from '../../assets/images/workhub-tower.webp';
 
 export const Header: React.FC = () => {
   const {
@@ -39,7 +40,8 @@ export const Header: React.FC = () => {
           backgroundPosition: 'right center',
         }}
       >
-        <div className="flex w-full items-center justify-between">
+        <div className="header-tower-art" aria-hidden="true" style={{ backgroundImage: `url(${towerBackground})` }} />
+        <div className="relative flex w-full items-center justify-between gap-2">
           {/* Brand Logo & Name */}
           <button
             id="header-brand-btn"
@@ -53,9 +55,14 @@ export const Header: React.FC = () => {
             />
           </button>
 
+          <div className="header-brand-story">
+            <span className="header-brand-tagline">CONNECTING BETTER COMMUNICATIONS</span>
+            <span className="header-brand-slogan">더 나은 연결,<br />현장을 위해</span>
+          </div>
+
           {/* Right Action: Login Info, Notifications & Logout */}
           {currentUser && (
-            <div className="flex items-center gap-1.5 sm:gap-3">
+            <div className="header-actions flex items-center gap-1.5 sm:gap-3">
               {/* Logged-in User Information */}
               <div
                 id="header-login-info"

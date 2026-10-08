@@ -140,11 +140,42 @@ try {
   assert.equal(completedInPeriod.payload.data?.details.total, 2);
   assert.ok(completedInPeriod.payload.data?.details.items.some((item) => item.id === `${prefix}completed-in-period`));
 
+  const exportRemarks = '장비, 교체 "확인"\n방문 전 연락';
+  db.prepare('UPDATE work_transfers SET extra_json = ? WHERE id = ?').run(JSON.stringify({remarks: exportRemarks}), `${prefix}field`);
+  db.prepare('UPDATE work_transfer_field_actions SET action_text = ? WHERE id = ?').run('추가, 확인 "완료"', `${prefix}action-2`);
   const exportResponse = await fetch(`${base}/work-transfers/analytics/export${query}`, { headers: { Cookie: adminCookie } });
   assert.equal(exportResponse.status, 200);
   assert.match(exportResponse.headers.get('content-type') || '', /text\/csv/);
   const csv = await exportResponse.text();
-  assert.match(csv, /점검요청일/);
+  const parseCsv = (text: string) => {
+    const records: string[][] = []; let row: string[] = []; let cell = ''; let quoted = false;
+    for (let i = 0; i < text.length; i += 1) {
+      const char = text[i];
+      if (char === '"') {
+        if (quoted && text[i + 1] === '"') { cell += '"'; i += 1; } else quoted = !quoted;
+      } else if (char === ',' && !quoted) { row.push(cell); cell = ''; }
+      else if (char === '\n' && !quoted) { row.push(cell.replace(/\r$/, '')); records.push(row); row = []; cell = ''; }
+      else cell += char;
+    }
+    if (cell || row.length) { row.push(cell.replace(/\r$/, '')); records.push(row); }
+    return records;
+  };
+  const records = parseCsv(csv.replace(/^\uFEFF/, ''));
+  assert.deepEqual(records[0], ['점검요청일', '지역', '주소', '긴급', '작업처리자', '처리내용', '완료일시', '상태', '처리시간(시간)', '비고']);
+  assert.equal(records.length, 6);
+  assert.ok(records.every(row => row.length === 10));
+  const fieldRow = records.find(row => row[2] === '테스트 주소 field');
+  assert.equal(fieldRow?.[5], '추가, 확인 "완료"');
+  assert.equal(fieldRow?.[9], exportRemarks);
+  assert.equal(fieldRow?.[7], '현장처리');
+  const registeredRow = records.find(row => row[2] === '테스트 주소 registered');
+  assert.equal(registeredRow?.[3], '긴급');
+  assert.equal(registeredRow?.[5], '현장처리 대기');
+  assert.equal(registeredRow?.[9], '');
+  const filteredExport = await fetch(`${base}/work-transfers/analytics/export${query}&detailMetric=fieldProcessed&regionId=${teamRegion.id}`, {headers: {Cookie: adminCookie}});
+  assert.equal(filteredExport.status, 200);
+  const filteredRecords = parseCsv((await filteredExport.text()).replace(/^\uFEFF/, ''));
+  assert.equal(filteredRecords.length, 2); assert.equal(filteredRecords[1][2], '테스트 주소 field');
   assert.match(csv, /현장처리자 미지정/);
   assert.doesNotMatch(csv, /통계 테스트 deleted/);
 

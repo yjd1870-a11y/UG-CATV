@@ -24,16 +24,20 @@ import {
 const router = Router();
 router.use(requireAuth);
 
-const transferSelect = `
-  SELECT wt.*, c.cell_name, COALESCE(r.region_name, c.region) AS region_name,
-         field_user.name AS field_processed_by_name,
-         completed_user.name AS final_completed_by_name
+// List and summary share joins because listFilters searches joined region/user fields.
+const transferFrom = `
     FROM work_transfers wt
     LEFT JOIN cells c ON c.id = wt.cell_id
     LEFT JOIN regions r ON r.id = wt.region_id
     LEFT JOIN users field_user ON field_user.id = wt.field_processed_by
     LEFT JOIN users completed_user ON completed_user.id = wt.final_completed_by
    WHERE wt.deleted_at IS NULL
+`;
+const transferSelect = `
+  SELECT wt.*, c.cell_name, COALESCE(r.region_name, c.region) AS region_name,
+         field_user.name AS field_processed_by_name,
+         completed_user.name AS final_completed_by_name
+  ${transferFrom}
 `;
 
 const globalRoles = new Set(['admin', 'public_official', 'team_leader']);
@@ -137,10 +141,12 @@ const listFilters = (req: Request, user: AuthUser) => {
   }
   const query = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';
   if (query) {
-    clauses.push(`(wt.customer_address LIKE ? OR wt.media_type LIKE ? OR COALESCE(r.region_name, '') LIKE ?
+    clauses.push(`(wt.customer_address LIKE ? OR wt.media_type LIKE ? OR COALESCE(r.region_name, c.region, '') LIKE ?
+      OR COALESCE(field_user.name, '') LIKE ?
+      OR CASE WHEN json_valid(wt.extra_json) THEN COALESCE(json_extract(wt.extra_json, '$.remarks'), '') ELSE '' END LIKE ?
       OR EXISTS (SELECT 1 FROM work_transfer_field_actions fa WHERE fa.transfer_id = wt.id AND (fa.action_text LIKE ? OR fa.processed_by_name LIKE ?)))`);
     const like = `%${query}%`;
-    params.push(...Array.from({ length: 5 }, () => like));
+    params.push(...Array.from({ length: 7 }, () => like));
   }
   const scope = scopeSql(user);
   return { sql: `${scope.sql}${clauses.length ? ` AND ${clauses.join(' AND ')}` : ''}`, params: [...scope.params, ...params] };
@@ -166,8 +172,7 @@ router.get('/summary', (req, res) => {
   const filters = listFilters(req, user);
   const rows = db.prepare(`
     SELECT wt.workflow_status AS status, COUNT(*) AS count
-      FROM work_transfers wt
-     WHERE wt.deleted_at IS NULL${filters.sql}
+      ${transferFrom}${filters.sql}
      GROUP BY wt.workflow_status
   `).all(...filters.params) as Array<{ status: string; count: number }>;
   const counts = { registered: 0, field_processed: 0, completed: 0 };
@@ -206,6 +211,7 @@ router.post('/', asyncRoute(async (req, res) => {
     ?? req.body?.inspectionDate ?? req.body?.requestDate ?? req.body?.transferDate;
   const inspectionRequestedDate = normalizeDay(inspectionDateInput, '점검요청일') || currentKoreaDay();
   const location = optionalText(req.body?.customerAddress ?? req.body?.location ?? req.body?.address, 500) || '';
+  const remarks = optionalText(req.body?.remarks, 1000) || '';
   const mediaType = 'CABLE';
   const title = '업무이관 사진 참조';
   const description = '상세내용은 완료 전 증빙사진에서 확인';
@@ -246,7 +252,7 @@ router.post('/', asyncRoute(async (req, res) => {
       requestDate: transferDate,
       status: '미완료',
       mediaType,
-      cellName: cell?.cell_name || '', location, customerAddress: location,
+      cellName: cell?.cell_name || '', location, customerAddress: location, remarks,
       registeredByName: user.name, regionId, regionName: region.region_name, isUrgent,
       inspectionDate: inspectionRequestedDate,
       inspectionRequestedDate,
@@ -324,8 +330,9 @@ router.put('/:id', (req, res) => {
     ? String(existing.media_type || saved.mediaType || 'CABLE')
     : asText(req.body.mediaType, '매체구분', 50);
   const isUrgent = req.body?.isUrgent === undefined ? Boolean(existing.is_urgent) : req.body.isUrgent === true;
+  const remarks = req.body?.remarks === undefined ? String(saved.remarks || '') : optionalText(req.body.remarks, 1000) || '';
   const nextExtra: Record<string, unknown> = {
-    ...saved, location, customerAddress: location,
+    ...saved, location, customerAddress: location, remarks,
     inspectionDate: inspectionRequestedDate, inspectionRequestedDate,
     mediaType,
     regionId: nextRegionId, isUrgent,

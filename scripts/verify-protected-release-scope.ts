@@ -4,15 +4,18 @@ import { createHash } from 'node:crypto';
 import { projectRoot } from '../backend/env';
 
 // 업무이관/일일업무는 2026-09-21 운영 배포 기준, DB/CELL 작업이력은 승인된 사진정책 변경 기준입니다.
+// 2026-10-07 사용자 요청: 홈 전달사항 공지/안전 구분 컬럼 추가를 승인된 DB 변경으로 반영.
+// 2026-10-07 사용자 요청: 업무이관 선택 비고 등록/목록 수정 및 모바일 목록 배치 변경.
+// 2026-10-08 사용자 요청: 검색 집계의 누락된 JOIN 수정 및 지역/주소/처리내용/현장처리자/비고 검색 지원.
 // 변경 승인을 받기 전에는 이 목록이나 해시를 갱신하지 않습니다.
 const protectedFiles: Record<string, string> = {
-  'backend/db.ts': '5fd75170b8dfb240d2f61469385d944afd253dad',
+  'backend/db.ts': '8ce53babc1ae23d8daf207229a2ed19c689d750e',
   'backend/routes/cells.ts': '43cbfaaa136ac4ebbaeb4340b54c632e7216857f',
-  'backend/routes/work-transfers.ts': '0c759f5f89f6c8cd4a6dd72189561830f5e4745f',
+  'backend/routes/work-transfers.ts': '8a2053cbf230ea767b1f925eba4dfe85c01d67b7',
   'backend/routes/daily-work.ts': 'f65a22ebc2a030c9776b083161e05e8b7090c9de',
   'backend/daily-work-service.ts': 'db326b179cc04e7c2d1dc5e3e6f79512003e9149',
   'backend/work-transfer-photo-purge.ts': '842e9c2cc77d6950f0dd96ebafe7a1d6a712f945',
-  'backend/mappers.ts': '99f9ad208c1477fe355b2b7e3ced817e7932c1b7',
+  'backend/mappers.ts': '1b52b532d46dc72da82f8cbfa05a66f21aba361e',
   'backend/catv-store.ts': '9fb9a01e38c2d26d55902e6c79f1727ad24d299c',
   'backend/catv.ts': '62ae96a0c61646a0e1f980899746d8c703735a61',
   'backend/work-transfer-policy.ts': 'bc3263ae21fd842c9ef8784f19398cf19e5b62d7',
@@ -27,8 +30,8 @@ const protectedFiles: Record<string, string> = {
   'src/components/cell/PhotoGalleryModal.tsx': '4c01f0e4f09d8c21fe386306d95a906a949fea5b',
   'src/components/daily/DailyWorkView.tsx': 'e4d3e046f3552d3cec1d1bf746ed42f2126ae1da',
   'src/components/transfer/TransferAnalytics.tsx': 'e82ab597e823309eff751c5e989fc6edd018f97a',
-  'src/components/transfer/TransferDetail.tsx': 'ee93ca86ab038b41fa1cd15743a4857bff6e35a9',
-  'src/components/transfer/TransferList.tsx': '7f6c67e7744b18efbbbea0efc0111481b1e104ea',
+  'src/components/transfer/TransferDetail.tsx': 'b675999d8c46c936660aa5ff084a1ff0655349b8',
+  'src/components/transfer/TransferList.tsx': 'ebd5cdb6200fecd4f30f8c8b5b5781643f7edf0d',
   'src/components/transfer/TransferPhotoViewer.tsx': '2918944fcdf269dbce5cec1a4f064d4e5ec3f514',
 };
 

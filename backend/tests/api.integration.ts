@@ -419,16 +419,24 @@ try {
   assert.equal(forbiddenNotice.response.status, 403);
 
   const managerLoginForNotice = await call('/auth/login', { method: 'POST', body: { username: 'user-4', password: '1234' } });
-  const createdNotice = await call<{ id: string; title: string }>('/notices', {
+  const invalidCategory = await call('/notices', { method: 'POST', cookie: managerLoginForNotice.cookie, body: { title: '구분 검증', content: '잘못된 구분', category: 'invalid' } });
+  assert.equal(invalidCategory.response.status, 400);
+  const createdNotice = await call<{ id: string; title: string; category: string }>('/notices', {
     method: 'POST', cookie: managerLoginForNotice.cookie, body: { title: '통합 테스트 전달사항', content: '팀장 추가 권한 확인' },
   });
   assert.equal(createdNotice.response.status, 201);
+  assert.equal(createdNotice.payload.data?.category, 'notice');
   noticeId = createdNotice.payload.data?.id || '';
-  const updatedNotice = await call<{ content: string }>(`/notices/${noticeId}`, {
-    method: 'PUT', cookie: managerLoginForNotice.cookie, body: { title: '통합 테스트 전달사항', content: '팀장 수정 권한 확인', sortOrder: 99 },
+  const updatedNotice = await call<{ content: string; category: string }>(`/notices/${noticeId}`, {
+    method: 'PUT', cookie: managerLoginForNotice.cookie, body: { title: '통합 테스트 전달사항', content: '팀장 수정 권한 확인', category: 'safety', sortOrder: 99 },
   });
   assert.equal(updatedNotice.response.status, 200);
   assert.equal(updatedNotice.payload.data?.content, '팀장 수정 권한 확인');
+  assert.equal(updatedNotice.payload.data?.category, 'safety');
+  const noticeWithoutCategory = await call<{ category: string }>(`/notices/${noticeId}`, { method: 'PUT', cookie: managerLoginForNotice.cookie, body: { content: '구분 생략 시 기존 안전 구분 유지' } });
+  assert.equal(noticeWithoutCategory.payload.data?.category, 'safety');
+  const persistedNotices = await call<Array<{ id: string; category: string }>>('/notices', { cookie: workerLogin.cookie });
+  assert.equal(persistedNotices.payload.data?.find((notice) => notice.id === noticeId)?.category, 'safety');
   const deletedNotice = await call(`/notices/${noticeId}`, { method: 'DELETE', cookie: managerLoginForNotice.cookie });
   assert.equal(deletedNotice.response.status, 200);
   noticeId = '';

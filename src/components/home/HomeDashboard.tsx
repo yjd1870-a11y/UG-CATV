@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRightLeft, Boxes, ChevronDown, ClipboardList, Pencil, Plus, Radio, Save, Trash2, X, Zap } from 'lucide-react';
+import { ArrowRightLeft, BookOpen, Boxes, ChevronDown, ChevronRight, ClipboardList, Pencil, Plus, Radio, Save, ShieldCheck, Trash2, X, Zap } from 'lucide-react';
+import towerBackground from '../../assets/images/workhub-tower.webp';
+import equipmentBackground from '../../assets/images/workhub-equipment.webp';
 import { useApp } from '../../context/AppContext';
 import { homeApi } from '../../features/home/api';
 import { noticesApi } from '../../features/notices/api';
@@ -37,7 +39,7 @@ export const HomeDashboard: React.FC = () => {
   const [notices, setNotices] = useState<HomeNotice[]>([]);
   const [expandedNoticeId, setExpandedNoticeId] = useState<string | null>(null);
   const [editingNoticeId, setEditingNoticeId] = useState<string | null>(null);
-  const [noticeDraft, setNoticeDraft] = useState({ title: '', content: '' });
+  const [noticeDraft, setNoticeDraft] = useState<{ title: string; content: string; category: HomeNotice['category'] }>({ title: '', content: '', category: 'notice' });
   const [newNoticeOpen, setNewNoticeOpen] = useState(false);
   const [workSummary, setWorkSummary] = useState<HomeWorkSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -69,7 +71,7 @@ export const HomeDashboard: React.FC = () => {
   const startNoticeEdit = (notice: HomeNotice) => {
     setEditingNoticeId(notice.id);
     setExpandedNoticeId(notice.id);
-    setNoticeDraft({ title: notice.title, content: notice.content });
+    setNoticeDraft({ title: notice.title, content: notice.content, category: notice.category || 'notice' });
   };
 
   const saveNotice = async (notice?: HomeNotice) => {
@@ -90,7 +92,7 @@ export const HomeDashboard: React.FC = () => {
         setNewNoticeOpen(false);
         showToast('전달사항을 추가했습니다.', 'success');
       }
-      setNoticeDraft({ title: '', content: '' });
+      setNoticeDraft({ title: '', content: '', category: 'notice' });
     } catch (error) {
       showToast(error instanceof Error ? error.message : '전달사항을 저장하지 못했습니다.', 'error');
     }
@@ -118,7 +120,8 @@ export const HomeDashboard: React.FC = () => {
   return (
     <div id="home-dashboard-view" className="space-y-5 pb-24 text-[#1F2937] sm:pb-8">
       {/* 1. 현장 유지보수 전달사항 & 안전수칙 */}
-      <section className="rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-sm sm:p-5">
+      <section className="home-notice-panel rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-sm sm:p-5">
+        <div className="home-notice-content">
         <div className="mb-2.5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-blue-50 font-bold text-[#2878B5]">
@@ -128,23 +131,28 @@ export const HomeDashboard: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             <span className="hidden shrink-0 text-[11px] font-medium text-[#6B7280] sm:inline">전송망사업팀</span>
-            {canManageNotices ? <button type="button" onClick={() => { setNewNoticeOpen((open) => !open); setNoticeDraft({ title: '', content: '' }); }} className="flex h-8 items-center gap-1 rounded-lg bg-[#2878B5] px-2.5 text-[11px] font-bold text-white"><Plus className="h-3.5 w-3.5" />추가</button> : null}
+            {canManageNotices ? <button type="button" onClick={() => { setNewNoticeOpen((open) => !open); setNoticeDraft({ title: '', content: '', category: 'notice' }); }} className="flex h-8 items-center gap-1 rounded-lg bg-[#2878B5] px-2.5 text-[11px] font-bold text-white"><Plus className="h-3.5 w-3.5" />추가</button> : null}
           </div>
         </div>
-        {newNoticeOpen ? <div className="mb-2.5 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3"><input aria-label="새 전달사항 제목" value={noticeDraft.title} onChange={(event) => setNoticeDraft((current) => ({ ...current, title: event.target.value }))} placeholder="전달사항 제목" className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold" /><textarea aria-label="새 전달사항 내용" value={noticeDraft.content} onChange={(event) => setNoticeDraft((current) => ({ ...current, content: event.target.value }))} placeholder="상세 내용을 입력하세요." rows={3} className="w-full resize-none rounded-lg border border-slate-200 bg-white p-3 text-xs" /><div className="flex justify-end gap-2"><button type="button" onClick={() => setNewNoticeOpen(false)} className="flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold"><X className="h-3.5 w-3.5" />취소</button><button type="button" onClick={() => void saveNotice()} className="flex h-8 items-center gap-1 rounded-lg bg-[#F28C28] px-3 text-[11px] font-bold text-white"><Save className="h-3.5 w-3.5" />저장</button></div></div> : null}
-        <div className="space-y-2 text-xs text-[#1F2937]">
-          {notices.length ? notices.map((notice, index) => {
+        {newNoticeOpen ? <div className="mb-2.5 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3"><label className="home-notice-category-select">구분<select aria-label="전달사항 구분" value={noticeDraft.category} onChange={(event) => setNoticeDraft((current) => ({ ...current, category: event.target.value as HomeNotice['category'] }))}><option value="notice">공지</option><option value="safety">안전</option></select></label><input aria-label="새 전달사항 제목" value={noticeDraft.title} onChange={(event) => setNoticeDraft((current) => ({ ...current, title: event.target.value }))} placeholder="전달사항 제목" className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold" /><textarea aria-label="새 전달사항 내용" value={noticeDraft.content} onChange={(event) => setNoticeDraft((current) => ({ ...current, content: event.target.value }))} placeholder="상세 내용을 입력하세요." rows={3} className="w-full resize-none rounded-lg border border-slate-200 bg-white p-3 text-xs" /><div className="flex justify-end gap-2"><button type="button" onClick={() => setNewNoticeOpen(false)} className="flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold"><X className="h-3.5 w-3.5" />취소</button><button type="button" onClick={() => void saveNotice()} className="flex h-8 items-center gap-1 rounded-lg bg-[#F28C28] px-3 text-[11px] font-bold text-white"><Save className="h-3.5 w-3.5" />저장</button></div></div> : null}
+        <div className="home-notice-list space-y-2 text-xs text-[#1F2937]">
+          {notices.length ? notices.map((notice) => {
             const expanded = expandedNoticeId === notice.id;
             const editing = editingNoticeId === notice.id;
             return <article key={notice.id} className="overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F9FAFB]">
               <div className="flex items-center gap-2 px-3 py-2.5">
-                <button type="button" aria-expanded={expanded} onClick={() => setExpandedNoticeId(expanded ? null : notice.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left"><span className="font-black text-[#2878B5]">{index + 1}.</span><span className="truncate font-bold text-[#173B57]">{notice.title}</span><ChevronDown className={`ml-auto h-4 w-4 shrink-0 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} /></button>
+                <button type="button" aria-expanded={expanded} onClick={() => setExpandedNoticeId(expanded ? null : notice.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left"><span className={`home-notice-category home-notice-category--${notice.category || 'notice'}`}>{notice.category === 'safety' ? '안전' : '공지'}</span><span className="truncate font-bold text-[#173B57]">{notice.title}</span><ChevronDown className={`ml-auto h-4 w-4 shrink-0 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} /></button>
                 {canManageNotices ? <div className="flex shrink-0 gap-1"><button type="button" aria-label={`${notice.title} 수정`} onClick={() => startNoticeEdit(notice)} className="rounded-lg p-1.5 text-[#2878B5] hover:bg-blue-100"><Pencil className="h-3.5 w-3.5" /></button><button type="button" aria-label={`${notice.title} 삭제`} onClick={() => void deleteNotice(notice)} className="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50"><Trash2 className="h-3.5 w-3.5" /></button></div> : null}
               </div>
-              {expanded ? <div className="border-t border-slate-200 bg-white p-3">{editing ? <div className="space-y-2"><input aria-label="전달사항 제목 수정" value={noticeDraft.title} onChange={(event) => setNoticeDraft((current) => ({ ...current, title: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-200 px-3 font-bold" /><textarea aria-label="전달사항 내용 수정" value={noticeDraft.content} onChange={(event) => setNoticeDraft((current) => ({ ...current, content: event.target.value }))} rows={3} className="w-full resize-none rounded-lg border border-slate-200 p-3" /><div className="flex justify-end gap-2"><button type="button" onClick={() => setEditingNoticeId(null)} className="h-8 rounded-lg border border-slate-200 px-3 text-[11px] font-bold">취소</button><button type="button" onClick={() => void saveNotice(notice)} className="flex h-8 items-center gap-1 rounded-lg bg-[#F28C28] px-3 text-[11px] font-bold text-white"><Save className="h-3.5 w-3.5" />저장</button></div></div> : <p className="whitespace-pre-wrap leading-5 text-slate-600">{notice.content}</p>}</div> : null}
+              {expanded ? <div className="border-t border-slate-200 bg-white p-3">{editing ? <div className="space-y-2"><label className="home-notice-category-select">구분<select aria-label="전달사항 구분" value={noticeDraft.category} onChange={(event) => setNoticeDraft((current) => ({ ...current, category: event.target.value as HomeNotice['category'] }))}><option value="notice">공지</option><option value="safety">안전</option></select></label><input aria-label="전달사항 제목 수정" value={noticeDraft.title} onChange={(event) => setNoticeDraft((current) => ({ ...current, title: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-200 px-3 font-bold" /><textarea aria-label="전달사항 내용 수정" value={noticeDraft.content} onChange={(event) => setNoticeDraft((current) => ({ ...current, content: event.target.value }))} rows={3} className="w-full resize-none rounded-lg border border-slate-200 p-3" /><div className="flex justify-end gap-2"><button type="button" onClick={() => setEditingNoticeId(null)} className="h-8 rounded-lg border border-slate-200 px-3 text-[11px] font-bold">취소</button><button type="button" onClick={() => void saveNotice(notice)} className="flex h-8 items-center gap-1 rounded-lg bg-[#F28C28] px-3 text-[11px] font-bold text-white"><Save className="h-3.5 w-3.5" />저장</button></div></div> : <p className="whitespace-pre-wrap leading-5 text-slate-600">{notice.content}</p>}</div> : null}
             </article>;
           }) : <div className="rounded-xl border border-dashed border-slate-200 p-5 text-center text-slate-400">등록된 전달사항이 없습니다.</div>}
         </div>
+        </div>
+        <aside className="home-safety-banner" aria-label="현장 안전 안내" style={{ backgroundImage: `linear-gradient(90deg, rgba(235,246,255,.9), rgba(235,246,255,.1)), url(${towerBackground})` }}>
+          <ShieldCheck aria-hidden="true" />
+          <p>안전한 현장이<br />행복한 내일을 만듭니다.</p>
+        </aside>
       </section>
 
       {/* 2. 주요 업무 바로가기 */}
@@ -161,6 +169,7 @@ export const HomeDashboard: React.FC = () => {
           </div>
           <span className="home-action-card__title">CELL 조회</span>
           <p className="home-action-card__description">전송망 정보 확인</p>
+          <span className="home-action-card__arrow" aria-hidden="true"><ChevronRight /></span>
         </button>
 
         <button
@@ -175,6 +184,7 @@ export const HomeDashboard: React.FC = () => {
           </div>
           <span className="home-action-card__title">업무이관</span>
           <p className="home-action-card__description">점검 및 이관 확인</p>
+          <span className="home-action-card__arrow" aria-hidden="true"><ChevronRight /></span>
           {incompleteTransferCount > 0 ? (
             <span className="home-action-card__badge">
               {incompleteTransferCount}건
@@ -194,6 +204,7 @@ export const HomeDashboard: React.FC = () => {
           </div>
           <span className="home-action-card__title">일일업무</span>
           <p className="home-action-card__description">오늘 작업 건수 등록</p>
+          <span className="home-action-card__arrow" aria-hidden="true"><ChevronRight /></span>
         </button>
 
         <button
@@ -208,11 +219,18 @@ export const HomeDashboard: React.FC = () => {
           </div>
           <span className="home-action-card__title">자재사용</span>
           <p className="home-action-card__description">현장 사용 자재 등록</p>
+          <span className="home-action-card__arrow" aria-hidden="true"><ChevronRight /></span>
         </button>
       </section>
 
+      <button id="home-menu-manual" type="button" onClick={() => navigateTo('manual')} className="home-manual-banner" style={{ backgroundImage: `linear-gradient(90deg, #009ba7 0%, rgba(0,145,158,.95) 44%, rgba(0,100,117,.25) 100%), url(${equipmentBackground})` }}>
+        <BookOpen className="home-manual-icon" aria-hidden="true" />
+        <span className="home-manual-copy"><span className="home-manual-title">현장 장비 매뉴얼 <span className="home-manual-new">NEW</span></span><span>OTDR · 접광기 등 광장비 사용방법</span></span>
+        <span className="home-manual-arrow" aria-hidden="true"><ChevronRight /></span>
+      </button>
+
       {/* 3. 오늘의 업무 현황 */}
-      <section className="flex flex-col justify-between rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-sm sm:p-6">
+      <section className="home-summary-panel flex flex-col justify-between rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-sm sm:p-6">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-bold text-[#173B57]">오늘의 업무 현황</h2>
           <span className="text-xs font-medium text-[#6B7280]">{seoulDateLabel(now)}</span>
@@ -258,7 +276,7 @@ export const HomeDashboard: React.FC = () => {
           <button
             id="home-summary-recent-cell"
             onClick={() => {
-              const targetName = recentCells[0] || 'SUJI-021-B';
+              const targetName = recentCells[0];
               const target = cells.find((cell) => cell.cellName === targetName);
               if (target) selectCell(target.id);
               else navigateTo('cell_list');
@@ -267,9 +285,9 @@ export const HomeDashboard: React.FC = () => {
           >
             <span className="text-xs font-semibold text-[#6B7280]">최근 조회 CELL</span>
             <strong className="mt-1 truncate text-sm font-black text-[#173B57] sm:text-base">
-              {recentCells[0] || 'SUJI-021-B'}
+              {recentCells[0] || '조회 이력 없음'}
             </strong>
-            <span className="text-[10px] text-gray-400">15분 전 조회</span>
+            <span className="text-[10px] text-gray-400">최근 조회한 CELL 확인</span>
           </button>
 
           <button
@@ -288,7 +306,7 @@ export const HomeDashboard: React.FC = () => {
               </strong>
               <span className="text-xs font-medium text-[#9CA3AF]">종</span>
             </span>
-            <span className="text-[10px] text-gray-400">Connector 외 4</span>
+            <span className="text-[10px] text-gray-400">금일 등록된 자재 사용 내역</span>
           </button>
         </div>
       </section>
