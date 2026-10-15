@@ -63,6 +63,7 @@ export const putR2ObjectStream = async (
     Body: body,
     ContentLength: contentLength,
     ContentType: contentType,
+    StorageClass: key.startsWith('manuals/') ? 'STANDARD' : undefined,
     Metadata: metadata,
     CacheControl: Object.keys(metadata).length
       ? (key.includes('/documents/') ? 'private, max-age=31536000, immutable' : 'private, max-age=300')
@@ -151,9 +152,11 @@ export const readR2Object = async (key: string) => {
   };
 };
 
-export const signedR2DownloadUrl = (key: string) => getSignedUrl(
+export const signedR2DownloadUrl = (key: string, options?: { fileName: string; attachment: boolean }) => getSignedUrl(
   client(),
-  new GetObjectCommand({ Bucket: env.r2BucketName, Key: key }),
+  new GetObjectCommand({ Bucket: env.r2BucketName, Key: key,
+    ...(options ? { ResponseContentDisposition: `${options.attachment ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(options.fileName).replace(/'/g, '%27')}` } : {}),
+  }),
   { expiresIn: env.r2SignedUrlTtlSeconds },
 );
 

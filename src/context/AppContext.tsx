@@ -78,6 +78,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const initialView = (): AppView => {
+    if (window.location.pathname === '/manual' || window.location.pathname.startsWith('/manual/models/')) return 'manual';
     if (materialManagementEnabled && ['/materials', '/material-management'].includes(window.location.pathname)) return 'material_list';
     if (materialManagementEnabled && window.location.pathname === '/station-spares') return 'station_spares';
     return 'home';
@@ -278,7 +279,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (historyReadyRef.current) {
       const path = targetView === 'material_list' || targetView === 'material_register'
         ? '/material-management'
-        : targetView === 'station_spares' ? '/station-spares' : ['/materials', '/material-management', '/station-spares'].includes(window.location.pathname) ? '/' : window.location.pathname;
+        : targetView === 'station_spares' ? '/station-spares'
+          : targetView === 'manual' ? '/manual'
+            : (window.location.pathname.startsWith('/manual') || ['/materials', '/material-management', '/station-spares'].includes(window.location.pathname)) ? '/' : window.location.pathname;
       window.history.pushState({ catvApp: true, view: targetView, cellId: params?.cellId, transferId: params?.transferId }, '', path);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });

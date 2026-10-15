@@ -7,6 +7,9 @@
     "node": ">=22.5 <25"
   },
   "scripts": {
+    "dev:manual-preview": "tsx scripts/manual-local-preview.ts",
+    "test:manual": "tsx backend/tests/run-isolated.ts backend/tests/manual.integration.ts",
+    "test:manual-r2": "tsx backend/tests/run-isolated.ts backend/tests/manual-r2.integration.ts",
     "dev": "tsx watch backend/server.ts",
     "dev:frontend": "vite --port=3000 --host=0.0.0.0",
     "dev:backend": "tsx backend/server.ts --api-only",

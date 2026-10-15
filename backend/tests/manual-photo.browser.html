@@ -1,0 +1,34 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>Manual photo compression checks</title>
+<h1>매뉴얼 사진 압축 브라우저 검사</h1><button id="run">검사 실행</button><pre id="results">대기 중</pre>
+<script type="module">
+import { compressManualPhoto, inspectManualPhoto } from '/src/features/manual/photo-compression.ts';
+const output = document.querySelector('#results');
+const check = (ok, message) => { if (!ok) throw new Error(message); };
+const blob = (canvas, type) => new Promise(resolve => canvas.toBlob(resolve, type, 1));
+const file = async (canvas, type) => new File([await blob(canvas, type)], `fixture.${type.split('/')[1]}`, {type});
+const decode = async f => { const b = await createImageBitmap(f, {imageOrientation:'from-image'}); const c = document.createElement('canvas'); c.width=b.width;c.height=b.height;c.getContext('2d').drawImage(b,0,0);b.close();return c; };
+document.querySelector('#run').onclick = async () => {
+ const results=[]; const native=HTMLCanvasElement.prototype.toBlob;
+ try {
+  const c=document.createElement('canvas');c.width=3200;c.height=1800;
+  const x=c.getContext('2d');const gradient=x.createLinearGradient(0,0,3200,1800);gradient.addColorStop(0,'#001b39');gradient.addColorStop(1,'#00c5af');x.fillStyle=gradient;x.fillRect(0,0,3200,1800);x.fillStyle='white';x.font='120px sans-serif';x.fillText('OTDR 1550 nm -24.80 dB',200,600);
+  for(const type of ['image/jpeg','image/png','image/webp']) {
+   const original=await file(c,type); const r=await compressManualPhoto(original,2000); const decoded=await createImageBitmap(r.file);
+   check(decoded.width===2000 && decoded.height===1125,'2000px 및 비율 유지');decoded.close();check(r.file.size<original.size,'용량 감소');
+   results.push({test:type,input:original.size,output:r.file.size,mime:r.file.type,name:r.file.name});
+  }
+  HTMLCanvasElement.prototype.toBlob=function(cb,type,q){return native.call(this,cb,type==='image/webp'?'image/png':type,q)};
+  const jpg=await file(c,'image/jpeg');const fallback=await compressManualPhoto(jpg,800);check(fallback.file.type==='image/jpeg','WebP 미지원 JPG 대체');results.push({test:'WebP unavailable → JPEG',passed:true});
+  x.clearRect(0,0,3200,1800);x.fillStyle='rgba(0,100,100,0.4)';x.fillRect(0,0,1600,1800);
+  const transparent=await file(c,'image/png');const alpha=await compressManualPhoto(transparent,800);const ac=await decode(alpha.file);check(ac.getContext('2d').getImageData(ac.width-1,0,1,1).data[3]===0,'투명도 보존');results.push({test:'transparent PNG fallback',passed:true});
+  HTMLCanvasElement.prototype.toBlob=native;
+  const tiny=document.createElement('canvas');tiny.width=1;tiny.height=1;const originalTiny=await file(tiny,'image/png');const kept=await compressManualPhoto(originalTiny,2000);check(kept.file===originalTiny,'압축 이점 없으면 원본 유지');results.push({test:'tiny image kept, no upscale',passed:true});
+  const rotated=new File([await (await fetch('/backend/tests/fixtures/manual-photo-rotated.jpg')).blob()],'rotated.jpg',{type:'image/jpeg'});const rotation=await compressManualPhoto(rotated,800);check(rotation.width===400 && rotation.height===800,'EXIF 회전');results.push({test:'EXIF orientation 6',passed:true});
+  const bad=new File(['broken'],'bad.jpg',{type:'image/jpeg'});let blocked=false;try{await compressManualPhoto(bad,800)}catch{blocked=true}check(blocked,'손상 파일 거부');results.push({test:'corrupt rejected',passed:true});
+  const oversized=new Uint8Array(await originalTiny.arrayBuffer());new DataView(oversized.buffer).setUint32(16,100000);new DataView(oversized.buffer).setUint32(20,100000);blocked=false;try{await inspectManualPhoto(new File([oversized],'bomb.png',{type:'image/png'}))}catch{blocked=true}check(blocked,'디코딩 전 화소 제한');results.push({test:'pixel bomb rejected before decode',passed:true});
+  const abort=new AbortController();abort.abort();blocked=false;try{await compressManualPhoto(jpg,800,abort.signal)}catch{blocked=true}check(blocked,'취소된 선택 처리 방지');results.push({test:'cancelled selection',passed:true});
+  HTMLCanvasElement.prototype.toBlob=function(){throw new Error('simulated encoder failure')};let allowed=false;try{await compressManualPhoto(jpg,800)}catch(e){allowed=e.allowOriginal===true}check(allowed,'압축 실패 원본 선택');results.push({test:'encoding failure allows original',passed:true});
+  output.textContent=JSON.stringify({passed:true,results},null,2);
+ }catch(e){output.textContent=JSON.stringify({passed:false,error:e.message,results},null,2)}finally{HTMLCanvasElement.prototype.toBlob=native}
+};
+</script></html>

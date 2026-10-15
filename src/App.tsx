@@ -10,6 +10,7 @@ import telecomAppBackground from './assets/images/telecom-app-background.png';
 
 const MainLayout: React.FC = () => {
   const { activeView, isAuthenticated, isAuthChecking } = useApp();
+  const manualDetail = activeView === 'manual' && window.location.pathname.startsWith('/manual/models/');
 
   if (isAuthChecking) {
     return (
@@ -36,17 +37,17 @@ const MainLayout: React.FC = () => {
       {/* Top Application Header */}
       <Header />
 
-      <DesktopSidebar />
+      {!manualDetail && <DesktopSidebar />}
 
       {/* Main Content Area */}
-      <div className="flex-1 lg:pl-[210px]">
+      <div className={`flex-1 ${manualDetail ? '' : 'lg:pl-[210px]'}`}>
         <main className="app-main-content w-full max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
           <ActiveView />
         </main>
       </div>
 
       {/* Mobile Fixed Bottom Navigation */}
-      <BottomNav />
+      {!manualDetail && <BottomNav />}
 
       {/* Global Toast Alerts */}
       <Toast />

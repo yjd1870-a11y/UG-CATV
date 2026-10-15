@@ -67,7 +67,7 @@ export const securityHeaders: RequestHandler = (_req, res, next) => {
     'Content-Security-Policy',
     "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; "
       + `${scriptPolicy}; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; `
-      + "font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self' https: wss:; worker-src 'self' blob:"
+      + "font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self' https: wss:; worker-src 'self' blob:; media-src 'self' blob: https://*.r2.cloudflarestorage.com"
   );
   if (env.isProduction) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
