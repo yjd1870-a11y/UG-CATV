@@ -225,7 +225,7 @@ export const HomeDashboard: React.FC = () => {
 
       <button id="home-menu-manual" type="button" onClick={() => navigateTo('manual')} className="home-manual-banner" style={{ backgroundImage: `linear-gradient(90deg, #009ba7 0%, rgba(0,145,158,.95) 44%, rgba(0,100,117,.25) 100%), url(${equipmentBackground})` }}>
         <BookOpen className="home-manual-icon" aria-hidden="true" />
-        <span className="home-manual-copy"><span className="home-manual-title">현장 장비 매뉴얼 <span className="home-manual-new">NEW</span></span><span>OTDR · 접광기 등 광장비 사용방법</span></span>
+        <span className="home-manual-copy"><span className="home-manual-title">현장 장비 매뉴얼 <span className="home-manual-new">NEW</span></span><span>현장에서 운용하는 장비 사용방법</span></span>
         <span className="home-manual-arrow" aria-hidden="true"><ChevronRight /></span>
       </button>
 

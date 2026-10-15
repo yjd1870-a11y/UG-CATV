@@ -161,6 +161,40 @@ try {
 
   const completed = await call<{ workflowStatus: string; attachments: unknown[]; evidencePhotosDeletedAt: string }>(`/work-transfers/${transferId}/complete`, { method: 'POST', cookie: teamCookie });
   assert.equal(completed.response.status, 200); assert.equal(completed.payload.data?.workflowStatus, 'completed'); assert.deepEqual(completed.payload.data?.attachments, []); assert.ok(completed.payload.data?.evidencePhotosDeletedAt);
+  // Managers can review completed work for their own team, including another worker's work.
+  const otherTransferId = otherRegion.payload.data!.id;
+  assert.equal((await call(`/work-transfers/${otherTransferId}/field-actions`, { method: 'POST', cookie: adminCookie, body: { actionText: '다른 팀 완료 검증' } })).response.status, 201);
+  assert.equal((await call(`/work-transfers/${otherTransferId}/complete`, { method: 'POST', cookie: adminCookie })).response.status, 200);
+  for (const [cookie, visibleId, hiddenId, regionId] of [
+    [managerCookie, transferId, otherTransferId, suwon.id],
+    [otherManagerCookie, otherTransferId, transferId, yongin.id],
+  ]) {
+    const completedForTeam = await call<Array<{ id: string; workflowStatus: string; regionId: string }>>('/work-transfers?status=completed', { cookie });
+    assert.equal(completedForTeam.response.status, 200);
+    assert.ok(completedForTeam.payload.data?.some((item) => item.id === visibleId));
+    assert.ok(completedForTeam.payload.data?.every((item) => item.workflowStatus === 'completed' && item.regionId === regionId));
+    assert.equal((await call(`/work-transfers/${visibleId}`, { cookie })).response.status, 200);
+    assert.equal((await call(`/work-transfers/${hiddenId}`, { cookie })).response.status, 404);
+    assert.equal((await call(`/work-transfers?status=completed&regionId=${regionId === suwon.id ? yongin.id : suwon.id}`, { cookie })).response.status, 404);
+    const defaultForManager = await call<Array<{ workflowStatus: string }>>('/work-transfers', { cookie });
+    assert.ok(defaultForManager.payload.data?.every((item) => item.workflowStatus === 'registered'));
+    const teamSummary = await call<{ completed: number; field_processed: number }>('/work-transfers/summary', { cookie });
+    const expectedCompleted = (db.prepare("SELECT COUNT(*) AS count FROM work_transfers WHERE region_id = ? AND workflow_status = 'completed' AND deleted_at IS NULL").get(regionId) as { count: number }).count;
+    assert.equal(teamSummary.payload.data?.completed, expectedCompleted);
+    assert.equal(teamSummary.payload.data?.field_processed, 0);
+  }
+  for (const [path, method, body, expectedStatus] of [
+    ['', 'PUT', { remarks: '완료 건 수정 차단' }, 403],
+    ['', 'DELETE', { reason: '삭제 차단' }, 403],
+    ['/field-actions', 'POST', { actionText: '처리 차단' }, 409],
+    ['/attachments', 'POST', { attachmentType: 'field_photo', ...photo() }, 409],
+    ['/complete', 'POST', {}, 403],
+    ['/reopen', 'POST', { reason: '재오픈 차단' }, 403],
+  ] as const) {
+    const denied = await call(`/work-transfers/${transferId}${path}`, { method, cookie: managerCookie, body });
+    assert.equal(denied.response.status, expectedStatus);
+  }
+  assert.equal((await call<{ workflowStatus: string }>(`/work-transfers/${transferId}`, { cookie: managerCookie })).payload.data?.workflowStatus, 'completed');
   assert.equal((db.prepare('SELECT COUNT(*) AS count FROM work_transfer_attachments WHERE transfer_id = ?').get(transferId) as { count: number }).count, 0);
   for (const item of stored) {
     assert.equal(fs.existsSync(resolvePrivatePhoto(item.file_url)), false);

@@ -8,10 +8,11 @@ import { projectRoot } from '../backend/env';
 // 2026-10-07 사용자 요청: 업무이관 선택 비고 등록/목록 수정 및 모바일 목록 배치 변경.
 // 2026-10-08 사용자 요청: 검색 집계의 누락된 JOIN 수정 및 지역/주소/처리내용/현장처리자/비고 검색 지원.
 // 변경 승인을 받기 전에는 이 목록이나 해시를 갱신하지 않습니다.
+// 2026-10-15 사용자 요청: 매니저 소속 팀 완료 건 읽기 전용 조회 및 상태 탭 허용.
 const protectedFiles: Record<string, string> = {
   'backend/db.ts': '8ce53babc1ae23d8daf207229a2ed19c689d750e',
   'backend/routes/cells.ts': '43cbfaaa136ac4ebbaeb4340b54c632e7216857f',
-  'backend/routes/work-transfers.ts': '8a2053cbf230ea767b1f925eba4dfe85c01d67b7',
+  'backend/routes/work-transfers.ts': '65901bd225dcaf427b311a6274d66bf36fdfcef9',
   'backend/routes/daily-work.ts': 'f65a22ebc2a030c9776b083161e05e8b7090c9de',
   'backend/daily-work-service.ts': 'db326b179cc04e7c2d1dc5e3e6f79512003e9149',
   'backend/work-transfer-photo-purge.ts': '842e9c2cc77d6950f0dd96ebafe7a1d6a712f945',
@@ -31,7 +32,7 @@ const protectedFiles: Record<string, string> = {
   'src/components/daily/DailyWorkView.tsx': 'e4d3e046f3552d3cec1d1bf746ed42f2126ae1da',
   'src/components/transfer/TransferAnalytics.tsx': 'e82ab597e823309eff751c5e989fc6edd018f97a',
   'src/components/transfer/TransferDetail.tsx': 'b675999d8c46c936660aa5ff084a1ff0655349b8',
-  'src/components/transfer/TransferList.tsx': 'ebd5cdb6200fecd4f30f8c8b5b5781643f7edf0d',
+  'src/components/transfer/TransferList.tsx': '48ecfc347bd734c604821f660d997ad9a41b9104',
   'src/components/transfer/TransferPhotoViewer.tsx': '2918944fcdf269dbce5cec1a4f064d4e5ec3f514',
 };
 
