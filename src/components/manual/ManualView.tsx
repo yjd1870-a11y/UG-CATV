@@ -40,8 +40,17 @@ export const ManualView: React.FC = () => {
   // A file chooser returns window focus before its change event. Reloading here unmounted
   // the photo input and discarded the selected file, so refresh only after explicit changes.
   useEffect(() => {
-    const pop = () => { setCategoryId(new URLSearchParams(window.location.search).get('category') || ''); setQuery(''); setEditing(null); };
-    window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop);
+    const syncRoute = () => {
+      setCategoryId(new URLSearchParams(window.location.search).get('category') || '');
+      setQuery(''); setEditing(null); setPopupId(null); setFormError('');
+      setReload((value) => value + 1);
+    };
+    window.addEventListener('popstate', syncRoute);
+    window.addEventListener('catv:navigate', syncRoute);
+    return () => {
+      window.removeEventListener('popstate', syncRoute);
+      window.removeEventListener('catv:navigate', syncRoute);
+    };
   }, []);
   const select = (id: string) => {
     setCategoryId(id); setQuery(''); setEditing(null); setError('');

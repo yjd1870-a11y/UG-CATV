@@ -105,5 +105,33 @@ try {
   assert.equal((await call(`/manual/models/${a.id}`, 'DELETE', undefined, admin)).status, 200);
   assert.equal((await call(`/manual/models/${a.id}`, 'GET', undefined, reader)).status, 404);
   assert.equal((await call(`/manual/models/${b.id}`, 'GET', undefined, reader)).status, 200);
+  // Deleted equipment names can be registered again, including seeded categories.
+  for (const equipment of [{ id: 'otdr', name: 'OTDR' }, { id: '', name: '재등록 검증 장비' }]) {
+    let categoryId = equipment.id;
+    if (!categoryId) {
+      const created = await call('/manual/categories', 'POST', { name: equipment.name }, admin);
+      assert.equal(created.status, 201); categoryId = created.data.id;
+    }
+    for (let cycle = 0; cycle < 2; cycle++) {
+      assert.equal((await call(`/manual/categories/${categoryId}`, 'DELETE', undefined, reader)).status, 403);
+      assert.equal((await call(`/manual/categories/${categoryId}`, 'DELETE', undefined, admin)).status, 200);
+      assert.equal((await call('/manual/categories', 'GET', undefined, reader)).data.items.some((item: any) => item.id === categoryId), false);
+      assert.equal((await call('/manual/categories', 'POST', { name: equipment.name }, reader)).status, 403);
+      const description = `재등록 설명 ${cycle}`;
+      const registered = await call('/manual/categories', 'POST', { name: equipment.name, description }, admin);
+      assert.equal(registered.status, 201); assert.equal(registered.data.id, categoryId);
+      assert.equal((await call('/manual/categories', 'POST', { name: equipment.name }, admin)).status, 409);
+      migrateManualSchema(db); migrateManualSchema(db);
+      const visible = (await call('/manual/categories', 'GET', undefined, reader)).data.items.filter((item: any) => item.name === equipment.name);
+      assert.equal(visible.length, 1); assert.equal(visible[0].description, description);
+      assert.deepEqual((await call(`/manual/categories/${categoryId}/models`, 'GET', undefined, reader)).data, []);
+      assert.equal((await call(`/manual/models/${a.id}`, 'GET', undefined, reader)).status, 404);
+      assert.equal((await fetch(`${base}/manual/assets/${videoIds[0]}/content`, { headers: { Cookie: reader } })).status, 404);
+    }
+    const model = await call('/manual/models', 'POST', { categoryId, name: '재등록 후 새 모델' }, admin);
+    assert.equal(model.status, 201);
+    assert.equal((await call(`/manual/categories/${categoryId}/models`, 'GET', undefined, reader)).data[0].id, model.data.id);
+    assert.equal((await call(`/manual/categories/${categoryId}`, 'DELETE', undefined, admin)).status, 409);
+  }
   console.log('Manual integration passed: isolation, migrations, persisted text, version conflict, auth, uploads, validation, 4 videos, ranges, deletion and cleanup.');
 } finally { await new Promise<void>((resolve) => server.close(() => resolve())); db.close(); }

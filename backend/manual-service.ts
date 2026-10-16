@@ -32,8 +32,13 @@ export const listManualModels = (categoryId: string) => {
 export const saveManualCategory = (id: string | null, input: Row) => {
   const name = asText(input.name, '장비명', 80); const description = optionalText(input.description, 200) || '';
   if (id && !db.prepare('SELECT id FROM manual_categories WHERE id = ? AND deleted_at IS NULL').get(id)) throw new ApiError(404, '장비 종류를 찾을 수 없습니다.');
-  const duplicate = db.prepare('SELECT id FROM manual_categories WHERE name = ? AND id <> ?').get(name, id || '');
-  if (duplicate) throw new ApiError(409, '이미 등록된 장비명입니다.');
+  const duplicate = db.prepare('SELECT id, deleted_at FROM manual_categories WHERE name = ? AND id <> ?').get(name, id || '') as { id: string; deleted_at: string | null } | undefined;
+  if (duplicate) {
+    if (id || !duplicate.deleted_at) throw new ApiError(409, '이미 등록된 장비명입니다.');
+    // Reuse the reserved name without reviving deleted models or their attachments.
+    db.prepare('UPDATE manual_categories SET description = ?, deleted_at = NULL WHERE id = ?').run(description, duplicate.id);
+    return { id: duplicate.id };
+  }
   const key = id || randomUUID();
   if (id) db.prepare('UPDATE manual_categories SET name = ?, description = ? WHERE id = ?').run(name, description, id);
   else db.prepare('INSERT INTO manual_categories (id, name, description) VALUES (?, ?, ?)').run(key, name, description);

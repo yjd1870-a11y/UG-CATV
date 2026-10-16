@@ -283,6 +283,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : targetView === 'manual' ? '/manual'
             : (window.location.pathname.startsWith('/manual') || ['/materials', '/material-management', '/station-spares'].includes(window.location.pathname)) ? '/' : window.location.pathname;
       window.history.pushState({ catvApp: true, view: targetView, cellId: params?.cellId, transferId: params?.transferId }, '', path);
+      // pushState does not emit popstate, including when the active view stays the same.
+      window.dispatchEvent(new Event('catv:navigate'));
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
