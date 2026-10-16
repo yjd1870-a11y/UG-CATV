@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { compressManualPhoto, PhotoCompressionError, type CompressedPhoto } from '../../features/manual/photo-compression';
 
 const size = (bytes: number) => bytes < 1048576 ? `${(bytes / 1024).toFixed(1)}KB` : `${(bytes / 1048576).toFixed(2)}MB`;
-export const ManualPhotoInput: React.FC<{ label: string; maxSide: number; maxBytes: number; disabled?: boolean; onReady: (file: File | null) => void }> = ({ label, maxSide, maxBytes, disabled, onReady }) => {
+export const ManualPhotoInput: React.FC<{ label: string; maxSide: number; maxBytes: number; disabled?: boolean; onReady: (file: File | null) => void; onProcessingChange?: (working: boolean) => void }> = ({ label, maxSide, maxBytes, disabled, onReady, onProcessingChange }) => {
   const [result, setResult] = useState<CompressedPhoto | null>(null); const [working, setWorking] = useState(false);
   const [error, setError] = useState(''); const [fallback, setFallback] = useState<File | null>(null); const [preview, setPreview] = useState('');
   const controller = useRef<AbortController | null>(null);
@@ -14,6 +14,7 @@ export const ManualPhotoInput: React.FC<{ label: string; maxSide: number; maxByt
   const select = async (file: File | null) => {
     controller.current?.abort(); const next = new AbortController(); controller.current = next;
     onReady(null); setResult(null); setError(''); setFallback(null); setWorking(Boolean(file));
+    onProcessingChange?.(Boolean(file));
     if (!file) return;
     try {
       const compressed = await compressManualPhoto(file, maxSide, next.signal);
@@ -24,7 +25,7 @@ export const ManualPhotoInput: React.FC<{ label: string; maxSide: number; maxByt
       if (next.signal.aborted) return;
       setError(e instanceof Error ? e.message : '사진을 처리하지 못했습니다.');
       if (e instanceof PhotoCompressionError && e.allowOriginal && file.size <= maxBytes) setFallback(file);
-    } finally { if (!next.signal.aborted) setWorking(false); }
+    } finally { if (!next.signal.aborted) { setWorking(false); onProcessingChange?.(false); } }
   };
   return <div className="space-y-2 min-w-0">
     <label className="block text-sm">{label}<input type="file" accept=".jpg,.jpeg,.png,.webp" disabled={disabled} onChange={(e) => void select(e.target.files?.[0] || null)} className="mt-1 min-h-11 w-full max-w-full rounded-lg border bg-white p-3 text-sm" /></label>

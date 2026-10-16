@@ -7,6 +7,7 @@ import { homeApi } from '../../features/home/api';
 import { noticesApi } from '../../features/notices/api';
 import { HomeNotice, HomeWorkSummary } from '../../types';
 import { CatvManpowerStatusCard } from './CatvManpowerStatusCard';
+import { CcParticipationProcessDialog } from './CcParticipationProcessDialog';
 
 const seoulDateParts = (date: Date) => Object.fromEntries(
   new Intl.DateTimeFormat('ko-KR', {
@@ -41,6 +42,7 @@ export const HomeDashboard: React.FC = () => {
   const [editingNoticeId, setEditingNoticeId] = useState<string | null>(null);
   const [noticeDraft, setNoticeDraft] = useState<{ title: string; content: string; category: HomeNotice['category'] }>({ title: '', content: '', category: 'notice' });
   const [newNoticeOpen, setNewNoticeOpen] = useState(false);
+  const [ccProcessOpen, setCcProcessOpen] = useState(false);
   const [workSummary, setWorkSummary] = useState<HomeWorkSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState(false);
@@ -136,6 +138,12 @@ export const HomeDashboard: React.FC = () => {
         </div>
         {newNoticeOpen ? <div className="mb-2.5 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3"><label className="home-notice-category-select">구분<select aria-label="전달사항 구분" value={noticeDraft.category} onChange={(event) => setNoticeDraft((current) => ({ ...current, category: event.target.value as HomeNotice['category'] }))}><option value="notice">공지</option><option value="safety">안전</option></select></label><input aria-label="새 전달사항 제목" value={noticeDraft.title} onChange={(event) => setNoticeDraft((current) => ({ ...current, title: event.target.value }))} placeholder="전달사항 제목" className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold" /><textarea aria-label="새 전달사항 내용" value={noticeDraft.content} onChange={(event) => setNoticeDraft((current) => ({ ...current, content: event.target.value }))} placeholder="상세 내용을 입력하세요." rows={3} className="w-full resize-none rounded-lg border border-slate-200 bg-white p-3 text-xs" /><div className="flex justify-end gap-2"><button type="button" onClick={() => setNewNoticeOpen(false)} className="flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold"><X className="h-3.5 w-3.5" />취소</button><button type="button" onClick={() => void saveNotice()} className="flex h-8 items-center gap-1 rounded-lg bg-[#F28C28] px-3 text-[11px] font-bold text-white"><Save className="h-3.5 w-3.5" />저장</button></div></div> : null}
         <div className="home-notice-list space-y-2 text-xs text-[#1F2937]">
+          <button id="home-cc-participation" type="button" className="home-cc-participation" aria-haspopup="dialog" aria-expanded={ccProcessOpen} aria-controls="cc-participation-dialog" onClick={() => setCcProcessOpen(true)}>
+            <span className="home-notice-category home-notice-category--important">중요</span>
+            <span className="home-cc-participation__title">CC 참여 프로세스</span>
+            <span className="home-cc-participation__hint">사진·텍스트</span>
+            <span className="home-cc-participation__action">보기<ChevronRight aria-hidden="true" className="h-4 w-4" /></span>
+          </button>
           {notices.length ? notices.map((notice) => {
             const expanded = expandedNoticeId === notice.id;
             const editing = editingNoticeId === notice.id;
@@ -313,6 +321,7 @@ export const HomeDashboard: React.FC = () => {
 
       {/* 4. CATV 인력현황 */}
       <CatvManpowerStatusCard />
+      {ccProcessOpen ? <CcParticipationProcessDialog onClose={() => setCcProcessOpen(false)} /> : null}
     </div>
   );
 };
