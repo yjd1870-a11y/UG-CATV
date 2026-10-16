@@ -93,6 +93,9 @@ const catvCellFieldNames = [
   'upsLocation', 'upsPhoto', 'upsPhotoList', 'upsManufacturer', 'upsModel', 'notes',
 ] as const;
 
+// Legacy 31-column workbooks remain supported; current exports omit these four columns.
+const optionalCellPhotoFields = new Set<string>(['onuPhoto', 'onuPhotoList', 'upsPhoto', 'upsPhotoList']);
+
 type PendingCellUpload = {
   userId: string;
   fileName: string;
@@ -149,7 +152,8 @@ const normalizeCellRecord = (value: unknown, index: number): CellUploadRecord =>
     throw new ApiError(400, String(index + 1) + '행 데이터 형식이 올바르지 않습니다.', 'VALIDATION_ERROR');
   }
   const source = value as Record<string, unknown>;
-  const missingFields = catvCellFieldNames.filter((field) => !Object.prototype.hasOwnProperty.call(source, field));
+  const missingFields = catvCellFieldNames.filter((field) =>
+    !optionalCellPhotoFields.has(field) && !Object.prototype.hasOwnProperty.call(source, field));
   if (missingFields.length) {
     throw new ApiError(400, 'Excel 필수 열이 누락되었습니다: ' + missingFields.join(', '), 'MISSING_CELL_COLUMNS');
   }

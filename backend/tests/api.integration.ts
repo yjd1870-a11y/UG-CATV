@@ -150,6 +150,38 @@ try {
   assert.ok(cellCountBeforeUpload > 1);
 
   const updatedCellName = `${existingCell.cellName}-키번호수정`;
+  const cellUploadRecord = {
+    keyNumber: existingCell.keyNumber, cellName: updatedCellName,
+    stationName: '테스트_오산국사', stationAddress: '오산시 테스트로 1',
+    otxNode: '테스트향 288C', otxLineNumber: '101', orxNode: '테스트향 288C', orxLineNumber: '102',
+    spareNode: '예비향 288C', spareLineNumber: '103', otxRack: '401', otxShelf: '1', otxPort: '1',
+    otxModel: 'ARRIS', orxRack: '401', orxShelf: '1', orxPort: '2', orxModel: 'ARRIS',
+    onuLocation: '오산시 테스트동 1', onuManufacturer: '아리스',
+    onuModel: 'R-ONU', onuDivision: '1*1', onuCellConfig: '아파트',
+    upsLocation: '오산시 테스트동 1',
+    upsManufacturer: 'AP시스템', upsModel: 'APU-990N', notes: '키번호 기준 수정 테스트',
+  };
+  const legacyCellValidation = await call('/admin/db/validate', {
+    method: 'POST', cookie: adminLogin.cookie,
+    body: {
+      fileName: 'CELL_LEGACY_31.xlsx', fileSize: 1024,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      records: [{ ...cellUploadRecord, onuPhoto: '37', onuPhotoList: '37', upsPhoto: '37', upsPhotoList: '37' }],
+    },
+  });
+  assert.equal(legacyCellValidation.response.status, 200);
+  const { stationAddress: _omittedAddress, ...missingRequiredColumn } = cellUploadRecord;
+  const missingColumnValidation = await call('/admin/db/validate', {
+    method: 'POST', cookie: adminLogin.cookie,
+    body: {
+      fileName: 'CELL_MISSING_COLUMN.xlsx', fileSize: 1024,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      records: [missingRequiredColumn],
+    },
+  });
+  assert.equal(missingColumnValidation.response.status, 400);
+  assert.equal(missingColumnValidation.payload.code, 'MISSING_CELL_COLUMNS');
+
   const validatedCells = await call<{
     valid: boolean; validationId: string; newCount: number; updatedCount: number; deletedCount: number;
   }>('/admin/db/validate', {
@@ -159,17 +191,7 @@ try {
       fileName: 'CELL_TEST.xlsx',
       fileSize: 1024,
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      records: [{
-        keyNumber: existingCell.keyNumber, cellName: updatedCellName,
-        stationName: '테스트_오산국사', stationAddress: '오산시 테스트로 1',
-        otxNode: '테스트향 288C', otxLineNumber: '101', orxNode: '테스트향 288C', orxLineNumber: '102',
-        spareNode: '예비향 288C', spareLineNumber: '103', otxRack: '401', otxShelf: '1', otxPort: '1',
-        otxModel: 'ARRIS', orxRack: '401', orxShelf: '1', orxPort: '2', orxModel: 'ARRIS',
-        onuLocation: '오산시 테스트동 1', onuPhoto: '37', onuPhotoList: '37', onuManufacturer: '아리스',
-        onuModel: 'R-ONU', onuDivision: '1*1', onuCellConfig: '아파트',
-        upsLocation: '오산시 테스트동 1', upsPhoto: '37', upsPhotoList: '37',
-        upsManufacturer: 'AP시스템', upsModel: 'APU-990N', notes: '키번호 기준 수정 테스트',
-      }],
+      records: [cellUploadRecord],
     },
   });
   assert.equal(validatedCells.response.status, 200);

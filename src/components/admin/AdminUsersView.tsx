@@ -64,15 +64,11 @@ const cellColumnDefinitions = [
   { field: 'orxPort', label: 'ORX 포트', aliases: ['ORX 포트', 'orxPort'] },
   { field: 'orxModel', label: 'ORX 모델명', aliases: ['ORX 모델명', 'orxModel'] },
   { field: 'onuLocation', label: 'ONU 위치', aliases: ['ONU 위치', 'onuLocation'] },
-  { field: 'onuPhoto', label: 'ONU 현장사진', aliases: ['ONU 현장사진', 'onuPhoto'] },
-  { field: 'onuPhotoList', label: 'ONU 현장사진목록', aliases: ['ONU 현장사진목록', 'onuPhotoList'] },
   { field: 'onuManufacturer', label: 'ONU 제조사', aliases: ['ONU 제조사', 'onuManufacturer'] },
   { field: 'onuModel', label: 'ONU 모델명', aliases: ['ONU 모델명', 'onuModel'] },
   { field: 'onuDivision', label: 'ONU 분할구분', aliases: ['ONU 분할구분', 'onuDivision'] },
   { field: 'onuCellConfig', label: 'ONU 셀구성', aliases: ['ONU 셀구성', 'onuCellConfig'] },
   { field: 'upsLocation', label: 'UPS 위치', aliases: ['UPS 위치', 'upsLocation'] },
-  { field: 'upsPhoto', label: 'UPS 현장사진', aliases: ['UPS 현장사진', 'upsPhoto'] },
-  { field: 'upsPhotoList', label: 'UPS 현장사진목록', aliases: ['UPS 현장사진목록', 'upsPhotoList'] },
   { field: 'upsManufacturer', label: 'UPS 제조사', aliases: ['UPS 제조사', 'upsManufacturer'] },
   { field: 'upsModel', label: 'UPS 모델명', aliases: ['UPS 모델명', 'upsModel'] },
   { field: 'notes', label: '비고', aliases: ['비고', 'notes', 'remarks'] },
@@ -84,8 +80,8 @@ const cellEditorSections: Array<{ title: string; fields: CellField[] }> = [
   { title: '기본 정보', fields: ['keyNumber', 'cellName', 'stationName', 'stationAddress'] },
   { title: '노드 및 선번', fields: ['otxNode', 'otxLineNumber', 'orxNode', 'orxLineNumber', 'spareNode', 'spareLineNumber'] },
   { title: '송수신기 정보', fields: ['otxRack', 'otxShelf', 'otxPort', 'otxModel', 'orxRack', 'orxShelf', 'orxPort', 'orxModel'] },
-  { title: 'ONU 정보', fields: ['onuLocation', 'onuPhoto', 'onuPhotoList', 'onuManufacturer', 'onuModel', 'onuDivision', 'onuCellConfig'] },
-  { title: 'UPS 정보', fields: ['upsLocation', 'upsPhoto', 'upsPhotoList', 'upsManufacturer', 'upsModel'] },
+  { title: 'ONU 정보', fields: ['onuLocation', 'onuManufacturer', 'onuModel', 'onuDivision', 'onuCellConfig'] },
+  { title: 'UPS 정보', fields: ['upsLocation', 'upsManufacturer', 'upsModel'] },
   { title: '기타', fields: ['notes'] },
 ];
 
@@ -507,7 +503,7 @@ export const AdminUsersView: React.FC = () => {
         {cellRecords.length ? (
           <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
             <div className="border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
-              업로드 미리보기 · Excel 원본 31개 열 · 상위 5건
+              업로드 미리보기 · Excel 원본 {cellColumnDefinitions.length}개 열 · 상위 5건
             </div>
             <table className="min-w-[5200px] w-full text-left text-xs">
               <thead className="bg-slate-50">
@@ -526,7 +522,7 @@ export const AdminUsersView: React.FC = () => {
         <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
           <div className="flex flex-col gap-1 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 sm:flex-row sm:items-center sm:justify-between">
             <strong>현재 CELL DB · {cellPagination.total.toLocaleString('ko-KR')}건</strong>
-            <span>페이지당 100건 · 가로 스크롤로 Excel 31개 항목 전체 확인</span>
+            <span>페이지당 100건 · 가로 스크롤로 Excel {cellColumnDefinitions.length}개 항목 전체 확인</span>
           </div>
           <div className="max-h-[520px] overflow-auto">
             <table className="min-w-[5200px] w-full text-left text-xs">
@@ -618,7 +614,7 @@ export const AdminUsersView: React.FC = () => {
               <FileSpreadsheet className="h-5 w-5 text-[#2878B5]" />
               <div>
                 <h2 className="font-extrabold text-[#173B57]">CELL {cellDraft.id ? '수정' : '추가'}</h2>
-                <p className="text-xs text-slate-500">CATV_데이터DB.xlsx의 31개 항목 기준</p>
+                <p className="text-xs text-slate-500">CATV_데이터DB.xlsx의 {cellColumnDefinitions.length}개 항목 기준</p>
               </div>
             </div>
             <div className="mt-4 space-y-5">
