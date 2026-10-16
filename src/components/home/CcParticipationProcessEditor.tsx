@@ -58,8 +58,8 @@ export const CcParticipationProcessEditor: React.FC<Props> = ({ document, onSave
       <div className="space-y-2">
         <label className="block text-sm font-bold text-[#173B57]">상단 안내 문구<textarea aria-label="상단 안내 문구" className={field} style={{ color: introductionColor }} rows={2} maxLength={2000} value={introduction} onChange={(event) => { setIntroduction(event.target.value); setDirty(true); }} /></label>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex min-h-11 items-center gap-2 text-sm text-[#173B57]">글자 색<input type="color" aria-label="상단 안내문구 글자 색" value={introductionColor} onInput={(event) => { setIntroductionColor(event.currentTarget.value); setDirty(true); }} onChange={(event) => { setIntroductionColor(event.target.value); setDirty(true); }} className="h-11 w-12 cursor-pointer rounded-lg border border-slate-300 bg-white p-1" /></label>
-          <span className="font-mono text-xs text-slate-500">{introductionColor}</span>
+          <label className="flex min-h-11 items-center gap-2 text-sm text-[#173B57]">글자 색<input type="color" aria-label="상단 안내문구 글자 색" value={/^#[0-9a-f]{6}$/i.test(introductionColor) ? introductionColor : CC_INTRODUCTION_DEFAULT_COLOR} onInput={(event) => { setIntroductionColor(event.currentTarget.value); setDirty(true); }} onChange={(event) => { setIntroductionColor(event.target.value); setDirty(true); }} className="h-11 w-12 cursor-pointer rounded-lg border border-slate-300 bg-white p-1" /></label>
+          <input type="text" aria-label="상단 안내문구 색상 코드" title="#으로 시작하는 6자리 색상 코드를 입력해주세요. 예: #d22b19" value={introductionColor} pattern="#[0-9a-fA-F]{6}" maxLength={7} required onChange={(event) => { setIntroductionColor(event.target.value); setDirty(true); }} className="h-11 w-28 rounded-lg border border-slate-300 bg-white px-2 font-mono text-xs text-slate-600" />
           <button type="button" onClick={() => { setIntroductionColor(CC_INTRODUCTION_DEFAULT_COLOR); setDirty(true); }} className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-xs text-slate-600">기본색</button>
         </div>
       </div>
